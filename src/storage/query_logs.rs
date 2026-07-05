@@ -1,4 +1,6 @@
-use crate::core::models::{DashboardStats, ProviderStats, RequestLog, TokenUsage};
+use crate::core::models::{
+    DashboardStats, ModelUsageStats, ProviderStats, RequestLog, TokenUsage,
+};
 use crate::storage::Store;
 use chrono::Utc;
 use sqlx::Row;
@@ -68,14 +70,22 @@ impl Store {
         let today = Utc::now().format("%Y-%m-%d").to_string();
         let total = sqlx::query(
             "SELECT COALESCE(SUM(requests), 0) AS requests,
-                    COALESCE(SUM(total_tokens), 0) AS tokens
+                    COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                    COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                    COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+                    COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
+                    COALESCE(SUM(total_tokens), 0) AS total_tokens
              FROM usage_rollups",
         )
         .fetch_one(self.pool())
         .await?;
         let today_row = sqlx::query(
             "SELECT COALESCE(SUM(requests), 0) AS requests,
-                    COALESCE(SUM(total_tokens), 0) AS tokens
+                    COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                    COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                    COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+                    COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
+                    COALESCE(SUM(total_tokens), 0) AS total_tokens
              FROM usage_rollups WHERE day = ?1",
         )
         .bind(today)
@@ -83,9 +93,9 @@ impl Store {
         .await?;
         Ok(DashboardStats {
             total_requests: total.get::<i64, _>("requests"),
-            total_tokens: total.get::<i64, _>("tokens"),
+            total_usage: usage_from_rollup(&total),
             today_requests: today_row.get::<i64, _>("requests"),
-            today_tokens: today_row.get::<i64, _>("tokens"),
+            today_usage: usage_from_rollup(&today_row),
         })
     }
 
@@ -93,10 +103,14 @@ impl Store {
         let rows = sqlx::query(
             "SELECT upstream_id, upstream_name,
                     COALESCE(SUM(requests), 0) AS requests,
-                    COALESCE(SUM(total_tokens), 0) AS tokens
+                    COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                    COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                    COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+                    COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
+                    COALESCE(SUM(total_tokens), 0) AS total_tokens
              FROM usage_rollups
              GROUP BY upstream_id, upstream_name
-             ORDER BY tokens DESC",
+             ORDER BY total_tokens DESC",
         )
         .fetch_all(self.pool())
         .await?;
@@ -106,7 +120,44 @@ impl Store {
                 upstream_id: row.get("upstream_id"),
                 upstream_name: row.get("upstream_name"),
                 requests: row.get("requests"),
-                total_tokens: row.get("tokens"),
+                usage: usage_from_rollup(&row),
+            })
+            .collect())
+    }
+
+    pub async fn model_usage_stats(&self, today_only: bool) -> anyhow::Result<Vec<ModelUsageStats>> {
+        let today = Utc::now().format("%Y-%m-%d").to_string();
+        let query = if today_only {
+            "SELECT upstream_id, upstream_name, model,
+                    COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                    COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                    COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+                    COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
+                    COALESCE(SUM(total_tokens), 0) AS total_tokens
+             FROM request_logs
+             WHERE substr(ts, 1, 10) = ?1
+             GROUP BY upstream_id, upstream_name, model"
+        } else {
+            "SELECT upstream_id, upstream_name, model,
+                    COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                    COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                    COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+                    COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
+                    COALESCE(SUM(total_tokens), 0) AS total_tokens
+             FROM request_logs
+             GROUP BY upstream_id, upstream_name, model"
+        };
+        let mut builder = sqlx::query(query);
+        if today_only {
+            builder = builder.bind(today);
+        }
+        let rows = builder.fetch_all(self.pool()).await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| ModelUsageStats {
+                upstream_id: row.get("upstream_id"),
+                model: row.get("model"),
+                usage: usage_from_rollup(&row),
             })
             .collect())
     }
@@ -136,5 +187,15 @@ impl Store {
                 error: row.get("error"),
             })
             .collect())
+    }
+}
+
+fn usage_from_rollup(row: &sqlx::sqlite::SqliteRow) -> TokenUsage {
+    TokenUsage {
+        input_tokens: row.get("input_tokens"),
+        output_tokens: row.get("output_tokens"),
+        cache_read_tokens: row.get("cache_read_tokens"),
+        cache_creation_tokens: row.get("cache_creation_tokens"),
+        total_tokens: row.get("total_tokens"),
     }
 }

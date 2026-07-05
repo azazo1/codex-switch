@@ -229,6 +229,30 @@ fn migrations() -> &'static [Migration] {
                 "CREATE INDEX IF NOT EXISTS idx_schedule_group_members_upstream ON schedule_group_members(upstream_id)",
             ],
         },
+        Migration {
+            version: 3,
+            name: "model_price_cache",
+            statements: &[
+                "CREATE TABLE IF NOT EXISTS model_price_cache (
+                provider_id TEXT NOT NULL,
+                provider_name TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                model_name TEXT NOT NULL,
+                input_usd_per_million REAL,
+                cached_input_usd_per_million REAL,
+                cache_write_usd_per_million REAL,
+                output_usd_per_million REAL,
+                currency TEXT NOT NULL DEFAULT 'USD',
+                source TEXT NOT NULL,
+                official INTEGER NOT NULL DEFAULT 0,
+                fetched_at INTEGER NOT NULL,
+                raw_json TEXT,
+                PRIMARY KEY (provider_id, model_id)
+            )",
+                "CREATE INDEX IF NOT EXISTS idx_model_price_cache_model ON model_price_cache(model_id)",
+                "CREATE INDEX IF NOT EXISTS idx_model_price_cache_official ON model_price_cache(official, model_id)",
+            ],
+        },
     ]
 }
 
@@ -247,11 +271,13 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
         assert_eq!(rows[1].get::<String, _>("name"), "scheduler_groups");
+        assert_eq!(rows[2].get::<i64, _>("version"), 3);
+        assert_eq!(rows[2].get::<String, _>("name"), "model_price_cache");
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
             Some("127.0.0.1:15721")
@@ -272,6 +298,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 2);
+        assert_eq!(count, 3);
     }
 }

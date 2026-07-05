@@ -2,6 +2,7 @@ mod app;
 mod balance;
 mod core;
 mod oauth;
+mod pricing;
 mod proxy;
 mod quota;
 mod scheduler;

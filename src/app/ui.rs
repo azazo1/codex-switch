@@ -5,6 +5,7 @@ use crate::core::models::{
     ScheduleGroup, ScheduleGroupMember, Upstream, WireApi,
 };
 use crate::oauth;
+use crate::pricing;
 use crate::proxy::{self, ServerHandle};
 use crate::quota as quota_api;
 use data::load_view_data;
@@ -21,6 +22,7 @@ mod data;
 mod logs;
 mod quota;
 mod scheduler;
+mod tokens;
 mod upstream_editor;
 mod upstreams;
 
@@ -43,6 +45,8 @@ pub struct CodexSwitchApp {
     local_key_copied_at: Option<Instant>,
     last_seen_request_log_version: u64,
     last_auto_refresh_at: Instant,
+    price_fetch_started: bool,
+    price_fetch_pending: bool,
     status: String,
     upstreams: Vec<Upstream>,
     schedule_groups: Vec<ScheduleGroup>,
@@ -53,6 +57,13 @@ pub struct CodexSwitchApp {
     stats: DashboardStats,
     provider_stats: Vec<ProviderStats>,
     logs: Vec<RequestLog>,
+    total_estimated_cost_usd: Option<f64>,
+    today_estimated_cost_usd: Option<f64>,
+    provider_estimated_cost_usd: BTreeMap<String, Option<f64>>,
+    log_estimated_cost_usd: Vec<Option<f64>>,
+    price_cache_count: i64,
+    price_cache_age_seconds: Option<i64>,
+    token_display_mode: tokens::TokenDisplayMode,
     relay_name: String,
     relay_base_url: String,
     relay_api_key: String,
@@ -87,6 +98,8 @@ impl CodexSwitchApp {
             local_key_copied_at: None,
             last_seen_request_log_version,
             last_auto_refresh_at: Instant::now(),
+            price_fetch_started: false,
+            price_fetch_pending: false,
             status: "就绪".to_string(),
             upstreams: Vec::new(),
             schedule_groups: Vec::new(),
@@ -97,6 +110,13 @@ impl CodexSwitchApp {
             stats: DashboardStats::default(),
             provider_stats: Vec::new(),
             logs: Vec::new(),
+            total_estimated_cost_usd: None,
+            today_estimated_cost_usd: None,
+            provider_estimated_cost_usd: BTreeMap::new(),
+            log_estimated_cost_usd: Vec::new(),
+            price_cache_count: 0,
+            price_cache_age_seconds: None,
+            token_display_mode: tokens::TokenDisplayMode::Human,
             relay_name: String::new(),
             relay_base_url: String::new(),
             relay_api_key: String::new(),
@@ -108,6 +128,7 @@ impl CodexSwitchApp {
             upstream_editor: None,
         };
         app.refresh_all();
+        app.fetch_price_cache_once();
         app
     }
 
@@ -136,6 +157,12 @@ impl CodexSwitchApp {
                 self.stats = data.stats;
                 self.provider_stats = data.provider_stats;
                 self.logs = data.logs;
+                self.total_estimated_cost_usd = data.total_estimated_cost_usd;
+                self.today_estimated_cost_usd = data.today_estimated_cost_usd;
+                self.provider_estimated_cost_usd = data.provider_estimated_cost_usd;
+                self.log_estimated_cost_usd = data.log_estimated_cost_usd;
+                self.price_cache_count = data.price_cache_count;
+                self.price_cache_age_seconds = data.price_cache_age_seconds;
                 self.quota_snapshots = data.quota_snapshots;
                 self.balance_snapshots = data.balance_snapshots;
             }
@@ -295,6 +322,47 @@ impl CodexSwitchApp {
                 self.refresh_all();
             }
             Err(err) => self.status = format!("余额查询失败: {err}"),
+        }
+    }
+
+    fn fetch_price_cache(&mut self) {
+        self.price_fetch_pending = true;
+        match self.runtime.block_on(pricing::fetch_price_cache(&self.state)) {
+            Ok(count) => {
+                self.price_fetch_pending = false;
+                self.status = format!("模型价格已获取: {count} 条");
+                self.refresh_all();
+            }
+            Err(err) => {
+                self.price_fetch_pending = false;
+                self.status = format!("模型价格获取失败: {err}");
+            }
+        }
+    }
+
+    fn fetch_price_cache_once(&mut self) {
+        if self.price_fetch_started {
+            return;
+        }
+        self.price_fetch_started = true;
+        self.price_fetch_pending = true;
+        match self
+            .runtime
+            .block_on(pricing::fetch_price_cache_once(&self.state))
+        {
+            Ok(summary) => {
+                self.price_fetch_pending = false;
+                if summary.fetched {
+                    self.status = format!("模型价格已获取: {} 条", summary.count);
+                    self.refresh_all();
+                } else if summary.count > 0 {
+                    self.status = format!("模型价格缓存可用: {} 条", summary.count);
+                }
+            }
+            Err(err) => {
+                self.price_fetch_pending = false;
+                self.status = format!("模型价格获取失败, 将使用已有缓存: {err}");
+            }
         }
     }
 }

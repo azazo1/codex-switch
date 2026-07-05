@@ -1,4 +1,4 @@
-use super::CodexSwitchApp;
+use super::{CodexSwitchApp, tokens};
 use eframe::egui::{self, Color32};
 use std::time::{Duration, Instant};
 
@@ -41,20 +41,81 @@ impl CodexSwitchApp {
             }
         });
         ui.separator();
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(format!("总请求: {}", self.stats.total_requests));
-            ui.label(format!("总 token: {}", self.stats.total_tokens));
+            tokens::usage_tokens(ui, &mut self.token_display_mode, &self.stats.total_usage);
+            tokens::estimated_cost(ui, "总估算", self.total_estimated_cost_usd);
+        });
+        ui.horizontal_wrapped(|ui| {
             ui.label(format!("今日请求: {}", self.stats.today_requests));
-            ui.label(format!("今日 token: {}", self.stats.today_tokens));
+            tokens::usage_tokens(ui, &mut self.token_display_mode, &self.stats.today_usage);
+            tokens::estimated_cost(ui, "今日估算", self.today_estimated_cost_usd);
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!("模型价格缓存: {} 条", self.price_cache_count));
+            ui.label(price_cache_age_text(self.price_cache_age_seconds));
+            let label = if self.price_fetch_pending {
+                "获取中"
+            } else {
+                "获取模型价格"
+            };
+            if ui
+                .add_enabled(
+                    !self.price_fetch_pending && self.price_cache_count == 0,
+                    egui::Button::new(label),
+                )
+                .clicked()
+            {
+                self.fetch_price_cache();
+            }
         });
         ui.separator();
         ui.heading("按上游统计");
-        for item in &self.provider_stats {
-            ui.label(format!(
-                "{} ({}) - 请求 {} - token {}",
-                item.upstream_name, item.upstream_id, item.requests, item.total_tokens
-            ));
-        }
+        let mut token_display_mode = self.token_display_mode;
+        egui::Grid::new("provider_stats_grid")
+            .striped(true)
+            .num_columns(7)
+            .spacing([18.0, 8.0])
+            .show(ui, |ui| {
+                ui.strong("上游");
+                ui.strong("请求");
+                ui.strong("输入");
+                ui.strong("缓存输入");
+                ui.strong("输出");
+                ui.strong("总计");
+                ui.strong("估算");
+                ui.end_row();
+
+                for item in &self.provider_stats {
+                    ui.label(&item.upstream_name)
+                        .on_hover_text(format!("id: {}", item.upstream_id));
+                    ui.label(item.requests.to_string());
+                    tokens::token_number(ui, &mut token_display_mode, item.usage.input_tokens);
+                    tokens::token_number(ui, &mut token_display_mode, item.usage.cache_read_tokens);
+                    tokens::token_number(ui, &mut token_display_mode, item.usage.output_tokens);
+                    tokens::token_number(ui, &mut token_display_mode, item.usage.total_tokens);
+                    let cost = self
+                        .provider_estimated_cost_usd
+                        .get(&item.upstream_id)
+                        .copied()
+                        .flatten()
+                        .map(tokens::format_usd)
+                        .unwrap_or_else(|| "无价格缓存".to_string());
+                    ui.label(cost);
+                    ui.end_row();
+                }
+            });
+        self.token_display_mode = token_display_mode;
+    }
+}
+
+fn price_cache_age_text(age_seconds: Option<i64>) -> String {
+    match age_seconds {
+        Some(age) if age < 60 => "刚刚更新".to_string(),
+        Some(age) if age < 3600 => format!("{} 分钟前更新", age / 60),
+        Some(age) if age < 86_400 => format!("{} 小时前更新", age / 3600),
+        Some(age) => format!("{} 天前更新", age / 86_400),
+        None => "尚未缓存价格".to_string(),
     }
 }
 

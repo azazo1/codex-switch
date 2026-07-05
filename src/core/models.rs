@@ -282,6 +282,19 @@ impl TokenUsage {
         self.total_tokens = self.total_tokens.max(other.total_tokens);
         self.finish();
     }
+
+    pub fn cached_input_tokens(&self) -> i64 {
+        self.cache_read_tokens
+    }
+
+    pub fn uncached_input_tokens(&self) -> i64 {
+        let cache_tokens = self.cache_read_tokens + self.cache_creation_tokens;
+        if self.input_tokens >= cache_tokens {
+            self.input_tokens - cache_tokens
+        } else {
+            self.input_tokens
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -300,9 +313,9 @@ pub struct RequestLog {
 #[derive(Debug, Clone, Default)]
 pub struct DashboardStats {
     pub total_requests: i64,
-    pub total_tokens: i64,
+    pub total_usage: TokenUsage,
     pub today_requests: i64,
-    pub today_tokens: i64,
+    pub today_usage: TokenUsage,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -310,7 +323,31 @@ pub struct ProviderStats {
     pub upstream_id: String,
     pub upstream_name: String,
     pub requests: i64,
-    pub total_tokens: i64,
+    pub usage: TokenUsage,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ModelUsageStats {
+    pub upstream_id: Option<String>,
+    pub model: Option<String>,
+    pub usage: TokenUsage,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ModelPrice {
+    pub provider_id: String,
+    pub provider_name: String,
+    pub model_id: String,
+    pub model_name: String,
+    pub input_usd_per_million: Option<f64>,
+    pub cached_input_usd_per_million: Option<f64>,
+    pub cache_write_usd_per_million: Option<f64>,
+    pub output_usd_per_million: Option<f64>,
+    pub currency: String,
+    pub source: String,
+    pub official: bool,
+    pub fetched_at: i64,
+    pub raw_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
