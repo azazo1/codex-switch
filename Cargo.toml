@@ -1,0 +1,31 @@
+[package]
+name = "codex-switch"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aes-gcm = "0.10"
+anyhow = "1"
+async-stream = "0.3"
+axum = { version = "0.7", features = ["ws"] }
+base64 = "0.22"
+bytes = "1"
+chrono = { version = "0.4", features = ["serde"] }
+directories = "6"
+eframe = "0.31"
+futures-util = "0.3"
+keyring = "3"
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid"] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time"] }
+tokio-stream = "0.1"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
