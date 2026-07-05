@@ -61,6 +61,7 @@ pub async fn handle_openai(
         "/chat/completions".to_string()
     };
     let model = usage::extract_model(&body);
+    let reasoning_effort = usage::extract_reasoning_effort(&body);
     let compact = endpoint.starts_with("/responses/compact");
 
     let request = ForwardRequest {
@@ -80,10 +81,12 @@ pub async fn handle_openai(
             record_request_log(
                 &state,
                 RequestLog {
+                    ts: None,
                     upstream_id: Some(result.upstream.id.clone()),
                     upstream_name: Some(result.upstream.name.clone()),
                     endpoint,
                     model,
+                    reasoning_effort,
                     status: i64::from(result.status.as_u16()),
                     usage: result.usage,
                     duration_ms: started.elapsed().as_millis() as i64,
@@ -98,10 +101,12 @@ pub async fn handle_openai(
             record_request_log(
                 &state,
                 RequestLog {
+                    ts: None,
                     upstream_id: None,
                     upstream_name: None,
                     endpoint,
                     model,
+                    reasoning_effort,
                     status: 502,
                     usage: TokenUsage::default(),
                     duration_ms: started.elapsed().as_millis() as i64,

@@ -1,4 +1,8 @@
-use super::{CodexSwitchApp, tokens};
+use super::{
+    upstreams::{balance_snapshot_for, balance_snapshot_label},
+    CodexSwitchApp, tokens,
+};
+use crate::core::models::UpstreamKind;
 use eframe::egui::{self, Color32};
 use std::time::{Duration, Instant};
 
@@ -72,9 +76,10 @@ impl CodexSwitchApp {
         ui.separator();
         ui.heading("按上游统计");
         let mut token_display_mode = self.token_display_mode;
+        let mut query_balance = None;
         egui::Grid::new("provider_stats_grid")
             .striped(true)
-            .num_columns(7)
+            .num_columns(9)
             .spacing([18.0, 8.0])
             .show(ui, |ui| {
                 ui.strong("上游");
@@ -84,6 +89,8 @@ impl CodexSwitchApp {
                 ui.strong("输出");
                 ui.strong("总计");
                 ui.strong("估算");
+                ui.strong("余额");
+                ui.strong("操作");
                 ui.end_row();
 
                 for item in &self.provider_stats {
@@ -102,9 +109,35 @@ impl CodexSwitchApp {
                         .map(tokens::format_usd)
                         .unwrap_or_else(|| "无价格缓存".to_string());
                     ui.label(cost);
+                    balance_snapshot_label(
+                        ui,
+                        balance_snapshot_for(&self.balance_snapshots, &item.upstream_id),
+                    );
+                    let upstream = self
+                        .upstreams
+                        .iter()
+                        .find(|upstream| upstream.id == item.upstream_id);
+                    if upstream
+                        .map(|upstream| upstream.kind == UpstreamKind::RelayApiKey)
+                        .unwrap_or(false)
+                    {
+                        let pending = self.balance_query_pending_ids.contains(&item.upstream_id);
+                        let label = if pending { "查询中" } else { "刷新余额" };
+                        if ui
+                            .add_enabled(!pending, egui::Button::new(label))
+                            .clicked()
+                        {
+                            query_balance = Some(item.upstream_id.clone());
+                        }
+                    } else {
+                        ui.label("-");
+                    }
                     ui.end_row();
                 }
             });
+        if let Some(id) = query_balance {
+            self.query_selected_balance(&id);
+        }
         self.token_display_mode = token_display_mode;
     }
 }

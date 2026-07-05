@@ -305,10 +305,12 @@ impl TokenUsage {
 
 #[derive(Debug, Clone)]
 pub struct RequestLog {
+    pub ts: Option<DateTime<Utc>>,
     pub upstream_id: Option<String>,
     pub upstream_name: Option<String>,
     pub endpoint: String,
     pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
     pub status: i64,
     pub usage: TokenUsage,
     pub duration_ms: i64,

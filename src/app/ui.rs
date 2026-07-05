@@ -10,7 +10,7 @@ use crate::proxy::{self, ServerHandle};
 use crate::quota as quota_api;
 use data::load_view_data;
 use eframe::egui;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use scheduler::ScheduleGroupEditor;
@@ -39,7 +39,10 @@ enum UiTaskEvent {
     OAuthStarted(anyhow::Result<oauth::DeviceFlow>),
     OAuthPolled(anyhow::Result<Option<Upstream>>),
     QuotaQueried(anyhow::Result<()>),
-    BalanceQueried(anyhow::Result<()>),
+    BalanceQueried {
+        upstream_id: String,
+        result: anyhow::Result<()>,
+    },
     PriceCacheFetched(anyhow::Result<usize>),
     PriceCacheOnceFetched(anyhow::Result<pricing::PriceFetchSummary>),
 }
@@ -78,7 +81,7 @@ pub struct CodexSwitchApp {
     oauth_start_pending: bool,
     oauth_poll_pending: bool,
     quota_query_pending: bool,
-    balance_query_pending: bool,
+    balance_query_pending_ids: BTreeSet<String>,
     relay_name: String,
     relay_base_url: String,
     relay_api_key: String,
@@ -138,7 +141,7 @@ impl CodexSwitchApp {
             oauth_start_pending: false,
             oauth_poll_pending: false,
             quota_query_pending: false,
-            balance_query_pending: false,
+            balance_query_pending_ids: BTreeSet::new(),
             relay_name: String::new(),
             relay_base_url: String::new(),
             relay_api_key: String::new(),
@@ -208,8 +211,11 @@ impl CodexSwitchApp {
                         Err(err) => self.status = format!("额度查询失败: {err}"),
                     }
                 }
-                UiTaskEvent::BalanceQueried(result) => {
-                    self.balance_query_pending = false;
+                UiTaskEvent::BalanceQueried {
+                    upstream_id,
+                    result,
+                } => {
+                    self.balance_query_pending_ids.remove(&upstream_id);
                     match result {
                         Ok(()) => {
                             self.status = "余额已刷新".to_string();
@@ -420,10 +426,11 @@ impl CodexSwitchApp {
     }
 
     fn query_selected_balance(&mut self, upstream_id: &str) {
-        if self.balance_query_pending {
+        if self.balance_query_pending_ids.contains(upstream_id) {
             return;
         }
-        self.balance_query_pending = true;
+        self.balance_query_pending_ids
+            .insert(upstream_id.to_string());
         self.status = "正在查询余额".to_string();
         let state = self.state.clone();
         let upstream_id = upstream_id.to_string();
@@ -432,7 +439,10 @@ impl CodexSwitchApp {
             let result = balance::query_and_store(&state, &upstream_id)
                 .await
                 .map(|_| ());
-            let _ = tx.send(UiTaskEvent::BalanceQueried(result));
+            let _ = tx.send(UiTaskEvent::BalanceQueried {
+                upstream_id,
+                result,
+            });
         });
     }
 

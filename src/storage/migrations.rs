@@ -253,6 +253,11 @@ fn migrations() -> &'static [Migration] {
                 "CREATE INDEX IF NOT EXISTS idx_model_price_cache_official ON model_price_cache(official, model_id)",
             ],
         },
+        Migration {
+            version: 4,
+            name: "request_log_reasoning_effort",
+            statements: &["ALTER TABLE request_logs ADD COLUMN reasoning_effort TEXT"],
+        },
     ]
 }
 

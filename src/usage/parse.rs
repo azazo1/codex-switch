@@ -7,6 +7,18 @@ pub fn extract_model(body: &[u8]) -> Option<String> {
         .and_then(|value| value.get("model").and_then(|v| v.as_str()).map(str::to_string))
 }
 
+pub fn extract_reasoning_effort(body: &[u8]) -> Option<String> {
+    serde_json::from_slice::<Value>(body).ok().and_then(|value| {
+        value
+            .pointer("/reasoning/effort")
+            .or_else(|| value.get("reasoning_effort"))
+            .or_else(|| value.get("reasoningEffort"))
+            .or_else(|| value.get("reasoning"))
+            .and_then(Value::as_str)
+            .map(format_reasoning_effort)
+    })
+}
+
 pub fn extract_usage_from_json(value: &Value) -> TokenUsage {
     let usage = value.get("usage").or_else(|| value.pointer("/response/usage"));
     usage.map(usage_from_value).unwrap_or_default()
@@ -164,6 +176,16 @@ fn int_field(value: &Value, keys: &[&str]) -> i64 {
     0
 }
 
+fn format_reasoning_effort(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "xhigh" | "x-high" | "x_high" | "extra_high" | "extra-high" => "XHigh".to_string(),
+        "high" => "High".to_string(),
+        "medium" => "Medium".to_string(),
+        "low" => "Low".to_string(),
+        other => other.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +208,17 @@ mod tests {
         let value: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["messages"][0]["content"], "hello");
         assert_eq!(value["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn extracts_reasoning_effort() {
+        assert_eq!(
+            extract_reasoning_effort(br#"{"reasoning":{"effort":"xhigh"}}"#).as_deref(),
+            Some("XHigh")
+        );
+        assert_eq!(
+            extract_reasoning_effort(br#"{"reasoning_effort":"high"}"#).as_deref(),
+            Some("High")
+        );
     }
 }

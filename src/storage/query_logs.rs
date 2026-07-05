@@ -2,12 +2,12 @@ use crate::core::models::{
     DashboardStats, ModelUsageStats, ProviderStats, RequestLog, TokenUsage,
 };
 use crate::storage::Store;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sqlx::Row;
 
 impl Store {
     pub async fn insert_request_log(&self, log: RequestLog) -> anyhow::Result<()> {
-        let now = Utc::now();
+        let now = log.ts.unwrap_or_else(Utc::now);
         let day = now.format("%Y-%m-%d").to_string();
         let upstream_id = log.upstream_id.clone().unwrap_or_else(|| "none".to_string());
         let upstream_name = log
@@ -17,16 +17,17 @@ impl Store {
 
         sqlx::query(
             "INSERT INTO request_logs (
-                ts, upstream_id, upstream_name, endpoint, model, status, input_tokens,
+                ts, upstream_id, upstream_name, endpoint, model, reasoning_effort, status, input_tokens,
                 output_tokens, cache_read_tokens, cache_creation_tokens, total_tokens,
                 duration_ms, first_token_ms, error
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         )
         .bind(now.to_rfc3339())
         .bind(&log.upstream_id)
         .bind(&log.upstream_name)
         .bind(&log.endpoint)
         .bind(&log.model)
+        .bind(&log.reasoning_effort)
         .bind(log.status)
         .bind(log.usage.input_tokens)
         .bind(log.usage.output_tokens)
@@ -169,22 +170,29 @@ impl Store {
             .await?;
         Ok(rows
             .into_iter()
-            .map(|row| RequestLog {
-                upstream_id: row.get("upstream_id"),
-                upstream_name: row.get("upstream_name"),
-                endpoint: row.get("endpoint"),
-                model: row.get("model"),
-                status: row.get("status"),
-                usage: TokenUsage {
-                    input_tokens: row.get("input_tokens"),
-                    output_tokens: row.get("output_tokens"),
-                    cache_read_tokens: row.get("cache_read_tokens"),
-                    cache_creation_tokens: row.get("cache_creation_tokens"),
-                    total_tokens: row.get("total_tokens"),
-                },
-                duration_ms: row.get("duration_ms"),
-                first_token_ms: row.get("first_token_ms"),
-                error: row.get("error"),
+            .map(|row| {
+                let ts: String = row.get("ts");
+                RequestLog {
+                    ts: DateTime::parse_from_rfc3339(&ts)
+                        .ok()
+                        .map(|value| value.with_timezone(&Utc)),
+                    upstream_id: row.get("upstream_id"),
+                    upstream_name: row.get("upstream_name"),
+                    endpoint: row.get("endpoint"),
+                    model: row.get("model"),
+                    reasoning_effort: row.get("reasoning_effort"),
+                    status: row.get("status"),
+                    usage: TokenUsage {
+                        input_tokens: row.get("input_tokens"),
+                        output_tokens: row.get("output_tokens"),
+                        cache_read_tokens: row.get("cache_read_tokens"),
+                        cache_creation_tokens: row.get("cache_creation_tokens"),
+                        total_tokens: row.get("total_tokens"),
+                    },
+                    duration_ms: row.get("duration_ms"),
+                    first_token_ms: row.get("first_token_ms"),
+                    error: row.get("error"),
+                }
             })
             .collect())
     }

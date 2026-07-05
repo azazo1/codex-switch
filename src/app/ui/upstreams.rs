@@ -91,15 +91,10 @@ impl CodexSwitchApp {
                     ui.label(upstream.kind.as_str());
                     ui.label(upstream.base_url.as_str());
                     if upstream.kind == UpstreamKind::RelayApiKey {
-                        let snapshot = balance_snapshots
-                            .iter()
-                            .find(|(id, _)| id == &upstream.id)
-                            .and_then(|(_, snapshot)| snapshot.as_ref());
-                        let (balance_text, balance_detail) = format_balance_snapshot(snapshot);
-                        let response = ui.label(balance_text);
-                        if let Some(detail) = balance_detail {
-                            response.on_hover_text(detail);
-                        }
+                        balance_snapshot_label(
+                            ui,
+                            balance_snapshot_for(&balance_snapshots, &upstream.id),
+                        );
                     } else {
                         ui.label("-");
                     }
@@ -107,7 +102,7 @@ impl CodexSwitchApp {
                         if upstream.kind == UpstreamKind::RelayApiKey
                             && ui
                                 .add_enabled(
-                                    !self.balance_query_pending,
+                                    !self.balance_query_pending_ids.contains(&upstream.id),
                                     egui::Button::new("查余额"),
                                 )
                                 .clicked()
@@ -148,6 +143,24 @@ impl CodexSwitchApp {
             self.refresh_all();
         }
         self.show_upstream_editor(ui.ctx());
+    }
+}
+
+pub(super) fn balance_snapshot_for<'a>(
+    snapshots: &'a [(String, Option<BalanceSnapshot>)],
+    upstream_id: &str,
+) -> Option<&'a BalanceSnapshot> {
+    snapshots
+        .iter()
+        .find(|(id, _)| id == upstream_id)
+        .and_then(|(_, snapshot)| snapshot.as_ref())
+}
+
+pub(super) fn balance_snapshot_label(ui: &mut egui::Ui, snapshot: Option<&BalanceSnapshot>) {
+    let (balance_text, balance_detail) = format_balance_snapshot(snapshot);
+    let response = ui.label(balance_text);
+    if let Some(detail) = balance_detail {
+        response.on_hover_text(detail);
     }
 }
 
