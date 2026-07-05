@@ -1,12 +1,15 @@
-use crate::storage::{Store, credentials::CredentialStore};
+use crate::live::LiveRequestStore;
 use crate::scheduler::SchedulerRuntime;
+use crate::storage::{Store, credentials::CredentialStore};
 use anyhow::Context;
 use directories::ProjectDirs;
 use std::path::PathBuf;
 use std::sync::{
-    Arc,
     atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
 };
+
+type RepaintRequester = Arc<dyn Fn() + Send + Sync>;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -15,20 +18,53 @@ pub struct AppState {
     pub http: reqwest::Client,
     pub events: AppEvents,
     pub scheduler: SchedulerRuntime,
+    pub live_requests: LiveRequestStore,
 }
 
 #[derive(Clone, Default)]
 pub struct AppEvents {
     request_log_version: Arc<AtomicU64>,
+    live_stream_version: Arc<AtomicU64>,
+    repaint_requester: Arc<Mutex<Option<RepaintRequester>>>,
 }
 
 impl AppEvents {
     pub fn bump_request_logs(&self) {
         self.request_log_version.fetch_add(1, Ordering::Relaxed);
+        self.request_repaint();
     }
 
     pub fn request_log_version(&self) -> u64 {
         self.request_log_version.load(Ordering::Relaxed)
+    }
+
+    pub fn bump_live_streams(&self) {
+        self.live_stream_version.fetch_add(1, Ordering::Relaxed);
+        self.request_repaint();
+    }
+
+    pub fn live_stream_version(&self) -> u64 {
+        self.live_stream_version.load(Ordering::Relaxed)
+    }
+
+    pub fn set_repaint_requester<F>(&self, repaint: F)
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        if let Ok(mut requester) = self.repaint_requester.lock() {
+            *requester = Some(Arc::new(repaint));
+        }
+    }
+
+    fn request_repaint(&self) {
+        let requester = self
+            .repaint_requester
+            .lock()
+            .ok()
+            .and_then(|requester| requester.clone());
+        if let Some(requester) = requester {
+            requester();
+        }
     }
 }
 
@@ -49,6 +85,7 @@ impl AppState {
             http,
             events: AppEvents::default(),
             scheduler: SchedulerRuntime::default(),
+            live_requests: LiveRequestStore::default(),
         })
     }
 }

@@ -4,6 +4,7 @@ use crate::core::models::{
     BalanceProvider, BalanceSnapshot, DashboardStats, ProviderStats, QuotaSnapshot, RequestLog,
     ScheduleGroup, ScheduleGroupMember, Upstream, WireApi,
 };
+use crate::live::LiveRequestSnapshot;
 use crate::oauth;
 use crate::pricing;
 use crate::proxy::{self, ServerHandle};
@@ -21,6 +22,7 @@ use upstream_editor::UpstreamEditor;
 const LOG_PAGE_SIZE: usize = 20;
 
 mod dashboard;
+mod active;
 mod data;
 mod logs;
 mod quota;
@@ -34,6 +36,7 @@ enum Tab {
     Dashboard,
     Upstreams,
     Scheduler,
+    ActiveConnections,
     Logs,
 }
 
@@ -60,6 +63,7 @@ pub struct CodexSwitchApp {
     local_key: String,
     local_key_copied_at: Option<Instant>,
     last_seen_request_log_version: u64,
+    last_seen_live_stream_version: u64,
     last_auto_refresh_at: Instant,
     price_fetch_started: bool,
     price_fetch_pending: bool,
@@ -73,6 +77,7 @@ pub struct CodexSwitchApp {
     stats: DashboardStats,
     provider_stats: Vec<ProviderStats>,
     logs: Vec<RequestLog>,
+    live_connections: Vec<LiveRequestSnapshot>,
     log_page: usize,
     log_page_size: usize,
     log_total_count: i64,
@@ -99,7 +104,10 @@ pub struct CodexSwitchApp {
 }
 
 impl CodexSwitchApp {
-    pub fn new(runtime: Arc<Runtime>, state: AppState) -> Self {
+    pub fn new(runtime: Arc<Runtime>, state: AppState, egui_ctx: egui::Context) -> Self {
+        state.events.set_repaint_requester(move || {
+            egui_ctx.request_repaint();
+        });
         let (task_tx, task_rx) = tokio::sync::mpsc::unbounded_channel();
         let bind_addr = runtime
             .block_on(state.store.get_setting("bind_addr"))
@@ -112,6 +120,7 @@ impl CodexSwitchApp {
             .flatten()
             .unwrap_or_default();
         let last_seen_request_log_version = state.events.request_log_version();
+        let last_seen_live_stream_version = state.events.live_stream_version();
         let mut app = Self {
             runtime,
             state,
@@ -123,6 +132,7 @@ impl CodexSwitchApp {
             local_key,
             local_key_copied_at: None,
             last_seen_request_log_version,
+            last_seen_live_stream_version,
             last_auto_refresh_at: Instant::now(),
             price_fetch_started: false,
             price_fetch_pending: false,
@@ -136,6 +146,7 @@ impl CodexSwitchApp {
             stats: DashboardStats::default(),
             provider_stats: Vec::new(),
             logs: Vec::new(),
+            live_connections: Vec::new(),
             log_page: 0,
             log_page_size: LOG_PAGE_SIZE,
             log_total_count: 0,
@@ -167,6 +178,11 @@ impl CodexSwitchApp {
 
     fn maybe_auto_refresh(&mut self, ctx: &egui::Context) {
         ctx.request_repaint_after(Duration::from_secs(1));
+        let live_version = self.state.events.live_stream_version();
+        if live_version != self.last_seen_live_stream_version {
+            self.last_seen_live_stream_version = live_version;
+            self.live_connections = self.state.live_requests.snapshots();
+        }
         let now = Instant::now();
         if now.duration_since(self.last_auto_refresh_at) < Duration::from_secs(1) {
             return;
@@ -500,6 +516,7 @@ impl eframe::App for CodexSwitchApp {
                 tab_button(ui, &mut self.tab, Tab::Dashboard, "仪表盘");
                 tab_button(ui, &mut self.tab, Tab::Upstreams, "上游");
                 tab_button(ui, &mut self.tab, Tab::Scheduler, "调度组");
+                tab_button(ui, &mut self.tab, Tab::ActiveConnections, "活跃连接");
                 tab_button(ui, &mut self.tab, Tab::Logs, "日志");
                 if ui.button("刷新").clicked() {
                     self.refresh_all();
@@ -518,6 +535,7 @@ impl eframe::App for CodexSwitchApp {
                 Tab::Dashboard => self.dashboard_ui(ui),
                 Tab::Upstreams => self.upstreams_ui(ui),
                 Tab::Scheduler => self.scheduler_ui(ui),
+                Tab::ActiveConnections => self.active_connections_ui(ui),
                 Tab::Logs => self.logs_ui(ui),
             }
         });

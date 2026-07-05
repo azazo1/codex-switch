@@ -1,6 +1,7 @@
 mod app;
 mod balance;
 mod core;
+mod live;
 mod oauth;
 mod pricing;
 mod proxy;
@@ -32,7 +33,11 @@ fn main() -> eframe::Result<()> {
         native_options,
         Box::new(move |cc| {
             app::install_fonts(&cc.egui_ctx);
-            Ok(Box::new(app::CodexSwitchApp::new(runtime, app_state)))
+            Ok(Box::new(app::CodexSwitchApp::new(
+                runtime,
+                app_state,
+                cc.egui_ctx.clone(),
+            )))
         }),
     )
 }

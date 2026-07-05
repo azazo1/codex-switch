@@ -44,6 +44,26 @@ pub fn extract_usage_from_sse(text: &str) -> TokenUsage {
     usage
 }
 
+pub fn for_each_sse_text_delta(text: &str, mut on_delta: impl FnMut(&str)) {
+    for block in text.split("\n\n") {
+        for line in block.lines() {
+            let Some(data) = line.strip_prefix("data:") else {
+                continue;
+            };
+            let data = data.trim();
+            if data.is_empty() || data == "[DONE]" {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<Value>(data) else {
+                continue;
+            };
+            if let Some(delta) = sse_text_delta(&value) {
+                on_delta(delta);
+            }
+        }
+    }
+}
+
 pub fn responses_to_chat_json(body: &[u8]) -> anyhow::Result<Vec<u8>> {
     let value: Value = serde_json::from_slice(body)?;
     let model = value
@@ -167,6 +187,31 @@ fn normalize_chat_usage(usage: Option<&Value>) -> Value {
     })
 }
 
+fn sse_text_delta(value: &Value) -> Option<&str> {
+    value
+        .pointer("/choices/0/delta/content")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            value
+                .pointer("/choices/0/delta/reasoning_content")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+        })
+        .or_else(|| {
+            value
+                .pointer("/choices/0/delta/refusal")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+        })
+        .or_else(|| {
+            value
+                .get("delta")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+        })
+}
+
 fn int_field(value: &Value, keys: &[&str]) -> i64 {
     for key in keys {
         if let Some(number) = value.get(*key).and_then(Value::as_i64) {
@@ -208,6 +253,17 @@ mod tests {
         let value: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["messages"][0]["content"], "hello");
         assert_eq!(value["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn extracts_sse_text_deltas() {
+        let mut out = String::new();
+        for_each_sse_text_delta(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hel\"}\n\n\
+             data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n",
+            |delta| out.push_str(delta),
+        );
+        assert_eq!(out, "hello");
     }
 
     #[test]

@@ -1,10 +1,12 @@
 use crate::app::AppState;
 use crate::core::models::{RequestLog, TokenUsage, Upstream, UpstreamKind, WireApi};
+use crate::live::LiveRequestMeta;
 use crate::proxy::transform;
 use crate::quota;
 use crate::scheduler::{self, SchedulerFailureKind};
 use crate::usage;
 use auth::validate_local_access;
+use async_stream::stream;
 use axum::{
     body::Bytes,
     http::{HeaderMap, Method, StatusCode, Uri},
@@ -12,9 +14,10 @@ use axum::{
 };
 use futures_util::StreamExt;
 use headers::apply_headers;
-use response::{build_response, convert_chat_sse_to_responses, to_axum_headers};
+use response::{build_response, build_stream_response, to_axum_headers};
 use select::selection_plan;
 use serde_json::{Value, json};
+use std::io;
 use std::time::Instant;
 
 mod auth;
@@ -71,6 +74,10 @@ pub async fn handle_openai(
         headers,
         body,
         endpoint: endpoint.clone(),
+        started,
+        request_id: uuid::Uuid::new_v4().to_string(),
+        model: model.clone(),
+        reasoning_effort: reasoning_effort.clone(),
         responses_api,
         compact,
     };
@@ -78,23 +85,25 @@ pub async fn handle_openai(
 
     match result {
         Ok(result) => {
-            record_request_log(
-                &state,
-                RequestLog {
-                    ts: None,
-                    upstream_id: Some(result.upstream.id.clone()),
-                    upstream_name: Some(result.upstream.name.clone()),
-                    endpoint,
-                    model,
-                    reasoning_effort,
-                    status: i64::from(result.status.as_u16()),
-                    usage: result.usage,
-                    duration_ms: started.elapsed().as_millis() as i64,
-                    first_token_ms: result.first_token_ms,
-                    error: None,
-                },
-            )
-            .await;
+            if result.log_on_return {
+                record_request_log(
+                    &state,
+                    RequestLog {
+                        ts: None,
+                        upstream_id: Some(result.upstream.id.clone()),
+                        upstream_name: Some(result.upstream.name.clone()),
+                        endpoint,
+                        model,
+                        reasoning_effort,
+                        status: i64::from(result.status.as_u16()),
+                        usage: result.usage,
+                        duration_ms: started.elapsed().as_millis() as i64,
+                        first_token_ms: result.first_token_ms,
+                        error: None,
+                    },
+                )
+                .await;
+            }
             result.response
         }
         Err(err) => {
@@ -137,6 +146,7 @@ struct ForwardResult {
     usage: TokenUsage,
     first_token_ms: Option<i64>,
     failure_kind: Option<SchedulerFailureKind>,
+    log_on_return: bool,
     response: Response,
 }
 
@@ -147,6 +157,10 @@ struct ForwardRequest<'a> {
     headers: HeaderMap,
     body: Bytes,
     endpoint: String,
+    started: Instant,
+    request_id: String,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
     responses_api: bool,
     compact: bool,
 }
@@ -284,34 +298,16 @@ async fn forward_with_upstream(
         .to_string();
 
     if content_type.contains("text/event-stream") {
-        let started = Instant::now();
-        let mut first_token_ms = None;
-        let mut all = Vec::new();
-        let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-            if first_token_ms.is_none() && !chunk.is_empty() {
-                first_token_ms = Some(started.elapsed().as_millis() as i64);
-            }
-            all.extend_from_slice(&chunk);
-        }
-        let text = String::from_utf8_lossy(&all);
-        let mut usage = usage::extract_usage_from_sse(&text);
-        usage.finish();
-        let failure_kind = scheduler::classify_response(status, &all);
-        let response_body = if request.responses_api && upstream.wire_api == WireApi::ChatCompletions
-        {
-            convert_chat_sse_to_responses(&text)
-        } else {
-            all
-        };
+        let stream = build_live_response_stream(request, upstream.clone(), status, response);
+        let failure_kind = scheduler::classify_response(status, &[]);
         Ok(ForwardResult {
             upstream,
             status,
-            usage,
-            first_token_ms,
+            usage: TokenUsage::default(),
+            first_token_ms: None,
             failure_kind,
-            response: build_response(status, response_headers, response_body),
+            log_on_return: false,
+            response: build_stream_response(status, response_headers, stream),
         })
     } else {
         let bytes = response.bytes().await?;
@@ -331,7 +327,249 @@ async fn forward_with_upstream(
             usage,
             first_token_ms: None,
             failure_kind,
+            log_on_return: true,
             response: build_response(status, response_headers, response_body),
         })
     }
+}
+
+fn build_live_response_stream(
+    request: &ForwardRequest<'_>,
+    upstream: Upstream,
+    status: StatusCode,
+    response: reqwest::Response,
+) -> impl futures_util::Stream<Item = Result<Bytes, io::Error>> + Send + 'static {
+    let state = request.state.clone();
+    let request_id = request.request_id.clone();
+    let endpoint = request.endpoint.clone();
+    let model = request.model.clone();
+    let reasoning_effort = request.reasoning_effort.clone();
+    let started = request.started;
+    let convert_chat = request.responses_api && upstream.wire_api == WireApi::ChatCompletions;
+    let response_id = format!("resp_{}", uuid::Uuid::new_v4());
+    let upstream_id = upstream.id.clone();
+    let upstream_name = upstream.name.clone();
+    stream! {
+        state.live_requests.start(LiveRequestMeta {
+            id: request_id.clone(),
+            upstream_name: Some(upstream_name.clone()),
+            endpoint: endpoint.clone(),
+            model: model.clone(),
+            reasoning_effort: reasoning_effort.clone(),
+        });
+        state.events.bump_live_streams();
+        let mut live_guard = LiveRequestGuard::new(state.clone(), request_id.clone());
+
+        let mut first_token_ms = None;
+        let mut usage = TokenUsage::default();
+        let mut sse_buffer = String::new();
+        let mut upstream_stream = response.bytes_stream();
+
+        if convert_chat {
+            let created = format!(
+                "event: response.created\ndata: {}\n\n",
+                json!({"type":"response.created","response":{"id":response_id,"object":"response","status":"in_progress","output":[]}})
+            );
+            yield Ok(Bytes::from(created));
+        }
+
+        while let Some(chunk) = upstream_stream.next().await {
+            let chunk = match chunk {
+                Ok(chunk) => chunk,
+                Err(err) => {
+                    live_guard.finish();
+                    record_request_log(
+                        &state,
+                        RequestLog {
+                            ts: None,
+                            upstream_id: Some(upstream_id.clone()),
+                            upstream_name: Some(upstream_name.clone()),
+                            endpoint: endpoint.clone(),
+                            model: model.clone(),
+                            reasoning_effort: reasoning_effort.clone(),
+                            status: i64::from(status.as_u16()),
+                            usage,
+                            duration_ms: started.elapsed().as_millis() as i64,
+                            first_token_ms,
+                            error: Some(err.to_string()),
+                        },
+                    )
+                    .await;
+                    yield Err(io::Error::other(err.to_string()));
+                    return;
+                }
+            };
+            if first_token_ms.is_none() && !chunk.is_empty() {
+                first_token_ms = Some(started.elapsed().as_millis() as i64);
+            }
+            let converted = process_live_sse_chunk(
+                &state,
+                &request_id,
+                &response_id,
+                convert_chat,
+                &mut usage,
+                &mut sse_buffer,
+                &chunk,
+            );
+            if convert_chat {
+                if !converted.is_empty() {
+                    yield Ok(Bytes::from(converted));
+                }
+            } else {
+                yield Ok(chunk);
+            }
+        }
+
+        if !sse_buffer.is_empty() {
+            sse_buffer.push_str("\n\n");
+            let converted = process_complete_sse_blocks(
+                &state,
+                &request_id,
+                &response_id,
+                convert_chat,
+                &mut usage,
+                &mut sse_buffer,
+            );
+            if convert_chat && !converted.is_empty() {
+                yield Ok(Bytes::from(converted));
+            }
+        }
+        if convert_chat {
+            yield Ok(Bytes::from_static(b"data: [DONE]\n\n"));
+        }
+        usage.finish();
+        live_guard.finish();
+        record_request_log(
+            &state,
+            RequestLog {
+                ts: None,
+                upstream_id: Some(upstream_id),
+                upstream_name: Some(upstream_name),
+                endpoint,
+                model,
+                reasoning_effort,
+                status: i64::from(status.as_u16()),
+                usage,
+                duration_ms: started.elapsed().as_millis() as i64,
+                first_token_ms,
+                error: None,
+            },
+        )
+        .await;
+    }
+}
+
+struct LiveRequestGuard {
+    state: AppState,
+    request_id: String,
+    active: bool,
+}
+
+impl LiveRequestGuard {
+    fn new(state: AppState, request_id: String) -> Self {
+        Self {
+            state,
+            request_id,
+            active: true,
+        }
+    }
+
+    fn finish(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.state.live_requests.finish(&self.request_id);
+        self.state.events.bump_live_streams();
+        self.active = false;
+    }
+}
+
+impl Drop for LiveRequestGuard {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
+fn process_live_sse_chunk(
+    state: &AppState,
+    request_id: &str,
+    response_id: &str,
+    convert_chat: bool,
+    usage: &mut TokenUsage,
+    buffer: &mut String,
+    chunk: &[u8],
+) -> Vec<u8> {
+    let text = String::from_utf8_lossy(chunk);
+    buffer.push_str(&text);
+    process_complete_sse_blocks(state, request_id, response_id, convert_chat, usage, buffer)
+}
+
+fn process_complete_sse_blocks(
+    state: &AppState,
+    request_id: &str,
+    response_id: &str,
+    convert_chat: bool,
+    usage: &mut TokenUsage,
+    buffer: &mut String,
+) -> Vec<u8> {
+    let mut changed = false;
+    let mut converted = Vec::new();
+    while let Some(index) = buffer.find("\n\n") {
+        {
+            let block = &buffer[..index];
+            let item = usage::extract_usage_from_sse(block);
+            usage.merge_max(&item);
+            usage::for_each_sse_text_delta(block, |delta| {
+                changed |= state.live_requests.append_delta(request_id, delta);
+            });
+            if convert_chat {
+                converted.extend_from_slice(&convert_chat_sse_block(response_id, block));
+            }
+        }
+        buffer.drain(..index + 2);
+    }
+    if changed {
+        state.events.bump_live_streams();
+    }
+    converted
+}
+
+fn convert_chat_sse_block(response_id: &str, block: &str) -> Vec<u8> {
+    let mut out = String::new();
+    for line in block.lines() {
+        let Some(data) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(data) else {
+            continue;
+        };
+        if let Some(delta) = value
+            .pointer("/choices/0/delta/content")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                value
+                    .pointer("/choices/0/delta/reasoning_content")
+                    .and_then(|value| value.as_str())
+                    .filter(|value| !value.is_empty())
+            })
+        {
+            out.push_str(&format!(
+                "event: response.output_text.delta\ndata: {}\n\n",
+                json!({"type":"response.output_text.delta","delta":delta})
+            ));
+        }
+        if value.get("usage").is_some() {
+            let usage = usage::chat_to_responses_json(&value)["usage"].clone();
+            out.push_str(&format!(
+                "event: response.completed\ndata: {}\n\n",
+                json!({"type":"response.completed","response":{"id":response_id,"status":"completed","usage":usage}})
+            ));
+        }
+    }
+    out.into_bytes()
 }

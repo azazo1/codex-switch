@@ -295,6 +295,7 @@ mod tests {
             http: reqwest::Client::new(),
             events: Default::default(),
             scheduler: Default::default(),
+            live_requests: Default::default(),
         }
     }
 

@@ -163,6 +163,7 @@ impl Store {
             .collect())
     }
 
+    #[cfg(test)]
     pub async fn recent_logs(&self, limit: i64) -> anyhow::Result<Vec<RequestLog>> {
         self.recent_logs_page(limit, 0).await
     }
