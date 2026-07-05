@@ -102,11 +102,14 @@ mod tests {
     use crate::core::models::{BalanceProvider, Upstream, WireApi};
     use crate::storage::{Store, credentials::CredentialStore};
     use axum::{
+        body::Body,
         http::header,
         routing::get,
     };
+    use futures_util::StreamExt;
     use serde_json::{Value, json};
     use std::sync::Arc;
+    use std::time::Duration;
     use tokio::{net::TcpListener, sync::Mutex};
 
     #[derive(Clone, Copy)]
@@ -116,6 +119,7 @@ mod tests {
         ResponsesJson,
         ChatJson,
         ChatSse,
+        SlowChatSse,
     }
 
     #[derive(Clone)]
@@ -242,6 +246,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chat_sse_is_recorded_when_client_stops_reading_early() {
+        let (mock_base, _hits) = spawn_mock(MockMode::SlowChatSse).await;
+        let state = test_state(&mock_base, WireApi::ChatCompletions).await;
+        let proxy_base = spawn_proxy(state.clone()).await;
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({"model":"gpt-test","input":"hello","stream":true}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let mut stream = response.bytes_stream();
+        let mut saw_delta = false;
+        for _ in 0..3 {
+            let Some(chunk) = stream.next().await else {
+                break;
+            };
+            let chunk = chunk.unwrap();
+            let text = String::from_utf8_lossy(&chunk);
+            if text.contains("response.output_text.delta") {
+                saw_delta = true;
+                break;
+            }
+        }
+        assert!(saw_delta);
+        drop(stream);
+        wait_for_log_count(&state, 1).await;
+
+        let logs = state.store.recent_logs(1).await.unwrap();
+        assert_eq!(logs[0].upstream_name.as_deref(), Some("mock"));
+        assert_eq!(logs[0].endpoint, "/responses");
+        assert!(logs[0].first_token_ms.is_some());
+    }
+
+    #[tokio::test]
     async fn failover_group_retries_balance_failure() {
         let (bad_base, bad_hits) = spawn_mock(MockMode::BalanceError).await;
         let (good_base, good_hits) = spawn_mock(MockMode::ResponsesJson).await;
@@ -263,8 +304,11 @@ mod tests {
 
         assert_eq!(bad_hits.lock().await.len(), 1);
         assert_eq!(good_hits.lock().await.len(), 1);
-        let logs = state.store.recent_logs(1).await.unwrap();
+        let logs = state.store.recent_logs(2).await.unwrap();
+        assert_eq!(logs.len(), 2);
         assert_eq!(logs[0].upstream_name.as_deref(), Some("good"));
+        assert_eq!(logs[1].upstream_name.as_deref(), Some("bad"));
+        assert_eq!(logs[1].status, i64::from(StatusCode::PAYMENT_REQUIRED.as_u16()));
     }
 
     async fn test_state(base_url: &str, wire_api: WireApi) -> AppState {
@@ -322,6 +366,17 @@ mod tests {
             axum::serve(listener, router).await.unwrap();
         });
         format!("http://{addr}")
+    }
+
+    async fn wait_for_log_count(state: &AppState, expected: i64) {
+        for _ in 0..20 {
+            if state.store.request_log_count().await.unwrap() >= expected {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        let count = state.store.request_log_count().await.unwrap();
+        assert_eq!(count, expected);
     }
 
     async fn mock_handler(
@@ -385,6 +440,23 @@ mod tests {
                 ),
             )
                 .into_response(),
+            MockMode::SlowChatSse => {
+                let stream = async_stream::stream! {
+                    yield Ok::<_, std::convert::Infallible>(Bytes::from_static(
+                        b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
+                    ));
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    yield Ok::<_, std::convert::Infallible>(Bytes::from_static(
+                        b"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":3,\"total_tokens\":5}}\n\n",
+                    ));
+                    yield Ok::<_, std::convert::Infallible>(Bytes::from_static(b"data: [DONE]\n\n"));
+                };
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, "text/event-stream")
+                    .body(Body::from_stream(stream))
+                    .unwrap()
+            }
         }
     }
 }

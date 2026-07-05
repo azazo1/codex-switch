@@ -1,5 +1,5 @@
 use crate::app::AppState;
-use crate::core::models::{RequestLog, TokenUsage, Upstream, UpstreamKind, WireApi};
+use crate::core::models::{TokenUsage, Upstream, UpstreamKind, WireApi};
 use crate::live::LiveRequestMeta;
 use crate::proxy::transform;
 use crate::quota;
@@ -14,6 +14,7 @@ use axum::{
 };
 use futures_util::StreamExt;
 use headers::apply_headers;
+use logging::{AttemptLog, LiveRequestGuard, StreamLogDraft, record_attempt_log};
 use response::{build_response, build_stream_response, to_axum_headers};
 use select::selection_plan;
 use serde_json::{Value, json};
@@ -22,6 +23,7 @@ use std::time::Instant;
 
 mod auth;
 mod headers;
+mod logging;
 mod models;
 mod response;
 mod select;
@@ -86,57 +88,45 @@ pub async fn handle_openai(
     match result {
         Ok(result) => {
             if result.log_on_return {
-                record_request_log(
-                    &state,
-                    RequestLog {
-                        ts: None,
-                        upstream_id: Some(result.upstream.id.clone()),
-                        upstream_name: Some(result.upstream.name.clone()),
-                        endpoint,
-                        model,
-                        reasoning_effort,
-                        status: i64::from(result.status.as_u16()),
-                        usage: result.usage,
-                        duration_ms: started.elapsed().as_millis() as i64,
-                        first_token_ms: result.first_token_ms,
-                        error: None,
-                    },
-                )
+                record_attempt_log(AttemptLog {
+                    state: &state,
+                    started,
+                    upstream: Some(&result.upstream),
+                    endpoint,
+                    model,
+                    reasoning_effort,
+                    status: result.status,
+                    usage: result.usage,
+                    first_token_ms: result.first_token_ms,
+                    error: None,
+                })
                 .await;
             }
             result.response
         }
         Err(err) => {
-            record_request_log(
-                &state,
-                RequestLog {
-                    ts: None,
-                    upstream_id: None,
-                    upstream_name: None,
+            let message = err.source.to_string();
+            if !err.logged {
+                record_attempt_log(AttemptLog {
+                    state: &state,
+                    started,
+                    upstream: None,
                     endpoint,
                     model,
                     reasoning_effort,
-                    status: 502,
+                    status: StatusCode::BAD_GATEWAY,
                     usage: TokenUsage::default(),
-                    duration_ms: started.elapsed().as_millis() as i64,
                     first_token_ms: None,
-                    error: Some(err.to_string()),
-                },
-            )
-            .await;
+                    error: Some(message.clone()),
+                })
+                .await;
+            }
             (
                 StatusCode::BAD_GATEWAY,
-                axum::Json(json!({"error":{"message":err.to_string(),"type":"proxy_error"}})),
+                axum::Json(json!({"error":{"message":message,"type":"proxy_error"}})),
             )
                 .into_response()
         }
-    }
-}
-
-async fn record_request_log(state: &AppState, log: RequestLog) {
-    match state.store.insert_request_log(log).await {
-        Ok(()) => state.events.bump_request_logs(),
-        Err(err) => tracing::warn!(error = %err, "failed to record request log"),
     }
 }
 
@@ -148,6 +138,33 @@ struct ForwardResult {
     failure_kind: Option<SchedulerFailureKind>,
     log_on_return: bool,
     response: Response,
+}
+
+struct ForwardFailure {
+    source: anyhow::Error,
+    logged: bool,
+}
+
+impl ForwardFailure {
+    fn logged(source: anyhow::Error) -> Self {
+        Self {
+            source,
+            logged: true,
+        }
+    }
+
+    fn unlogged(source: anyhow::Error) -> Self {
+        Self {
+            source,
+            logged: false,
+        }
+    }
+}
+
+impl From<anyhow::Error> for ForwardFailure {
+    fn from(source: anyhow::Error) -> Self {
+        Self::unlogged(source)
+    }
 }
 
 struct ForwardRequest<'a> {
@@ -165,7 +182,7 @@ struct ForwardRequest<'a> {
     compact: bool,
 }
 
-async fn forward_inner(request: ForwardRequest<'_>) -> anyhow::Result<ForwardResult> {
+async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, ForwardFailure> {
     let plan = selection_plan(
         request.state,
         &request.body,
@@ -192,6 +209,19 @@ async fn forward_inner(request: ForwardRequest<'_>) -> anyhow::Result<ForwardRes
                         count,
                     ) && index + 1 < candidate_count;
                     if should_retry {
+                        record_attempt_log(AttemptLog {
+                            state: request.state,
+                            started: request.started,
+                            upstream: Some(&upstream),
+                            endpoint: request.endpoint.clone(),
+                            model: request.model.clone(),
+                            reasoning_effort: request.reasoning_effort.clone(),
+                            status: result.status,
+                            usage: result.usage.clone(),
+                            first_token_ms: result.first_token_ms,
+                            error: Some(format!("scheduler retry: {failure:?}")),
+                        })
+                        .await;
                         tracing::warn!(
                             group_id = %plan.group.id,
                             upstream_id = %upstream.id,
@@ -228,6 +258,20 @@ async fn forward_inner(request: ForwardRequest<'_>) -> anyhow::Result<ForwardRes
                     count,
                 ) && index + 1 < candidate_count;
                 if should_retry {
+                    let error_message = err.to_string();
+                    record_attempt_log(AttemptLog {
+                        state: request.state,
+                        started: request.started,
+                        upstream: Some(&upstream),
+                        endpoint: request.endpoint.clone(),
+                        model: request.model.clone(),
+                        reasoning_effort: request.reasoning_effort.clone(),
+                        status: StatusCode::BAD_GATEWAY,
+                        usage: TokenUsage::default(),
+                        first_token_ms: None,
+                        error: Some(error_message.clone()),
+                    })
+                    .await;
                     tracing::warn!(
                         group_id = %plan.group.id,
                         upstream_id = %upstream.id,
@@ -239,11 +283,27 @@ async fn forward_inner(request: ForwardRequest<'_>) -> anyhow::Result<ForwardRes
                     last_error = Some(err);
                     continue;
                 }
-                return Err(err);
+                let error_message = err.to_string();
+                record_attempt_log(AttemptLog {
+                    state: request.state,
+                    started: request.started,
+                    upstream: Some(&upstream),
+                    endpoint: request.endpoint.clone(),
+                    model: request.model.clone(),
+                    reasoning_effort: request.reasoning_effort.clone(),
+                    status: StatusCode::BAD_GATEWAY,
+                    usage: TokenUsage::default(),
+                    first_token_ms: None,
+                    error: Some(error_message),
+                })
+                .await;
+                return Err(ForwardFailure::logged(err));
             }
         }
     }
-    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("no scheduled upstream handled request")))
+    Err(ForwardFailure::unlogged(
+        last_error.unwrap_or_else(|| anyhow::anyhow!("no scheduled upstream handled request")),
+    ))
 }
 
 async fn forward_with_upstream(
@@ -347,9 +407,19 @@ fn build_live_response_stream(
     let started = request.started;
     let convert_chat = request.responses_api && upstream.wire_api == WireApi::ChatCompletions;
     let response_id = format!("resp_{}", uuid::Uuid::new_v4());
-    let upstream_id = upstream.id.clone();
     let upstream_name = upstream.name.clone();
+    let log_draft = StreamLogDraft::new(
+        state.clone(),
+        &upstream,
+        endpoint.clone(),
+        model.clone(),
+        reasoning_effort.clone(),
+        status,
+        started,
+    );
+    let live_guard = LiveRequestGuard::new(state.clone(), request_id.clone(), log_draft.clone());
     stream! {
+        let mut live_guard = live_guard;
         state.live_requests.start(LiveRequestMeta {
             id: request_id.clone(),
             upstream_name: Some(upstream_name.clone()),
@@ -358,7 +428,7 @@ fn build_live_response_stream(
             reasoning_effort: reasoning_effort.clone(),
         });
         state.events.bump_live_streams();
-        let mut live_guard = LiveRequestGuard::new(state.clone(), request_id.clone());
+        live_guard.mark_active();
 
         let mut first_token_ms = None;
         let mut usage = TokenUsage::default();
@@ -377,30 +447,18 @@ fn build_live_response_stream(
             let chunk = match chunk {
                 Ok(chunk) => chunk,
                 Err(err) => {
+                    let error_message = err.to_string();
+                    log_draft.merge_usage(&usage);
+                    log_draft.record(Some(error_message.clone())).await;
                     live_guard.finish();
-                    record_request_log(
-                        &state,
-                        RequestLog {
-                            ts: None,
-                            upstream_id: Some(upstream_id.clone()),
-                            upstream_name: Some(upstream_name.clone()),
-                            endpoint: endpoint.clone(),
-                            model: model.clone(),
-                            reasoning_effort: reasoning_effort.clone(),
-                            status: i64::from(status.as_u16()),
-                            usage,
-                            duration_ms: started.elapsed().as_millis() as i64,
-                            first_token_ms,
-                            error: Some(err.to_string()),
-                        },
-                    )
-                    .await;
-                    yield Err(io::Error::other(err.to_string()));
+                    yield Err(io::Error::other(error_message));
                     return;
                 }
             };
             if first_token_ms.is_none() && !chunk.is_empty() {
-                first_token_ms = Some(started.elapsed().as_millis() as i64);
+                let elapsed = started.elapsed().as_millis() as i64;
+                first_token_ms = Some(elapsed);
+                log_draft.set_first_token_ms(elapsed);
             }
             let converted = process_live_sse_chunk(
                 &state,
@@ -411,6 +469,7 @@ fn build_live_response_stream(
                 &mut sse_buffer,
                 &chunk,
             );
+            log_draft.merge_usage(&usage);
             if convert_chat {
                 if !converted.is_empty() {
                     yield Ok(Bytes::from(converted));
@@ -430,6 +489,7 @@ fn build_live_response_stream(
                 &mut usage,
                 &mut sse_buffer,
             );
+            log_draft.merge_usage(&usage);
             if convert_chat && !converted.is_empty() {
                 yield Ok(Bytes::from(converted));
             }
@@ -438,55 +498,9 @@ fn build_live_response_stream(
             yield Ok(Bytes::from_static(b"data: [DONE]\n\n"));
         }
         usage.finish();
+        log_draft.merge_usage(&usage);
         live_guard.finish();
-        record_request_log(
-            &state,
-            RequestLog {
-                ts: None,
-                upstream_id: Some(upstream_id),
-                upstream_name: Some(upstream_name),
-                endpoint,
-                model,
-                reasoning_effort,
-                status: i64::from(status.as_u16()),
-                usage,
-                duration_ms: started.elapsed().as_millis() as i64,
-                first_token_ms,
-                error: None,
-            },
-        )
-        .await;
-    }
-}
-
-struct LiveRequestGuard {
-    state: AppState,
-    request_id: String,
-    active: bool,
-}
-
-impl LiveRequestGuard {
-    fn new(state: AppState, request_id: String) -> Self {
-        Self {
-            state,
-            request_id,
-            active: true,
-        }
-    }
-
-    fn finish(&mut self) {
-        if !self.active {
-            return;
-        }
-        self.state.live_requests.finish(&self.request_id);
-        self.state.events.bump_live_streams();
-        self.active = false;
-    }
-}
-
-impl Drop for LiveRequestGuard {
-    fn drop(&mut self) {
-        self.finish();
+        log_draft.record(None).await;
     }
 }
 
