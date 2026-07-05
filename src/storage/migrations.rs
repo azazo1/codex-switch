@@ -69,11 +69,12 @@ struct Migration {
 }
 
 fn migrations() -> &'static [Migration] {
-    &[Migration {
-        version: 1,
-        name: "initial_schema",
-        statements: &[
-            "CREATE TABLE IF NOT EXISTS upstreams (
+    &[
+        Migration {
+            version: 1,
+            name: "initial_schema",
+            statements: &[
+                "CREATE TABLE IF NOT EXISTS upstreams (
                 id TEXT PRIMARY KEY,
                 kind TEXT NOT NULL,
                 name TEXT NOT NULL,
@@ -91,15 +92,15 @@ fn migrations() -> &'static [Migration] {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )",
-            "CREATE TABLE IF NOT EXISTS secrets (
+                "CREATE TABLE IF NOT EXISTS credentials (
                 upstream_id TEXT NOT NULL,
                 name TEXT NOT NULL,
-                encrypted_value TEXT NOT NULL,
+                value TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY (upstream_id, name),
                 FOREIGN KEY (upstream_id) REFERENCES upstreams(id) ON DELETE CASCADE
             )",
-            "CREATE TABLE IF NOT EXISTS request_logs (
+                "CREATE TABLE IF NOT EXISTS request_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts TEXT NOT NULL,
                 upstream_id TEXT,
@@ -116,9 +117,9 @@ fn migrations() -> &'static [Migration] {
                 first_token_ms INTEGER,
                 error TEXT
             )",
-            "CREATE INDEX IF NOT EXISTS idx_request_logs_ts ON request_logs(ts)",
-            "CREATE INDEX IF NOT EXISTS idx_request_logs_upstream ON request_logs(upstream_id)",
-            "CREATE TABLE IF NOT EXISTS usage_rollups (
+                "CREATE INDEX IF NOT EXISTS idx_request_logs_ts ON request_logs(ts)",
+                "CREATE INDEX IF NOT EXISTS idx_request_logs_upstream ON request_logs(upstream_id)",
+                "CREATE TABLE IF NOT EXISTS usage_rollups (
                 day TEXT NOT NULL,
                 upstream_id TEXT NOT NULL,
                 upstream_name TEXT NOT NULL,
@@ -130,7 +131,7 @@ fn migrations() -> &'static [Migration] {
                 total_tokens INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (day, upstream_id)
             )",
-            "CREATE TABLE IF NOT EXISTS quota_snapshots (
+                "CREATE TABLE IF NOT EXISTS quota_snapshots (
                 upstream_id TEXT PRIMARY KEY,
                 used_5h_percent REAL,
                 reset_5h_seconds INTEGER,
@@ -141,7 +142,7 @@ fn migrations() -> &'static [Migration] {
                 fetched_at INTEGER NOT NULL,
                 FOREIGN KEY (upstream_id) REFERENCES upstreams(id) ON DELETE CASCADE
             )",
-            "CREATE TABLE IF NOT EXISTS balance_snapshots (
+                "CREATE TABLE IF NOT EXISTS balance_snapshots (
                 upstream_id TEXT PRIMARY KEY,
                 provider TEXT NOT NULL,
                 remaining REAL,
@@ -153,13 +154,14 @@ fn migrations() -> &'static [Migration] {
                 fetched_at INTEGER NOT NULL,
                 FOREIGN KEY (upstream_id) REFERENCES upstreams(id) ON DELETE CASCADE
             )",
-            "CREATE TABLE IF NOT EXISTS settings (
+                "CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )",
-        ],
-    }]
+            ],
+        },
+    ]
 }
 
 #[cfg(test)]

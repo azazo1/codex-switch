@@ -177,7 +177,7 @@ impl CodexSwitchApp {
         );
         let result = self.runtime.block_on(async {
             self.state.store.save_upstream(&upstream).await?;
-            self.state.secrets.put(&upstream.id, "api_key", &api_key).await
+            self.state.credentials.put(&upstream.id, "api_key", &api_key).await
         });
         match result {
             Ok(()) => {
@@ -272,9 +272,6 @@ impl eframe::App for CodexSwitchApp {
             }
             ui.separator();
             ui.label(&self.status);
-            if self.state.secrets.fallback_used() {
-                ui.label("系统 keyring 不可用, 当前使用本地回退密钥加密 secret");
-            }
         });
     }
 }

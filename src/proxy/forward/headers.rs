@@ -18,7 +18,7 @@ pub(super) async fn apply_headers(
     match upstream.kind {
         UpstreamKind::RelayApiKey => {
             let api_key = state
-                .secrets
+                .credentials
                 .get(&upstream.id, "api_key")
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("missing api key"))?;

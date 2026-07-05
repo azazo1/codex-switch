@@ -105,41 +105,41 @@ impl Store {
         Ok(())
     }
 
-    pub async fn save_secret(
+    pub async fn save_credential(
         &self,
         upstream_id: &str,
         name: &str,
-        encrypted_value: &str,
+        value: &str,
     ) -> anyhow::Result<()> {
         sqlx::query(
-            "INSERT INTO secrets (upstream_id, name, encrypted_value, updated_at)
+            "INSERT INTO credentials (upstream_id, name, value, updated_at)
              VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(upstream_id, name) DO UPDATE SET
-                encrypted_value = excluded.encrypted_value,
+                value = excluded.value,
                 updated_at = excluded.updated_at",
         )
         .bind(upstream_id)
         .bind(name)
-        .bind(encrypted_value)
+        .bind(value)
         .bind(Utc::now().to_rfc3339())
         .execute(self.pool())
         .await?;
         Ok(())
     }
 
-    pub async fn get_secret(
+    pub async fn get_credential(
         &self,
         upstream_id: &str,
         name: &str,
     ) -> anyhow::Result<Option<String>> {
         let row = sqlx::query(
-            "SELECT encrypted_value FROM secrets WHERE upstream_id = ?1 AND name = ?2",
+            "SELECT value FROM credentials WHERE upstream_id = ?1 AND name = ?2",
         )
         .bind(upstream_id)
         .bind(name)
         .fetch_optional(self.pool())
         .await?;
-        Ok(row.map(|r| r.get::<String, _>("encrypted_value")))
+        Ok(row.map(|r| r.get::<String, _>("value")))
     }
 }
 

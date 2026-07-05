@@ -114,17 +114,17 @@ async fn store_oauth_account(
     );
     state.store.save_upstream(&upstream).await?;
     state
-        .secrets
+        .credentials
         .put(&upstream.id, "access_token", &tokens.access_token)
         .await?;
     if let Some(refresh_token) = tokens.refresh_token {
         state
-            .secrets
+            .credentials
             .put(&upstream.id, "refresh_token", &refresh_token)
             .await?;
     }
     if let Some(id_token) = tokens.id_token {
-        state.secrets.put(&upstream.id, "id_token", &id_token).await?;
+        state.credentials.put(&upstream.id, "id_token", &id_token).await?;
     }
     Ok(upstream)
 }

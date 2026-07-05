@@ -91,7 +91,7 @@ impl CodexSwitchApp {
         let result = self.runtime.block_on(async {
             self.state.store.save_upstream(&upstream).await?;
             if upstream.kind == UpstreamKind::RelayApiKey && !api_key.is_empty() {
-                self.state.secrets.put(&upstream.id, "api_key", &api_key).await?;
+                self.state.credentials.put(&upstream.id, "api_key", &api_key).await?;
             }
             anyhow::Ok(())
         });

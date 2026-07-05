@@ -35,7 +35,7 @@ pub async fn query_and_store(
         return Err(anyhow!("balance query only supports api key upstreams"));
     }
     let api_key = state
-        .secrets
+        .credentials
         .get(&upstream.id, "api_key")
         .await?
         .ok_or_else(|| anyhow!("missing api key"))?;

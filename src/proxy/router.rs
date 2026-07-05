@@ -100,7 +100,7 @@ async fn ws_placeholder() -> impl IntoResponse {
 mod tests {
     use super::*;
     use crate::core::models::{BalanceProvider, Upstream, WireApi};
-    use crate::storage::{Store, secrets::SecretStore};
+    use crate::storage::{Store, credentials::CredentialStore};
     use axum::{
         http::header,
         routing::get,
@@ -245,7 +245,7 @@ mod tests {
             .join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
         let store = Store::open(path).await.unwrap();
         store.set_setting("local_access_key", "local-test").await.unwrap();
-        let secrets = SecretStore::new_for_tests(store.clone());
+        let credentials = CredentialStore::new_for_tests(store.clone());
         let upstream = Upstream::new_relay(
             "mock".to_string(),
             base_url.to_string(),
@@ -254,10 +254,10 @@ mod tests {
             BalanceProvider::Unsupported,
         );
         store.save_upstream(&upstream).await.unwrap();
-        secrets.put(&upstream.id, "api_key", "sk-test").await.unwrap();
+        credentials.put(&upstream.id, "api_key", "sk-test").await.unwrap();
         AppState {
             store,
-            secrets,
+            credentials,
             http: reqwest::Client::new(),
         }
     }

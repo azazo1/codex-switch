@@ -82,24 +82,24 @@ pub async fn refresh_token(
 pub async fn valid_access_token(state: &AppState, upstream: &Upstream) -> anyhow::Result<String> {
     let now = chrono::Utc::now().timestamp();
     if upstream.token_expires_at.unwrap_or(0) - now > 60
-        && let Some(token) = state.secrets.get(&upstream.id, "access_token").await?
+        && let Some(token) = state.credentials.get(&upstream.id, "access_token").await?
     {
         return Ok(token);
     }
     let refresh = state
-        .secrets
+        .credentials
         .get(&upstream.id, "refresh_token")
         .await?
         .ok_or_else(|| anyhow!("missing refresh token"))?;
     let tokens = refresh_token(&state.http, &refresh).await?;
     let expires_at = Some(now + tokens.expires_in.unwrap_or(3600));
     state
-        .secrets
+        .credentials
         .put(&upstream.id, "access_token", &tokens.access_token)
         .await?;
     if let Some(refresh_token) = tokens.refresh_token.as_deref() {
         state
-            .secrets
+            .credentials
             .put(&upstream.id, "refresh_token", refresh_token)
             .await?;
     }
