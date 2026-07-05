@@ -14,6 +14,7 @@ pub(super) struct ViewData {
     pub stats: DashboardStats,
     pub provider_stats: Vec<ProviderStats>,
     pub logs: Vec<RequestLog>,
+    pub log_total_count: i64,
     pub total_estimated_cost_usd: Option<f64>,
     pub today_estimated_cost_usd: Option<f64>,
     pub provider_estimated_cost_usd: BTreeMap<String, Option<f64>>,
@@ -24,7 +25,11 @@ pub(super) struct ViewData {
     pub balance_snapshots: Vec<(String, Option<BalanceSnapshot>)>,
 }
 
-pub(super) async fn load_view_data(state: &AppState) -> anyhow::Result<ViewData> {
+pub(super) async fn load_view_data(
+    state: &AppState,
+    log_limit: i64,
+    log_offset: i64,
+) -> anyhow::Result<ViewData> {
     let upstreams = state.store.list_upstreams().await?;
     let schedule_groups = state.store.list_schedule_groups().await?;
     let current_schedule_group_id = state.store.get_setting("current_schedule_group_id").await?;
@@ -37,7 +42,8 @@ pub(super) async fn load_view_data(state: &AppState) -> anyhow::Result<ViewData>
     }
     let stats = state.store.dashboard_stats().await?;
     let provider_stats = state.store.provider_stats().await?;
-    let logs = state.store.recent_logs(100).await?;
+    let log_total_count = state.store.request_log_count().await?;
+    let logs = state.store.recent_logs_page(log_limit, log_offset).await?;
     let total_model_usage = state.store.model_usage_stats(false).await?;
     let today_model_usage = state.store.model_usage_stats(true).await?;
     let total_estimated_cost_usd = estimate_model_usage_cost(state, &total_model_usage).await?;
@@ -67,6 +73,7 @@ pub(super) async fn load_view_data(state: &AppState) -> anyhow::Result<ViewData>
         stats,
         provider_stats,
         logs,
+        log_total_count,
         total_estimated_cost_usd,
         today_estimated_cost_usd,
         provider_estimated_cost_usd,

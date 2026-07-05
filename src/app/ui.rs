@@ -18,6 +18,8 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::runtime::Runtime;
 use upstream_editor::UpstreamEditor;
 
+const LOG_PAGE_SIZE: usize = 20;
+
 mod dashboard;
 mod data;
 mod logs;
@@ -71,6 +73,9 @@ pub struct CodexSwitchApp {
     stats: DashboardStats,
     provider_stats: Vec<ProviderStats>,
     logs: Vec<RequestLog>,
+    log_page: usize,
+    log_page_size: usize,
+    log_total_count: i64,
     total_estimated_cost_usd: Option<f64>,
     today_estimated_cost_usd: Option<f64>,
     provider_estimated_cost_usd: BTreeMap<String, Option<f64>>,
@@ -131,6 +136,9 @@ impl CodexSwitchApp {
             stats: DashboardStats::default(),
             provider_stats: Vec::new(),
             logs: Vec::new(),
+            log_page: 0,
+            log_page_size: LOG_PAGE_SIZE,
+            log_total_count: 0,
             total_estimated_cost_usd: None,
             today_estimated_cost_usd: None,
             provider_estimated_cost_usd: BTreeMap::new(),
@@ -255,7 +263,12 @@ impl CodexSwitchApp {
     }
 
     fn refresh_all(&mut self) {
-        match self.runtime.block_on(load_view_data(&self.state)) {
+        let log_limit = self.log_page_size as i64;
+        let log_offset = (self.log_page * self.log_page_size) as i64;
+        match self
+            .runtime
+            .block_on(load_view_data(&self.state, log_limit, log_offset))
+        {
             Ok(data) => {
                 self.upstreams = data.upstreams;
                 self.schedule_groups = data.schedule_groups;
@@ -265,6 +278,7 @@ impl CodexSwitchApp {
                 self.stats = data.stats;
                 self.provider_stats = data.provider_stats;
                 self.logs = data.logs;
+                self.log_total_count = data.log_total_count;
                 self.total_estimated_cost_usd = data.total_estimated_cost_usd;
                 self.today_estimated_cost_usd = data.today_estimated_cost_usd;
                 self.provider_estimated_cost_usd = data.provider_estimated_cost_usd;

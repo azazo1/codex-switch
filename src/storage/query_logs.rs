@@ -164,37 +164,52 @@ impl Store {
     }
 
     pub async fn recent_logs(&self, limit: i64) -> anyhow::Result<Vec<RequestLog>> {
-        let rows = sqlx::query("SELECT * FROM request_logs ORDER BY id DESC LIMIT ?1")
+        self.recent_logs_page(limit, 0).await
+    }
+
+    pub async fn recent_logs_page(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> anyhow::Result<Vec<RequestLog>> {
+        let rows = sqlx::query("SELECT * FROM request_logs ORDER BY id DESC LIMIT ?1 OFFSET ?2")
             .bind(limit)
+            .bind(offset)
             .fetch_all(self.pool())
             .await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| {
-                let ts: String = row.get("ts");
-                RequestLog {
-                    ts: DateTime::parse_from_rfc3339(&ts)
-                        .ok()
-                        .map(|value| value.with_timezone(&Utc)),
-                    upstream_id: row.get("upstream_id"),
-                    upstream_name: row.get("upstream_name"),
-                    endpoint: row.get("endpoint"),
-                    model: row.get("model"),
-                    reasoning_effort: row.get("reasoning_effort"),
-                    status: row.get("status"),
-                    usage: TokenUsage {
-                        input_tokens: row.get("input_tokens"),
-                        output_tokens: row.get("output_tokens"),
-                        cache_read_tokens: row.get("cache_read_tokens"),
-                        cache_creation_tokens: row.get("cache_creation_tokens"),
-                        total_tokens: row.get("total_tokens"),
-                    },
-                    duration_ms: row.get("duration_ms"),
-                    first_token_ms: row.get("first_token_ms"),
-                    error: row.get("error"),
-                }
-            })
-            .collect())
+        Ok(rows.into_iter().map(request_log_from_row).collect())
+    }
+
+    pub async fn request_log_count(&self) -> anyhow::Result<i64> {
+        let row = sqlx::query("SELECT COUNT(*) AS count FROM request_logs")
+            .fetch_one(self.pool())
+            .await?;
+        Ok(row.get("count"))
+    }
+}
+
+fn request_log_from_row(row: sqlx::sqlite::SqliteRow) -> RequestLog {
+    let ts: String = row.get("ts");
+    RequestLog {
+        ts: DateTime::parse_from_rfc3339(&ts)
+            .ok()
+            .map(|value| value.with_timezone(&Utc)),
+        upstream_id: row.get("upstream_id"),
+        upstream_name: row.get("upstream_name"),
+        endpoint: row.get("endpoint"),
+        model: row.get("model"),
+        reasoning_effort: row.get("reasoning_effort"),
+        status: row.get("status"),
+        usage: TokenUsage {
+            input_tokens: row.get("input_tokens"),
+            output_tokens: row.get("output_tokens"),
+            cache_read_tokens: row.get("cache_read_tokens"),
+            cache_creation_tokens: row.get("cache_creation_tokens"),
+            total_tokens: row.get("total_tokens"),
+        },
+        duration_ms: row.get("duration_ms"),
+        first_token_ms: row.get("first_token_ms"),
+        error: row.get("error"),
     }
 }
 
