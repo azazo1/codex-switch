@@ -259,6 +259,7 @@ mod tests {
             store,
             credentials,
             http: reqwest::Client::new(),
+            events: Default::default(),
         }
     }
 

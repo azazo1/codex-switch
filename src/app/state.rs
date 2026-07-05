@@ -2,12 +2,32 @@ use crate::storage::{Store, credentials::CredentialStore};
 use anyhow::Context;
 use directories::ProjectDirs;
 use std::path::PathBuf;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 #[derive(Clone)]
 pub struct AppState {
     pub store: Store,
     pub credentials: CredentialStore,
     pub http: reqwest::Client,
+    pub events: AppEvents,
+}
+
+#[derive(Clone, Default)]
+pub struct AppEvents {
+    request_log_version: Arc<AtomicU64>,
+}
+
+impl AppEvents {
+    pub fn bump_request_logs(&self) {
+        self.request_log_version.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn request_log_version(&self) -> u64 {
+        self.request_log_version.load(Ordering::Relaxed)
+    }
 }
 
 impl AppState {
@@ -25,6 +45,7 @@ impl AppState {
             store,
             credentials,
             http,
+            events: AppEvents::default(),
         })
     }
 }

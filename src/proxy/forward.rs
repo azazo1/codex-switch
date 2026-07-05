@@ -76,9 +76,9 @@ pub async fn handle_openai(
 
     match result {
         Ok(result) => {
-            let _ = state
-                .store
-                .insert_request_log(RequestLog {
+            record_request_log(
+                &state,
+                RequestLog {
                     upstream_id: Some(result.upstream.id.clone()),
                     upstream_name: Some(result.upstream.name.clone()),
                     endpoint,
@@ -88,14 +88,15 @@ pub async fn handle_openai(
                     duration_ms: started.elapsed().as_millis() as i64,
                     first_token_ms: result.first_token_ms,
                     error: None,
-                })
-                .await;
+                },
+            )
+            .await;
             result.response
         }
         Err(err) => {
-            let _ = state
-                .store
-                .insert_request_log(RequestLog {
+            record_request_log(
+                &state,
+                RequestLog {
                     upstream_id: None,
                     upstream_name: None,
                     endpoint,
@@ -105,14 +106,22 @@ pub async fn handle_openai(
                     duration_ms: started.elapsed().as_millis() as i64,
                     first_token_ms: None,
                     error: Some(err.to_string()),
-                })
-                .await;
+                },
+            )
+            .await;
             (
                 StatusCode::BAD_GATEWAY,
                 axum::Json(json!({"error":{"message":err.to_string(),"type":"proxy_error"}})),
             )
                 .into_response()
         }
+    }
+}
+
+async fn record_request_log(state: &AppState, log: RequestLog) {
+    match state.store.insert_request_log(log).await {
+        Ok(()) => state.events.bump_request_logs(),
+        Err(err) => tracing::warn!(error = %err, "failed to record request log"),
     }
 }
 

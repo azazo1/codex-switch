@@ -10,6 +10,7 @@ use crate::quota as quota_api;
 use data::load_view_data;
 use eframe::egui;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 use upstream_editor::UpstreamEditor;
 
@@ -35,7 +36,9 @@ pub struct CodexSwitchApp {
     server: Option<ServerHandle>,
     bind_addr: String,
     local_key: String,
-    local_key_copied_at: Option<std::time::Instant>,
+    local_key_copied_at: Option<Instant>,
+    last_seen_request_log_version: u64,
+    last_auto_refresh_at: Instant,
     status: String,
     upstreams: Vec<Upstream>,
     stats: DashboardStats,
@@ -64,6 +67,7 @@ impl CodexSwitchApp {
             .ok()
             .flatten()
             .unwrap_or_default();
+        let last_seen_request_log_version = state.events.request_log_version();
         let mut app = Self {
             runtime,
             state,
@@ -72,6 +76,8 @@ impl CodexSwitchApp {
             bind_addr,
             local_key,
             local_key_copied_at: None,
+            last_seen_request_log_version,
+            last_auto_refresh_at: Instant::now(),
             status: "就绪".to_string(),
             upstreams: Vec::new(),
             stats: DashboardStats::default(),
@@ -89,6 +95,20 @@ impl CodexSwitchApp {
         };
         app.refresh_all();
         app
+    }
+
+    fn maybe_auto_refresh(&mut self, ctx: &egui::Context) {
+        ctx.request_repaint_after(Duration::from_secs(1));
+        let now = Instant::now();
+        if now.duration_since(self.last_auto_refresh_at) < Duration::from_secs(1) {
+            return;
+        }
+        self.last_auto_refresh_at = now;
+        let version = self.state.events.request_log_version();
+        if version != self.last_seen_request_log_version {
+            self.last_seen_request_log_version = version;
+            self.refresh_all();
+        }
     }
 
     fn refresh_all(&mut self) {
@@ -251,6 +271,8 @@ impl CodexSwitchApp {
 
 impl eframe::App for CodexSwitchApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.maybe_auto_refresh(ctx);
+
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 tab_button(ui, &mut self.tab, Tab::Dashboard, "仪表盘");
