@@ -493,6 +493,12 @@ impl eframe::App for CodexSwitchApp {
             });
         });
 
+        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(&self.status);
+            });
+        });
+
         egui::CentralPanel::default().show(ctx, |ui| {
             match self.tab {
                 Tab::Dashboard => self.dashboard_ui(ui),
@@ -500,8 +506,6 @@ impl eframe::App for CodexSwitchApp {
                 Tab::Scheduler => self.scheduler_ui(ui),
                 Tab::Logs => self.logs_ui(ui),
             }
-            ui.separator();
-            ui.label(&self.status);
         });
     }
 }

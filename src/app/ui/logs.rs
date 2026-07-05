@@ -7,40 +7,42 @@ impl CodexSwitchApp {
     pub(super) fn logs_ui(&mut self, ui: &mut egui::Ui) {
         ui.heading("最近请求");
         let mut token_display_mode = self.token_display_mode;
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            egui::Grid::new("recent_logs_grid")
-                .striped(true)
-                .num_columns(8)
-                .spacing([28.0, 10.0])
-                .show(ui, |ui| {
-                    ui.strong("上游");
-                    ui.strong("模型");
-                    ui.strong("推理强度");
-                    ui.strong("TOKEN");
-                    ui.strong("费用");
-                    ui.strong("首 TOKEN");
-                    ui.strong("耗时");
-                    ui.strong("时间");
-                    ui.end_row();
-
-                    for (index, log) in self.logs.iter().enumerate() {
-                        ui.label(upstream_text(log))
-                            .on_hover_text(log_hover_text(log));
-                        let model_response = ui.label(model_text(log));
-                        model_response.on_hover_text(log_hover_text(log));
-                        ui.label(log.reasoning_effort.as_deref().unwrap_or("-"));
-                        log_token_cell(ui, &mut token_display_mode, log);
-                        log_cost_cell(
-                            ui,
-                            self.log_estimated_cost_usd.get(index).copied().flatten(),
-                        );
-                        ui.label(format_optional_duration(log.first_token_ms));
-                        ui.label(format_duration(log.duration_ms));
-                        ui.label(format_log_time(log));
+        egui::ScrollArea::both()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new("recent_logs_grid")
+                    .striped(true)
+                    .num_columns(8)
+                    .spacing([28.0, 10.0])
+                    .show(ui, |ui| {
+                        ui.strong("上游");
+                        ui.strong("模型");
+                        ui.strong("推理强度");
+                        ui.strong("TOKEN");
+                        ui.strong("费用");
+                        ui.strong("首 TOKEN");
+                        ui.strong("耗时");
+                        ui.strong("时间");
                         ui.end_row();
-                    }
-                });
-        });
+
+                        for (index, log) in self.logs.iter().enumerate() {
+                            ui.label(upstream_text(log))
+                                .on_hover_text(log_hover_text(log));
+                            let model_response = ui.label(model_text(log));
+                            model_response.on_hover_text(log_hover_text(log));
+                            ui.label(log.reasoning_effort.as_deref().unwrap_or("-"));
+                            log_token_cell(ui, &mut token_display_mode, log);
+                            log_cost_cell(
+                                ui,
+                                self.log_estimated_cost_usd.get(index).copied().flatten(),
+                            );
+                            ui.label(format_optional_duration(log.first_token_ms));
+                            ui.label(format_duration(log.duration_ms));
+                            ui.label(format_log_time(log));
+                            ui.end_row();
+                        }
+                    });
+            });
         self.token_display_mode = token_display_mode;
     }
 }
