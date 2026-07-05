@@ -2,6 +2,7 @@ use eframe::egui::{Context, FontData, FontDefinitions, FontFamily};
 use std::{fs, path::Path, sync::Arc};
 
 const CJK_FONT_NAME: &str = "codex-switch-cjk";
+const UI_FONT_SCALE: f32 = 1.06;
 
 const CJK_FONT_PATHS: &[&str] = &[
     "/System/Library/Fonts/PingFang.ttc",
@@ -16,6 +17,8 @@ const CJK_FONT_PATHS: &[&str] = &[
 ];
 
 pub fn install_fonts(ctx: &Context) {
+    scale_text_styles(ctx);
+
     let Some((path, bytes)) = load_cjk_font() else {
         tracing::warn!("no CJK UI font found, Chinese text may render as missing glyph boxes");
         return;
@@ -30,6 +33,14 @@ pub fn install_fonts(ctx: &Context) {
     prepend_font(&mut fonts, FontFamily::Monospace);
     ctx.set_fonts(fonts);
     tracing::info!(path = %path.display(), "installed CJK UI font");
+}
+
+fn scale_text_styles(ctx: &Context) {
+    ctx.style_mut(|style| {
+        for font_id in style.text_styles.values_mut() {
+            font_id.size *= UI_FONT_SCALE;
+        }
+    });
 }
 
 fn load_cjk_font() -> Option<(&'static Path, Vec<u8>)> {
