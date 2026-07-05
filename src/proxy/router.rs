@@ -21,6 +21,7 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/v1/models", get(models))
+        .route("/models", get(models))
         .route("/v1/responses", post(responses).get(ws_placeholder))
         .route("/v1/responses/*subpath", post(responses_subpath))
         .route("/responses", post(responses).get(ws_placeholder))
@@ -102,7 +103,7 @@ mod tests {
     use crate::storage::{Store, secrets::SecretStore};
     use axum::{
         http::header,
-        routing::post,
+        routing::get,
     };
     use serde_json::{Value, json};
     use std::sync::Arc;
@@ -110,6 +111,7 @@ mod tests {
 
     #[derive(Clone, Copy)]
     enum MockMode {
+        ModelsJson,
         ResponsesJson,
         ChatJson,
         ChatSse,
@@ -126,6 +128,27 @@ mod tests {
         path: String,
         authorization: Option<String>,
         body: Value,
+    }
+
+    #[tokio::test]
+    async fn models_route_queries_upstream_models() {
+        let (mock_base, hits) = spawn_mock(MockMode::ModelsJson).await;
+        let state = test_state(&mock_base, WireApi::Responses).await;
+        let proxy_base = spawn_proxy(state).await;
+        let response = reqwest::Client::new()
+            .get(format!("{proxy_base}/v1/models"))
+            .bearer_auth("local-test")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = response.json::<Value>().await.unwrap();
+        assert_eq!(value["object"], "list");
+        assert_eq!(value["data"][0]["id"], "gpt-mock");
+
+        let hits = hits.lock().await;
+        assert_eq!(hits[0].path, "/v1/models");
+        assert_eq!(hits[0].authorization.as_deref(), Some("Bearer sk-test"));
     }
 
     #[tokio::test]
@@ -250,7 +273,7 @@ mod tests {
             mode,
         };
         let router = Router::new()
-            .route("/*path", post(mock_handler))
+            .route("/*path", get(mock_handler).post(mock_handler))
             .with_state(state);
         (spawn_server(router).await, hits)
     }
@@ -282,6 +305,14 @@ mod tests {
         });
 
         match state.mode {
+            MockMode::ModelsJson => (
+                StatusCode::OK,
+                axum::Json(json!({
+                    "object":"list",
+                    "data":[{"id":"gpt-mock","object":"model","created":1,"owned_by":"mock-upstream"}]
+                })),
+            )
+                .into_response(),
             MockMode::ResponsesJson => (
                 StatusCode::OK,
                 axum::Json(json!({

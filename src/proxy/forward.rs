@@ -18,6 +18,7 @@ use std::time::Instant;
 
 mod auth;
 mod headers;
+mod models;
 mod response;
 mod select;
 
@@ -25,19 +26,14 @@ pub async fn handle_models(state: AppState, headers: HeaderMap) -> Response {
     if let Err(response) = validate_local_access(&state, &headers).await {
         return response;
     }
-    let upstreams = state.store.enabled_upstreams().await.unwrap_or_default();
-    let models: Vec<Value> = upstreams
-        .iter()
-        .map(|upstream| {
-            json!({
-                "id": upstream.name,
-                "object": "model",
-                "created": 0,
-                "owned_by": "codex-switch"
-            })
-        })
-        .collect();
-    (StatusCode::OK, axum::Json(json!({"object":"list","data":models}))).into_response()
+    match models::query_models(&state, &headers).await {
+        Ok(value) => (StatusCode::OK, axum::Json(value)).into_response(),
+        Err(err) => (
+            StatusCode::BAD_GATEWAY,
+            axum::Json(json!({"error":{"message":err.to_string(),"type":"proxy_error"}})),
+        )
+            .into_response(),
+    }
 }
 
 pub async fn handle_openai(

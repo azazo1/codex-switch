@@ -51,7 +51,8 @@ impl CodexSwitchApp {
         ui.heading("上游列表");
         let mut changed = Vec::new();
         let mut deleted = Vec::new();
-        for upstream in &mut self.upstreams {
+        let mut edit = None;
+        for upstream in &self.upstreams {
             ui.horizontal(|ui| {
                 let mut enabled = upstream.enabled;
                 if ui.checkbox(&mut enabled, "").changed() {
@@ -59,11 +60,18 @@ impl CodexSwitchApp {
                 }
                 ui.label(format!("{} [{}]", upstream.name, upstream.kind.as_str()));
                 ui.label(&upstream.base_url);
+                if ui.button("编辑").clicked() {
+                    edit = Some(upstream.clone());
+                }
                 if ui.button("删除").clicked() {
                     deleted.push(upstream.id.clone());
                 }
             });
         }
+        if let Some(upstream) = edit {
+            self.open_upstream_editor(upstream);
+        }
+        let should_refresh = !deleted.is_empty() || !changed.is_empty();
         for (id, enabled) in changed {
             if let Err(err) = self
                 .runtime
@@ -77,8 +85,9 @@ impl CodexSwitchApp {
                 self.status = format!("删除失败: {err}");
             }
         }
-        if !self.upstreams.is_empty() {
+        if should_refresh {
             self.refresh_all();
         }
+        self.show_upstream_editor(ui.ctx());
     }
 }

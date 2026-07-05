@@ -11,11 +11,13 @@ use data::load_view_data;
 use eframe::egui;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
+use upstream_editor::UpstreamEditor;
 
 mod dashboard;
 mod data;
 mod logs;
 mod quota;
+mod upstream_editor;
 mod upstreams;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +49,7 @@ pub struct CodexSwitchApp {
     oauth_device: Option<oauth::DeviceFlow>,
     quota_snapshots: Vec<(String, Option<QuotaSnapshot>)>,
     balance_snapshots: Vec<(String, Option<BalanceSnapshot>)>,
+    upstream_editor: Option<UpstreamEditor>,
 }
 
 impl CodexSwitchApp {
@@ -82,6 +85,7 @@ impl CodexSwitchApp {
             oauth_device: None,
             quota_snapshots: Vec::new(),
             balance_snapshots: Vec::new(),
+            upstream_editor: None,
         };
         app.refresh_all();
         app
