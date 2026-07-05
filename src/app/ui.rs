@@ -138,6 +138,23 @@ impl CodexSwitchApp {
         }
     }
 
+    fn refresh_local_key(&mut self) {
+        let key = format!("cs-{}", uuid::Uuid::new_v4());
+        match self
+            .runtime
+            .block_on(self.state.store.set_setting("local_access_key", &key))
+        {
+            Ok(()) => {
+                self.local_key = key;
+                self.local_key_copied_at = None;
+                self.status = "本地访问 key 已刷新, Codex 需要使用新 key".to_string();
+            }
+            Err(err) => {
+                self.status = format!("刷新 key 失败: {err}");
+            }
+        }
+    }
+
     fn add_relay(&mut self) {
         let name = self.relay_name.trim().to_string();
         let base_url = self.relay_base_url.trim().to_string();

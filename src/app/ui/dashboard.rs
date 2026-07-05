@@ -25,6 +25,9 @@ impl CodexSwitchApp {
                 ui.ctx().copy_text(self.local_key.clone());
                 self.local_key_copied_at = Some(Instant::now());
             }
+            if ui.button("刷新 key").on_hover_text("生成新的本地访问 key").clicked() {
+                self.refresh_local_key();
+            }
             if let Some(copied_at) = self.local_key_copied_at {
                 let elapsed = copied_at.elapsed();
                 if elapsed < COPY_FEEDBACK_DURATION {
