@@ -2,15 +2,17 @@ use crate::app::state::AppState;
 use crate::balance;
 use crate::core::models::{
     BalanceProvider, BalanceSnapshot, DashboardStats, ProviderStats, QuotaSnapshot, RequestLog,
-    Upstream, WireApi,
+    ScheduleGroup, ScheduleGroupMember, Upstream, WireApi,
 };
 use crate::oauth;
 use crate::proxy::{self, ServerHandle};
 use crate::quota as quota_api;
 use data::load_view_data;
 use eframe::egui;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use scheduler::ScheduleGroupEditor;
 use tokio::runtime::Runtime;
 use upstream_editor::UpstreamEditor;
 
@@ -18,6 +20,7 @@ mod dashboard;
 mod data;
 mod logs;
 mod quota;
+mod scheduler;
 mod upstream_editor;
 mod upstreams;
 
@@ -25,6 +28,7 @@ mod upstreams;
 enum Tab {
     Dashboard,
     Upstreams,
+    Scheduler,
     Quota,
     Logs,
 }
@@ -41,6 +45,11 @@ pub struct CodexSwitchApp {
     last_auto_refresh_at: Instant,
     status: String,
     upstreams: Vec<Upstream>,
+    schedule_groups: Vec<ScheduleGroup>,
+    schedule_members: BTreeMap<String, Vec<ScheduleGroupMember>>,
+    current_schedule_group_id: Option<String>,
+    schedule_group_editor: Option<ScheduleGroupEditor>,
+    new_schedule_group: ScheduleGroupEditor,
     stats: DashboardStats,
     provider_stats: Vec<ProviderStats>,
     logs: Vec<RequestLog>,
@@ -80,6 +89,11 @@ impl CodexSwitchApp {
             last_auto_refresh_at: Instant::now(),
             status: "就绪".to_string(),
             upstreams: Vec::new(),
+            schedule_groups: Vec::new(),
+            schedule_members: BTreeMap::new(),
+            current_schedule_group_id: None,
+            schedule_group_editor: None,
+            new_schedule_group: ScheduleGroupEditor::new_empty(),
             stats: DashboardStats::default(),
             provider_stats: Vec::new(),
             logs: Vec::new(),
@@ -115,6 +129,10 @@ impl CodexSwitchApp {
         match self.runtime.block_on(load_view_data(&self.state)) {
             Ok(data) => {
                 self.upstreams = data.upstreams;
+                self.schedule_groups = data.schedule_groups;
+                self.schedule_members = data.schedule_members;
+                self.current_schedule_group_id = data.current_schedule_group_id;
+                self.sync_schedule_group_editor();
                 self.stats = data.stats;
                 self.provider_stats = data.provider_stats;
                 self.logs = data.logs;
@@ -123,6 +141,18 @@ impl CodexSwitchApp {
             }
             Err(err) => {
                 self.status = format!("刷新失败: {err}");
+            }
+        }
+    }
+
+    fn sync_schedule_group_editor(&mut self) {
+        if let Some(editor) = &self.schedule_group_editor {
+            let exists = self
+                .schedule_groups
+                .iter()
+                .any(|group| group.id == editor.group.id);
+            if !exists {
+                self.schedule_group_editor = None;
             }
         }
     }
@@ -277,6 +307,7 @@ impl eframe::App for CodexSwitchApp {
             ui.horizontal(|ui| {
                 tab_button(ui, &mut self.tab, Tab::Dashboard, "仪表盘");
                 tab_button(ui, &mut self.tab, Tab::Upstreams, "上游");
+                tab_button(ui, &mut self.tab, Tab::Scheduler, "调度组");
                 tab_button(ui, &mut self.tab, Tab::Quota, "额度");
                 tab_button(ui, &mut self.tab, Tab::Logs, "日志");
                 if ui.button("刷新").clicked() {
@@ -289,6 +320,7 @@ impl eframe::App for CodexSwitchApp {
             match self.tab {
                 Tab::Dashboard => self.dashboard_ui(ui),
                 Tab::Upstreams => self.upstreams_ui(ui),
+                Tab::Scheduler => self.scheduler_ui(ui),
                 Tab::Quota => self.quota_ui(ui),
                 Tab::Logs => self.logs_ui(ui),
             }

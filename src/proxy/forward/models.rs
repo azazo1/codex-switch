@@ -8,7 +8,8 @@ use std::collections::BTreeSet;
 use super::headers::apply_headers;
 
 pub(super) async fn query_models(state: &AppState, headers: &HeaderMap) -> anyhow::Result<Value> {
-    let upstreams = state.store.enabled_upstreams().await?;
+    let group = state.store.current_schedule_group().await?;
+    let upstreams = state.store.schedule_group_upstreams(&group).await?;
     let mut models = Vec::new();
     let mut seen = BTreeSet::new();
     let mut errors = Vec::new();

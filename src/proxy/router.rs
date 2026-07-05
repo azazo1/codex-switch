@@ -111,6 +111,7 @@ mod tests {
 
     #[derive(Clone, Copy)]
     enum MockMode {
+        BalanceError,
         ModelsJson,
         ResponsesJson,
         ChatJson,
@@ -240,26 +241,60 @@ mod tests {
         assert!(logs[0].first_token_ms.is_some());
     }
 
+    #[tokio::test]
+    async fn failover_group_retries_balance_failure() {
+        let (bad_base, bad_hits) = spawn_mock(MockMode::BalanceError).await;
+        let (good_base, good_hits) = spawn_mock(MockMode::ResponsesJson).await;
+        let state = test_state_with_relays(vec![
+            ("bad", bad_base.as_str(), WireApi::Responses, 10),
+            ("good", good_base.as_str(), WireApi::Responses, 0),
+        ])
+        .await;
+        let proxy_base = spawn_proxy(state.clone()).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({"model":"gpt-test","input":"hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        assert_eq!(bad_hits.lock().await.len(), 1);
+        assert_eq!(good_hits.lock().await.len(), 1);
+        let logs = state.store.recent_logs(1).await.unwrap();
+        assert_eq!(logs[0].upstream_name.as_deref(), Some("good"));
+    }
+
     async fn test_state(base_url: &str, wire_api: WireApi) -> AppState {
+        test_state_with_relays(vec![("mock", base_url, wire_api, 0)]).await
+    }
+
+    async fn test_state_with_relays(relays: Vec<(&str, &str, WireApi, i64)>) -> AppState {
         let path = std::env::temp_dir()
             .join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
         let store = Store::open(path).await.unwrap();
         store.set_setting("local_access_key", "local-test").await.unwrap();
         let credentials = CredentialStore::new_for_tests(store.clone());
-        let upstream = Upstream::new_relay(
-            "mock".to_string(),
-            base_url.to_string(),
-            wire_api,
-            true,
-            BalanceProvider::Unsupported,
-        );
-        store.save_upstream(&upstream).await.unwrap();
-        credentials.put(&upstream.id, "api_key", "sk-test").await.unwrap();
+        for (name, base_url, wire_api, priority) in relays {
+            let mut upstream = Upstream::new_relay(
+                name.to_string(),
+                base_url.to_string(),
+                wire_api,
+                true,
+                BalanceProvider::Unsupported,
+            );
+            upstream.priority = priority;
+            store.save_upstream(&upstream).await.unwrap();
+            credentials.put(&upstream.id, "api_key", "sk-test").await.unwrap();
+        }
         AppState {
             store,
             credentials,
             http: reqwest::Client::new(),
             events: Default::default(),
+            scheduler: Default::default(),
         }
     }
 
@@ -306,6 +341,11 @@ mod tests {
         });
 
         match state.mode {
+            MockMode::BalanceError => (
+                StatusCode::PAYMENT_REQUIRED,
+                axum::Json(json!({"error":{"message":"insufficient balance"}})),
+            )
+                .into_response(),
             MockMode::ModelsJson => (
                 StatusCode::OK,
                 axum::Json(json!({

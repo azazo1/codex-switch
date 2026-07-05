@@ -4,6 +4,7 @@ mod core;
 mod oauth;
 mod proxy;
 mod quota;
+mod scheduler;
 mod storage;
 mod usage;
 

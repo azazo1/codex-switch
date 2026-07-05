@@ -57,9 +57,43 @@ impl Store {
             self.set_setting("local_access_key", &format!("cs-{}", uuid::Uuid::new_v4()))
                 .await?;
         }
+        self.ensure_default_schedule_group().await?;
         Ok(())
     }
 
+    async fn ensure_default_schedule_group(&self) -> anyhow::Result<()> {
+        use sqlx::Row;
+
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT OR IGNORE INTO schedule_groups (
+                id, name, mode, use_all_upstreams, fixed_upstream_id,
+                failure_threshold, failover_on_balance, failover_on_network, failover_on_5xx,
+                affinity_ttl_seconds, created_at, updated_at
+             ) VALUES (
+                'default', 'Default', 'failover', 1, NULL, 1, 1, 1, 1, 1800, ?1, ?2
+             )",
+        )
+        .bind(&now)
+        .bind(&now)
+        .execute(self.pool())
+        .await?;
+
+        let current = self.get_setting("current_schedule_group_id").await?;
+        let current_is_valid = if let Some(id) = current {
+            let row = sqlx::query("SELECT COUNT(*) AS count FROM schedule_groups WHERE id = ?1")
+                .bind(id)
+                .fetch_one(self.pool())
+                .await?;
+            row.get::<i64, _>("count") > 0
+        } else {
+            false
+        };
+        if !current_is_valid {
+            self.set_setting("current_schedule_group_id", "default").await?;
+        }
+        Ok(())
+    }
 }
 
 struct Migration {
@@ -161,6 +195,40 @@ fn migrations() -> &'static [Migration] {
             )",
             ],
         },
+        Migration {
+            version: 2,
+            name: "scheduler_groups",
+            statements: &[
+                "CREATE TABLE IF NOT EXISTS schedule_groups (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                mode TEXT NOT NULL DEFAULT 'failover',
+                use_all_upstreams INTEGER NOT NULL DEFAULT 1,
+                fixed_upstream_id TEXT,
+                failure_threshold INTEGER NOT NULL DEFAULT 1,
+                failover_on_balance INTEGER NOT NULL DEFAULT 1,
+                failover_on_network INTEGER NOT NULL DEFAULT 1,
+                failover_on_5xx INTEGER NOT NULL DEFAULT 1,
+                affinity_ttl_seconds INTEGER NOT NULL DEFAULT 1800,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+                "CREATE TABLE IF NOT EXISTS schedule_group_members (
+                group_id TEXT NOT NULL,
+                upstream_id TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                priority INTEGER NOT NULL DEFAULT 0,
+                weight INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (group_id, upstream_id),
+                FOREIGN KEY (group_id) REFERENCES schedule_groups(id) ON DELETE CASCADE,
+                FOREIGN KEY (upstream_id) REFERENCES upstreams(id) ON DELETE CASCADE
+            )",
+                "CREATE INDEX IF NOT EXISTS idx_schedule_group_members_group ON schedule_group_members(group_id)",
+                "CREATE INDEX IF NOT EXISTS idx_schedule_group_members_upstream ON schedule_group_members(upstream_id)",
+            ],
+        },
     ]
 }
 
@@ -179,12 +247,22 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 1);
+        assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
+        assert_eq!(rows[1].get::<i64, _>("version"), 2);
+        assert_eq!(rows[1].get::<String, _>("name"), "scheduler_groups");
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
             Some("127.0.0.1:15721")
+        );
+        assert_eq!(
+            store
+                .get_setting("current_schedule_group_id")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("default")
         );
 
         drop(store);
@@ -194,6 +272,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 1);
+        assert_eq!(count, 2);
     }
 }

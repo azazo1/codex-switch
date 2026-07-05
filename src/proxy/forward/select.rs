@@ -1,19 +1,28 @@
 use crate::app::AppState;
-use crate::core::models::{Upstream, UpstreamKind};
+use crate::core::models::UpstreamKind;
+use crate::scheduler::SchedulerPlan;
 
-pub(super) async fn select_upstream(
+pub(super) async fn selection_plan(
     state: &AppState,
+    body: &[u8],
+    endpoint: &str,
+    model: Option<&str>,
     responses_api: bool,
     compact: bool,
-) -> anyhow::Result<Upstream> {
-    let upstreams = state.store.enabled_upstreams().await?;
-    upstreams
+) -> anyhow::Result<SchedulerPlan> {
+    let group = state.store.current_schedule_group().await?;
+    let upstreams = state.store.schedule_group_upstreams(&group).await?;
+    let upstreams = upstreams
         .into_iter()
-        .find(|upstream| {
+        .filter(|upstream| {
             (!compact || upstream.supports_compact)
                 && (!responses_api
                     || upstream.kind == UpstreamKind::CodexOauth
                     || !upstream.base_url.is_empty())
         })
-        .ok_or_else(|| anyhow::anyhow!("no available upstream"))
+        .collect::<Vec<_>>();
+    state
+        .scheduler
+        .plan(group, upstreams, body, endpoint, model)
+        .await
 }

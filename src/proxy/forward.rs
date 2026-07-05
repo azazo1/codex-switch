@@ -2,6 +2,7 @@ use crate::app::AppState;
 use crate::core::models::{RequestLog, TokenUsage, Upstream, UpstreamKind, WireApi};
 use crate::proxy::transform;
 use crate::quota;
+use crate::scheduler::{self, SchedulerFailureKind};
 use crate::usage;
 use auth::validate_local_access;
 use axum::{
@@ -12,7 +13,7 @@ use axum::{
 use futures_util::StreamExt;
 use headers::apply_headers;
 use response::{build_response, convert_chat_sse_to_responses, to_axum_headers};
-use select::select_upstream;
+use select::selection_plan;
 use serde_json::{Value, json};
 use std::time::Instant;
 
@@ -130,6 +131,7 @@ struct ForwardResult {
     status: StatusCode,
     usage: TokenUsage,
     first_token_ms: Option<i64>,
+    failure_kind: Option<SchedulerFailureKind>,
     response: Response,
 }
 
@@ -145,47 +147,128 @@ struct ForwardRequest<'a> {
 }
 
 async fn forward_inner(request: ForwardRequest<'_>) -> anyhow::Result<ForwardResult> {
-    let ForwardRequest {
-        state,
-        method,
-        uri,
-        headers,
-        body,
-        endpoint,
-        responses_api,
-        compact,
-    } = request;
-    let upstream = select_upstream(state, responses_api, compact).await?;
-    let mut target_body = body.to_vec();
+    let plan = selection_plan(
+        request.state,
+        &request.body,
+        &request.endpoint,
+        usage::extract_model(&request.body).as_deref(),
+        request.responses_api,
+        request.compact,
+    )
+    .await?;
+    let candidate_count = plan.candidates.len();
+    let mut last_error = None;
+    for (index, upstream) in plan.candidates.iter().cloned().enumerate() {
+        match forward_with_upstream(&request, upstream.clone()).await {
+            Ok(result) => {
+                if let Some(failure) = result.failure_kind {
+                    let count = request
+                        .state
+                        .scheduler
+                        .record_failure(&plan.group.id, &upstream.id)
+                        .await;
+                    let should_retry = crate::scheduler::SchedulerRuntime::should_retry(
+                        &plan.group,
+                        failure,
+                        count,
+                    ) && index + 1 < candidate_count;
+                    if should_retry {
+                        tracing::warn!(
+                            group_id = %plan.group.id,
+                            upstream_id = %upstream.id,
+                            upstream_name = %upstream.name,
+                            failure = ?failure,
+                            count,
+                            "retrying request with next scheduled upstream"
+                        );
+                        continue;
+                    }
+                } else {
+                    request
+                        .state
+                        .scheduler
+                        .record_success(
+                            &plan.group.id,
+                            &upstream.id,
+                            plan.affinity_key.as_deref(),
+                            plan.group.affinity_ttl_seconds,
+                        )
+                        .await;
+                }
+                return Ok(result);
+            }
+            Err(err) => {
+                let count = request
+                    .state
+                    .scheduler
+                    .record_failure(&plan.group.id, &upstream.id)
+                    .await;
+                let should_retry = crate::scheduler::SchedulerRuntime::should_retry(
+                    &plan.group,
+                    SchedulerFailureKind::Network,
+                    count,
+                ) && index + 1 < candidate_count;
+                if should_retry {
+                    tracing::warn!(
+                        group_id = %plan.group.id,
+                        upstream_id = %upstream.id,
+                        upstream_name = %upstream.name,
+                        error = %err,
+                        count,
+                        "retrying network failure with next scheduled upstream"
+                    );
+                    last_error = Some(err);
+                    continue;
+                }
+                return Err(err);
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("no scheduled upstream handled request")))
+}
+
+async fn forward_with_upstream(
+    request: &ForwardRequest<'_>,
+    upstream: Upstream,
+) -> anyhow::Result<ForwardResult> {
+    let mut target_body = request.body.to_vec();
     let target_url;
     if upstream.kind == UpstreamKind::CodexOauth {
-        target_body = transform::normalize_oauth_body(&target_body, compact)?;
-        target_url = format!("https://chatgpt.com/backend-api/codex{}", endpoint);
-    } else if responses_api && upstream.wire_api == WireApi::ChatCompletions {
+        target_body = transform::normalize_oauth_body(&target_body, request.compact)?;
+        target_url = format!(
+            "https://chatgpt.com/backend-api/codex{}",
+            request.endpoint
+        );
+    } else if request.responses_api && upstream.wire_api == WireApi::ChatCompletions {
         target_body = usage::responses_to_chat_json(&target_body)?;
         target_url = transform::build_endpoint(&upstream.base_url, "/chat/completions");
-    } else if responses_api {
-        target_url = transform::build_endpoint(&upstream.base_url, &endpoint);
+    } else if request.responses_api {
+        target_url = transform::build_endpoint(&upstream.base_url, &request.endpoint);
     } else {
         target_url = transform::build_endpoint(&upstream.base_url, "/chat/completions");
     }
 
-    let mut request = state
+    let mut upstream_request = request
+        .state
         .http
-        .request(reqwest::Method::from_bytes(method.as_str().as_bytes())?, &target_url)
+        .request(
+            reqwest::Method::from_bytes(request.method.as_str().as_bytes())?,
+            &target_url,
+        )
         .body(target_body);
-    request = apply_headers(state, &upstream, request, &headers).await?;
-    if let Some(query) = uri.query() {
+    upstream_request =
+        apply_headers(request.state, &upstream, upstream_request, &request.headers).await?;
+    if let Some(query) = request.uri.query() {
         tracing::debug!(query, "client query observed");
     }
-    let response = request.send().await?;
+    let response = upstream_request.send().await?;
     let status = StatusCode::from_u16(response.status().as_u16())?;
     let response_headers = response.headers().clone();
     if upstream.kind == UpstreamKind::CodexOauth
         && let Some(snapshot) =
             quota::snapshot_from_headers(&upstream.id, &to_axum_headers(&response_headers))
     {
-        let _ = state.store.save_quota_snapshot(&snapshot).await;
+        let _ = request.state.store.save_quota_snapshot(&snapshot).await;
     }
 
     let content_type = response
@@ -210,7 +293,9 @@ async fn forward_inner(request: ForwardRequest<'_>) -> anyhow::Result<ForwardRes
         let text = String::from_utf8_lossy(&all);
         let mut usage = usage::extract_usage_from_sse(&text);
         usage.finish();
-        let response_body = if responses_api && upstream.wire_api == WireApi::ChatCompletions {
+        let failure_kind = scheduler::classify_response(status, &all);
+        let response_body = if request.responses_api && upstream.wire_api == WireApi::ChatCompletions
+        {
             convert_chat_sse_to_responses(&text)
         } else {
             all
@@ -220,6 +305,7 @@ async fn forward_inner(request: ForwardRequest<'_>) -> anyhow::Result<ForwardRes
             status,
             usage,
             first_token_ms,
+            failure_kind,
             response: build_response(status, response_headers, response_body),
         })
     } else {
@@ -227,7 +313,9 @@ async fn forward_inner(request: ForwardRequest<'_>) -> anyhow::Result<ForwardRes
         let value = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
         let mut usage = usage::extract_usage_from_json(&value);
         usage.finish();
-        let response_body = if responses_api && upstream.wire_api == WireApi::ChatCompletions {
+        let failure_kind = scheduler::classify_response(status, &bytes);
+        let response_body = if request.responses_api && upstream.wire_api == WireApi::ChatCompletions
+        {
             serde_json::to_vec(&usage::chat_to_responses_json(&value))?
         } else {
             bytes.to_vec()
@@ -237,6 +325,7 @@ async fn forward_inner(request: ForwardRequest<'_>) -> anyhow::Result<ForwardRes
             status,
             usage,
             first_token_ms: None,
+            failure_kind,
             response: build_response(status, response_headers, response_body),
         })
     }

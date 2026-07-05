@@ -85,6 +85,36 @@ impl BalanceProvider {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScheduleMode {
+    Random,
+    RoundRobin,
+    Failover,
+    Fixed,
+}
+
+impl ScheduleMode {
+    pub const ALL: [Self; 4] = [Self::Random, Self::RoundRobin, Self::Failover, Self::Fixed];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Random => "random",
+            Self::RoundRobin => "round_robin",
+            Self::Failover => "failover",
+            Self::Fixed => "fixed",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "round_robin" | "polling" => Self::RoundRobin,
+            "fixed" => Self::Fixed,
+            "failover" => Self::Failover,
+            _ => Self::Random,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Upstream {
     pub id: String,
@@ -157,6 +187,68 @@ impl Upstream {
             email,
             plan_type,
             token_expires_at,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduleGroup {
+    pub id: String,
+    pub name: String,
+    pub mode: ScheduleMode,
+    pub use_all_upstreams: bool,
+    pub fixed_upstream_id: Option<String>,
+    pub failure_threshold: i64,
+    pub failover_on_balance: bool,
+    pub failover_on_network: bool,
+    pub failover_on_5xx: bool,
+    pub affinity_ttl_seconds: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl ScheduleGroup {
+    pub fn new(name: String) -> Self {
+        let now = Utc::now();
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            name,
+            mode: ScheduleMode::Failover,
+            use_all_upstreams: true,
+            fixed_upstream_id: None,
+            failure_threshold: 1,
+            failover_on_balance: true,
+            failover_on_network: true,
+            failover_on_5xx: true,
+            affinity_ttl_seconds: 1800,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduleGroupMember {
+    pub group_id: String,
+    pub upstream_id: String,
+    pub enabled: bool,
+    pub priority: i64,
+    pub weight: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl ScheduleGroupMember {
+    pub fn new(group_id: String, upstream_id: String) -> Self {
+        let now = Utc::now();
+        Self {
+            group_id,
+            upstream_id,
+            enabled: true,
+            priority: 0,
+            weight: 1,
             created_at: now,
             updated_at: now,
         }

@@ -1,4 +1,5 @@
 use crate::storage::{Store, credentials::CredentialStore};
+use crate::scheduler::SchedulerRuntime;
 use anyhow::Context;
 use directories::ProjectDirs;
 use std::path::PathBuf;
@@ -13,6 +14,7 @@ pub struct AppState {
     pub credentials: CredentialStore,
     pub http: reqwest::Client,
     pub events: AppEvents,
+    pub scheduler: SchedulerRuntime,
 }
 
 #[derive(Clone, Default)]
@@ -46,6 +48,7 @@ impl AppState {
             credentials,
             http,
             events: AppEvents::default(),
+            scheduler: SchedulerRuntime::default(),
         })
     }
 }

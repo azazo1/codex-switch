@@ -143,7 +143,7 @@ impl Store {
     }
 }
 
-fn row_to_upstream(row: sqlx::sqlite::SqliteRow) -> anyhow::Result<Upstream> {
+pub(super) fn row_to_upstream(row: sqlx::sqlite::SqliteRow) -> anyhow::Result<Upstream> {
     let created_at: String = row.get("created_at");
     let updated_at: String = row.get("updated_at");
     Ok(Upstream {
