@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use scheduler::ScheduleGroupEditor;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::runtime::Runtime;
 use upstream_editor::UpstreamEditor;
 
@@ -31,13 +32,23 @@ enum Tab {
     Dashboard,
     Upstreams,
     Scheduler,
-    Quota,
     Logs,
+}
+
+enum UiTaskEvent {
+    OAuthStarted(anyhow::Result<oauth::DeviceFlow>),
+    OAuthPolled(anyhow::Result<Option<Upstream>>),
+    QuotaQueried(anyhow::Result<()>),
+    BalanceQueried(anyhow::Result<()>),
+    PriceCacheFetched(anyhow::Result<usize>),
+    PriceCacheOnceFetched(anyhow::Result<pricing::PriceFetchSummary>),
 }
 
 pub struct CodexSwitchApp {
     runtime: Arc<Runtime>,
     state: AppState,
+    task_tx: UnboundedSender<UiTaskEvent>,
+    task_rx: UnboundedReceiver<UiTaskEvent>,
     tab: Tab,
     server: Option<ServerHandle>,
     bind_addr: String,
@@ -64,6 +75,10 @@ pub struct CodexSwitchApp {
     price_cache_count: i64,
     price_cache_age_seconds: Option<i64>,
     token_display_mode: tokens::TokenDisplayMode,
+    oauth_start_pending: bool,
+    oauth_poll_pending: bool,
+    quota_query_pending: bool,
+    balance_query_pending: bool,
     relay_name: String,
     relay_base_url: String,
     relay_api_key: String,
@@ -77,6 +92,7 @@ pub struct CodexSwitchApp {
 
 impl CodexSwitchApp {
     pub fn new(runtime: Arc<Runtime>, state: AppState) -> Self {
+        let (task_tx, task_rx) = tokio::sync::mpsc::unbounded_channel();
         let bind_addr = runtime
             .block_on(state.store.get_setting("bind_addr"))
             .ok()
@@ -91,6 +107,8 @@ impl CodexSwitchApp {
         let mut app = Self {
             runtime,
             state,
+            task_tx,
+            task_rx,
             tab: Tab::Dashboard,
             server: None,
             bind_addr,
@@ -117,6 +135,10 @@ impl CodexSwitchApp {
             price_cache_count: 0,
             price_cache_age_seconds: None,
             token_display_mode: tokens::TokenDisplayMode::Human,
+            oauth_start_pending: false,
+            oauth_poll_pending: false,
+            quota_query_pending: false,
+            balance_query_pending: false,
             relay_name: String::new(),
             relay_base_url: String::new(),
             relay_api_key: String::new(),
@@ -143,6 +165,86 @@ impl CodexSwitchApp {
         if version != self.last_seen_request_log_version {
             self.last_seen_request_log_version = version;
             self.refresh_all();
+        }
+    }
+
+    fn drain_task_events(&mut self) {
+        while let Ok(event) = self.task_rx.try_recv() {
+            match event {
+                UiTaskEvent::OAuthStarted(result) => {
+                    self.oauth_start_pending = false;
+                    match result {
+                        Ok(device) => {
+                            self.status = format!(
+                                "打开 {} 并输入 {}",
+                                device.verification_uri, device.user_code
+                            );
+                            self.oauth_device = Some(device);
+                        }
+                        Err(err) => self.status = format!("OAuth 启动失败: {err}"),
+                    }
+                }
+                UiTaskEvent::OAuthPolled(result) => {
+                    self.oauth_poll_pending = false;
+                    match result {
+                        Ok(Some(upstream)) => {
+                            self.status = format!("OAuth 账号已添加: {}", upstream.name);
+                            self.oauth_device = None;
+                            self.refresh_all();
+                        }
+                        Ok(None) => {
+                            self.status = "等待用户授权中".to_string();
+                        }
+                        Err(err) => self.status = format!("OAuth 轮询失败: {err}"),
+                    }
+                }
+                UiTaskEvent::QuotaQueried(result) => {
+                    self.quota_query_pending = false;
+                    match result {
+                        Ok(()) => {
+                            self.status = "额度已刷新".to_string();
+                            self.refresh_all();
+                        }
+                        Err(err) => self.status = format!("额度查询失败: {err}"),
+                    }
+                }
+                UiTaskEvent::BalanceQueried(result) => {
+                    self.balance_query_pending = false;
+                    match result {
+                        Ok(()) => {
+                            self.status = "余额已刷新".to_string();
+                            self.refresh_all();
+                        }
+                        Err(err) => self.status = format!("余额查询失败: {err}"),
+                    }
+                }
+                UiTaskEvent::PriceCacheFetched(result) => {
+                    self.price_fetch_pending = false;
+                    match result {
+                        Ok(count) => {
+                            self.status = format!("模型价格已获取: {count} 条");
+                            self.refresh_all();
+                        }
+                        Err(err) => self.status = format!("模型价格获取失败: {err}"),
+                    }
+                }
+                UiTaskEvent::PriceCacheOnceFetched(result) => {
+                    self.price_fetch_pending = false;
+                    match result {
+                        Ok(summary) => {
+                            if summary.fetched {
+                                self.status = format!("模型价格已获取: {} 条", summary.count);
+                                self.refresh_all();
+                            } else if summary.count > 0 {
+                                self.status = format!("模型价格缓存可用: {} 条", summary.count);
+                            }
+                        }
+                        Err(err) => {
+                            self.status = format!("模型价格获取失败, 将使用已有缓存: {err}");
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -269,75 +371,83 @@ impl CodexSwitchApp {
     }
 
     fn start_oauth(&mut self) {
-        match self.runtime.block_on(oauth::start_device_flow(&self.state.http)) {
-            Ok(device) => {
-                self.status = format!("打开 {} 并输入 {}", device.verification_uri, device.user_code);
-                self.oauth_device = Some(device);
-            }
-            Err(err) => self.status = format!("OAuth 启动失败: {err}"),
+        if self.oauth_start_pending {
+            return;
         }
+        self.oauth_start_pending = true;
+        self.status = "正在启动 OAuth 登录".to_string();
+        let http = self.state.http.clone();
+        let tx = self.task_tx.clone();
+        self.runtime.spawn(async move {
+            let result = oauth::start_device_flow(&http).await;
+            let _ = tx.send(UiTaskEvent::OAuthStarted(result));
+        });
     }
 
     fn poll_oauth(&mut self) {
+        if self.oauth_poll_pending {
+            return;
+        }
         let Some(device) = self.oauth_device.clone() else {
             self.status = "没有进行中的 OAuth 流程".to_string();
             return;
         };
-        match self
-            .runtime
-            .block_on(oauth::poll_device_flow(&self.state, &device))
-        {
-            Ok(Some(upstream)) => {
-                self.status = format!("OAuth 账号已添加: {}", upstream.name);
-                self.oauth_device = None;
-                self.refresh_all();
-            }
-            Ok(None) => {
-                self.status = "等待用户授权中".to_string();
-            }
-            Err(err) => self.status = format!("OAuth 轮询失败: {err}"),
-        }
+        self.oauth_poll_pending = true;
+        self.status = "正在轮询 OAuth 授权".to_string();
+        let state = self.state.clone();
+        let tx = self.task_tx.clone();
+        self.runtime.spawn(async move {
+            let result = oauth::poll_device_flow(&state, &device).await;
+            let _ = tx.send(UiTaskEvent::OAuthPolled(result));
+        });
     }
 
     fn query_selected_quota(&mut self, upstream_id: &str) {
-        match self
-            .runtime
-            .block_on(quota_api::query_and_store(&self.state, upstream_id))
-        {
-            Ok(_) => {
-                self.status = "额度已刷新".to_string();
-                self.refresh_all();
-            }
-            Err(err) => self.status = format!("额度查询失败: {err}"),
+        if self.quota_query_pending {
+            return;
         }
+        self.quota_query_pending = true;
+        self.status = "正在查询额度".to_string();
+        let state = self.state.clone();
+        let upstream_id = upstream_id.to_string();
+        let tx = self.task_tx.clone();
+        self.runtime.spawn(async move {
+            let result = quota_api::query_and_store(&state, &upstream_id)
+                .await
+                .map(|_| ());
+            let _ = tx.send(UiTaskEvent::QuotaQueried(result));
+        });
     }
 
     fn query_selected_balance(&mut self, upstream_id: &str) {
-        match self
-            .runtime
-            .block_on(balance::query_and_store(&self.state, upstream_id))
-        {
-            Ok(_) => {
-                self.status = "余额已刷新".to_string();
-                self.refresh_all();
-            }
-            Err(err) => self.status = format!("余额查询失败: {err}"),
+        if self.balance_query_pending {
+            return;
         }
+        self.balance_query_pending = true;
+        self.status = "正在查询余额".to_string();
+        let state = self.state.clone();
+        let upstream_id = upstream_id.to_string();
+        let tx = self.task_tx.clone();
+        self.runtime.spawn(async move {
+            let result = balance::query_and_store(&state, &upstream_id)
+                .await
+                .map(|_| ());
+            let _ = tx.send(UiTaskEvent::BalanceQueried(result));
+        });
     }
 
     fn fetch_price_cache(&mut self) {
-        self.price_fetch_pending = true;
-        match self.runtime.block_on(pricing::fetch_price_cache(&self.state)) {
-            Ok(count) => {
-                self.price_fetch_pending = false;
-                self.status = format!("模型价格已获取: {count} 条");
-                self.refresh_all();
-            }
-            Err(err) => {
-                self.price_fetch_pending = false;
-                self.status = format!("模型价格获取失败: {err}");
-            }
+        if self.price_fetch_pending {
+            return;
         }
+        self.price_fetch_pending = true;
+        self.status = "正在获取模型价格".to_string();
+        let state = self.state.clone();
+        let tx = self.task_tx.clone();
+        self.runtime.spawn(async move {
+            let result = pricing::fetch_price_cache(&state).await;
+            let _ = tx.send(UiTaskEvent::PriceCacheFetched(result));
+        });
     }
 
     fn fetch_price_cache_once(&mut self) {
@@ -346,37 +456,26 @@ impl CodexSwitchApp {
         }
         self.price_fetch_started = true;
         self.price_fetch_pending = true;
-        match self
-            .runtime
-            .block_on(pricing::fetch_price_cache_once(&self.state))
-        {
-            Ok(summary) => {
-                self.price_fetch_pending = false;
-                if summary.fetched {
-                    self.status = format!("模型价格已获取: {} 条", summary.count);
-                    self.refresh_all();
-                } else if summary.count > 0 {
-                    self.status = format!("模型价格缓存可用: {} 条", summary.count);
-                }
-            }
-            Err(err) => {
-                self.price_fetch_pending = false;
-                self.status = format!("模型价格获取失败, 将使用已有缓存: {err}");
-            }
-        }
+        self.status = "正在检查模型价格缓存".to_string();
+        let state = self.state.clone();
+        let tx = self.task_tx.clone();
+        self.runtime.spawn(async move {
+            let result = pricing::fetch_price_cache_once(&state).await;
+            let _ = tx.send(UiTaskEvent::PriceCacheOnceFetched(result));
+        });
     }
 }
 
 impl eframe::App for CodexSwitchApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.maybe_auto_refresh(ctx);
+        self.drain_task_events();
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 tab_button(ui, &mut self.tab, Tab::Dashboard, "仪表盘");
                 tab_button(ui, &mut self.tab, Tab::Upstreams, "上游");
                 tab_button(ui, &mut self.tab, Tab::Scheduler, "调度组");
-                tab_button(ui, &mut self.tab, Tab::Quota, "额度");
                 tab_button(ui, &mut self.tab, Tab::Logs, "日志");
                 if ui.button("刷新").clicked() {
                     self.refresh_all();
@@ -389,7 +488,6 @@ impl eframe::App for CodexSwitchApp {
                 Tab::Dashboard => self.dashboard_ui(ui),
                 Tab::Upstreams => self.upstreams_ui(ui),
                 Tab::Scheduler => self.scheduler_ui(ui),
-                Tab::Quota => self.quota_ui(ui),
                 Tab::Logs => self.logs_ui(ui),
             }
             ui.separator();

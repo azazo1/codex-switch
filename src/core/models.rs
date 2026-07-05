@@ -54,6 +54,8 @@ pub enum BalanceProvider {
     SiliconFlowGlobal,
     OpenRouter,
     Novita,
+    Sub2Api,
+    NewApi,
     Unsupported,
 }
 
@@ -67,6 +69,8 @@ impl BalanceProvider {
             Self::SiliconFlowGlobal => "siliconflow_global",
             Self::OpenRouter => "openrouter",
             Self::Novita => "novita",
+            Self::Sub2Api => "sub2api",
+            Self::NewApi => "newapi",
             Self::Unsupported => "unsupported",
         }
     }
@@ -79,6 +83,8 @@ impl BalanceProvider {
             "siliconflow_global" => Self::SiliconFlowGlobal,
             "openrouter" => Self::OpenRouter,
             "novita" => Self::Novita,
+            "sub2api" => Self::Sub2Api,
+            "newapi" | "new-api" | "oneapi" | "one-api" => Self::NewApi,
             "unsupported" => Self::Unsupported,
             _ => Self::Auto,
         }

@@ -1,7 +1,11 @@
 use crate::app::AppState;
 use crate::core::models::{BalanceProvider, BalanceSnapshot, UpstreamKind};
 use anyhow::{Context, anyhow};
+use reqwest::StatusCode;
 use serde_json::Value;
+use std::time::Duration;
+
+const NEWAPI_QUOTA_PER_USD: f64 = 500000.0;
 
 pub fn detect_provider(base_url: &str) -> Option<BalanceProvider> {
     let url = base_url.to_lowercase();
@@ -17,6 +21,10 @@ pub fn detect_provider(base_url: &str) -> Option<BalanceProvider> {
         Some(BalanceProvider::OpenRouter)
     } else if url.contains("api.novita.ai") {
         Some(BalanceProvider::Novita)
+    } else if url.contains("sub2api") {
+        Some(BalanceProvider::Sub2Api)
+    } else if url.contains("new-api") || url.contains("newapi") || url.contains("one-api") {
+        Some(BalanceProvider::NewApi)
     } else {
         None
     }
@@ -39,15 +47,47 @@ pub async fn query_and_store(
         .get(&upstream.id, "api_key")
         .await?
         .ok_or_else(|| anyhow!("missing api key"))?;
-    let provider = match upstream.balance_provider {
-        BalanceProvider::Auto => detect_provider(&upstream.base_url)
-            .ok_or_else(|| anyhow!("unsupported balance provider"))?,
+    let snapshot = match upstream.balance_provider {
+        BalanceProvider::Auto => {
+            if let Some(provider) = detect_provider(&upstream.base_url) {
+                query_balance(state, &upstream.id, provider, &upstream.base_url, &api_key).await?
+            } else {
+                query_common_panel(
+                    state,
+                    &upstream.id,
+                    BalanceProvider::Auto,
+                    &upstream.base_url,
+                    &api_key,
+                )
+                .await?
+            }
+        }
         BalanceProvider::Unsupported => return Err(anyhow!("unsupported balance provider")),
-        provider => provider,
+        provider => {
+            query_balance(state, &upstream.id, provider, &upstream.base_url, &api_key).await?
+        }
     };
-    let snapshot = query_provider(state, &upstream.id, provider, &api_key).await?;
     state.store.save_balance_snapshot(&snapshot).await?;
     Ok(snapshot)
+}
+
+async fn query_balance(
+    state: &AppState,
+    upstream_id: &str,
+    provider: BalanceProvider,
+    base_url: &str,
+    api_key: &str,
+) -> anyhow::Result<BalanceSnapshot> {
+    match provider {
+        BalanceProvider::Sub2Api | BalanceProvider::NewApi => {
+            query_common_panel(state, upstream_id, provider, base_url, api_key).await
+        }
+        BalanceProvider::Auto => {
+            query_common_panel(state, upstream_id, provider, base_url, api_key).await
+        }
+        BalanceProvider::Unsupported => Err(anyhow!("unsupported balance provider")),
+        provider => query_provider(state, upstream_id, provider, api_key).await,
+    }
 }
 
 async fn query_provider(
@@ -63,7 +103,10 @@ async fn query_provider(
         BalanceProvider::SiliconFlowGlobal => ("https://api.siliconflow.com/v1/user/info", "USD"),
         BalanceProvider::OpenRouter => ("https://openrouter.ai/api/v1/credits", "USD"),
         BalanceProvider::Novita => ("https://api.novita.ai/v3/user/balance", "USD"),
-        BalanceProvider::Auto | BalanceProvider::Unsupported => {
+        BalanceProvider::Auto
+        | BalanceProvider::Sub2Api
+        | BalanceProvider::NewApi
+        | BalanceProvider::Unsupported => {
             return Err(anyhow!("unsupported balance provider"));
         }
     };
@@ -72,6 +115,7 @@ async fn query_provider(
         .get(url)
         .bearer_auth(api_key)
         .header("Accept", "application/json")
+        .timeout(Duration::from_secs(15))
         .send()
         .await
         .with_context(|| format!("failed to query balance provider {}", provider.as_str()))?;
@@ -138,14 +182,367 @@ fn parse_balance(
             snapshot.remaining = parse_f64_field(body, "availableBalance").map(|v| v / 10000.0);
             snapshot.is_valid = snapshot.remaining.map(|v| v > 0.0).unwrap_or(true);
         }
+        BalanceProvider::Sub2Api | BalanceProvider::NewApi => {
+            if let Some(common) = parse_common_balance(upstream_id, provider, body) {
+                return common;
+            }
+        }
         BalanceProvider::Auto | BalanceProvider::Unsupported => {}
     }
     snapshot
 }
 
+async fn query_common_panel(
+    state: &AppState,
+    upstream_id: &str,
+    provider: BalanceProvider,
+    base_url: &str,
+    api_key: &str,
+) -> anyhow::Result<BalanceSnapshot> {
+    let mut last_error = None;
+    for url in common_balance_urls(base_url, provider) {
+        let response = match state
+            .http
+            .get(&url)
+            .bearer_auth(api_key)
+            .header("Accept", "application/json")
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(err) => {
+                last_error = Some(format!("{url}: {err}"));
+                continue;
+            }
+        };
+        let status = response.status();
+        let body_text = response.text().await.unwrap_or_default();
+        let body = serde_json::from_str::<Value>(&body_text).unwrap_or(Value::Null);
+        if !status.is_success() {
+            if should_try_next_common_status(status) {
+                last_error = Some(format!("{url}: HTTP {status}"));
+                continue;
+            }
+            return Ok(invalid_snapshot(
+                upstream_id,
+                provider,
+                format!("HTTP {status}: {body_text}"),
+            ));
+        }
+        if let Some(snapshot) = parse_common_balance(upstream_id, provider, &body) {
+            return Ok(snapshot);
+        }
+        if let Some(snapshot) = parse_common_invalid(upstream_id, provider, &body) {
+            last_error = Some(format!(
+                "{url}: {}",
+                snapshot.message.as_deref().unwrap_or("balance query failed")
+            ));
+            continue;
+        }
+        last_error = Some(format!("{url}: unsupported balance response {body}"));
+    }
+    Ok(invalid_snapshot(
+        upstream_id,
+        provider,
+        last_error.unwrap_or_else(|| "unsupported balance provider".to_string()),
+    ))
+}
+
+fn common_balance_urls(base_url: &str, provider: BalanceProvider) -> Vec<String> {
+    let mut urls = Vec::new();
+    match provider {
+        BalanceProvider::Sub2Api => {
+            push_unique_url(&mut urls, append_path_url(base_url, "usage"));
+            push_unique_url(&mut urls, root_path_url(base_url, "/v1/usage"));
+        }
+        BalanceProvider::NewApi => {
+            push_newapi_urls(&mut urls, base_url);
+        }
+        BalanceProvider::Auto => {
+            push_unique_url(&mut urls, append_path_url(base_url, "usage"));
+            push_unique_url(&mut urls, root_path_url(base_url, "/v1/usage"));
+            push_newapi_urls(&mut urls, base_url);
+        }
+        _ => {}
+    }
+    urls
+}
+
+fn push_newapi_urls(urls: &mut Vec<String>, base_url: &str) {
+    for path in [
+        "/api/token/self",
+        "/api/user/self",
+        "/api/user/profile",
+        "/api/user/token",
+        "/api/v1/token/self",
+        "/api/v1/user/self",
+        "/api/v1/user/profile",
+        "/dashboard/billing/credit_grants",
+        "/v1/dashboard/billing/credit_grants",
+    ] {
+        push_unique_url(urls, root_path_url(base_url, path));
+    }
+}
+
+fn append_path_url(base_url: &str, path: &str) -> Option<String> {
+    let mut url = url::Url::parse(base_url).ok()?;
+    let mut base_path = url.path().trim_end_matches('/').to_string();
+    base_path.push('/');
+    base_path.push_str(path.trim_start_matches('/'));
+    url.set_path(&base_path);
+    url.set_query(None);
+    Some(url.to_string())
+}
+
+fn root_path_url(base_url: &str, path: &str) -> Option<String> {
+    let mut url = url::Url::parse(base_url).ok()?;
+    url.set_path(path);
+    url.set_query(None);
+    Some(url.to_string())
+}
+
+fn push_unique_url(urls: &mut Vec<String>, url: Option<String>) {
+    let Some(url) = url else {
+        return;
+    };
+    if !urls.iter().any(|existing| existing == &url) {
+        urls.push(url);
+    }
+}
+
+fn should_try_next_common_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::NOT_FOUND
+            | StatusCode::METHOD_NOT_ALLOWED
+            | StatusCode::BAD_REQUEST
+            | StatusCode::UNAUTHORIZED
+            | StatusCode::FORBIDDEN
+    )
+}
+
+fn parse_common_balance(
+    upstream_id: &str,
+    provider: BalanceProvider,
+    body: &Value,
+) -> Option<BalanceSnapshot> {
+    let data = body.get("data").unwrap_or(body);
+    let quota = data.get("quota").or_else(|| body.get("quota"));
+    let quota_obj = quota.filter(|value| value.is_object());
+
+    if let Some(snapshot) = parse_quota_object_balance(upstream_id, provider, data, quota_obj) {
+        return Some(snapshot);
+    }
+    if matches!(provider, BalanceProvider::Auto | BalanceProvider::NewApi)
+        && let Some(snapshot) = parse_newapi_quota_balance(upstream_id, provider, data, body)
+    {
+        return Some(snapshot);
+    }
+
+    let remaining = quota_obj
+        .and_then(|q| number_any(q, &["remaining", "remain", "left"]))
+        .or_else(|| {
+            number_any(
+                data,
+                &[
+                    "remaining",
+                    "remain",
+                    "remain_quota",
+                    "left_quota",
+                    "total_available",
+                    "available",
+                ],
+            )
+        })
+        .or_else(|| number_any(data, &["balance", "available_balance", "availableBalance"]));
+
+    let used = quota_obj
+        .and_then(|q| number_any(q, &["used", "usage"]))
+        .or_else(|| {
+            number_any(
+                data,
+                &["used", "used_quota", "quota_used", "total_usage", "total_used"],
+            )
+        });
+
+    let total = quota_obj
+        .and_then(|q| number_any(q, &["limit", "total"]))
+        .or_else(|| {
+            number_any(
+                data,
+                &[
+                    "limit",
+                    "total",
+                    "total_quota",
+                    "total_credits",
+                    "total_granted",
+                ],
+            )
+        });
+
+    let remaining = remaining.or_else(|| match (total, used) {
+        (Some(total), Some(used)) => Some((total - used).max(0.0)),
+        _ => None,
+    })?;
+
+    let unit = string_any(data, &["unit", "currency"])
+        .or_else(|| quota_obj.and_then(|q| string_any(q, &["unit", "currency"])))
+        .unwrap_or_else(|| default_common_unit(provider, data).to_string());
+
+    let is_valid = bool_any(data, &["isValid", "is_valid", "is_active"])
+        .or_else(|| bool_any(body, &["isValid", "is_valid", "is_active"]))
+        .unwrap_or(remaining > 0.0);
+    let message = string_any(data, &["message", "error", "invalid_message"])
+        .or_else(|| string_any(body, &["message", "error", "invalid_message"]));
+
+    Some(BalanceSnapshot {
+        upstream_id: upstream_id.to_string(),
+        provider: provider.as_str().to_string(),
+        remaining: Some(remaining),
+        total,
+        used,
+        unit: Some(unit),
+        is_valid,
+        message,
+        fetched_at: chrono::Utc::now().timestamp(),
+    })
+}
+
+fn parse_quota_object_balance(
+    upstream_id: &str,
+    provider: BalanceProvider,
+    data: &Value,
+    quota_obj: Option<&Value>,
+) -> Option<BalanceSnapshot> {
+    let quota_obj = quota_obj?;
+    let used = number_any(quota_obj, &["used", "usage"]);
+    let total = number_any(quota_obj, &["limit", "total"]);
+    let remaining = number_any(quota_obj, &["remaining", "remain", "left"]).or_else(|| {
+        match (total, used) {
+            (Some(total), Some(used)) => Some((total - used).max(0.0)),
+            _ => None,
+        }
+    })?;
+    let unit = string_any(quota_obj, &["unit", "currency"])
+        .or_else(|| string_any(data, &["unit", "currency"]))
+        .unwrap_or_else(|| default_common_unit(provider, data).to_string());
+    let is_valid = bool_any(data, &["isValid", "is_valid", "is_active"]).unwrap_or(remaining > 0.0);
+    let message = string_any(data, &["message", "error", "invalid_message"]);
+    Some(BalanceSnapshot {
+        upstream_id: upstream_id.to_string(),
+        provider: provider.as_str().to_string(),
+        remaining: Some(remaining),
+        total,
+        used,
+        unit: Some(unit),
+        is_valid,
+        message,
+        fetched_at: chrono::Utc::now().timestamp(),
+    })
+}
+
+fn parse_newapi_quota_balance(
+    upstream_id: &str,
+    provider: BalanceProvider,
+    data: &Value,
+    body: &Value,
+) -> Option<BalanceSnapshot> {
+    let has_quota_shape = data.get("remain_quota").is_some()
+        || data.get("remaining_quota").is_some()
+        || data.get("used_quota").is_some()
+        || data.get("quota_used").is_some();
+    let remaining_units = number_any(data, &["remain_quota", "remaining_quota"]).or_else(|| {
+        number_any(data, &["quota"])
+            .filter(|_| has_quota_shape || provider == BalanceProvider::NewApi)
+    })?;
+    let used_units = number_any(data, &["used_quota", "quota_used"]);
+    let total_units = number_any(data, &["total_quota", "quota_limit", "limit_quota"])
+        .or_else(|| used_units.map(|used| remaining_units + used));
+    let remaining = newapi_quota_to_usd(remaining_units);
+    let used = used_units.map(newapi_quota_to_usd);
+    let total = total_units.map(newapi_quota_to_usd);
+    let unit = string_any(data, &["unit", "currency"]).unwrap_or_else(|| "USD".to_string());
+    let is_valid = bool_any(data, &["isValid", "is_valid", "is_active"])
+        .or_else(|| bool_any(body, &["isValid", "is_valid", "is_active", "success"]))
+        .unwrap_or(remaining > 0.0);
+    let message = string_any(data, &["message", "error", "invalid_message"])
+        .or_else(|| string_any(body, &["message", "error", "invalid_message"]));
+    Some(BalanceSnapshot {
+        upstream_id: upstream_id.to_string(),
+        provider: provider.as_str().to_string(),
+        remaining: Some(remaining),
+        total,
+        used,
+        unit: Some(unit),
+        is_valid,
+        message,
+        fetched_at: chrono::Utc::now().timestamp(),
+    })
+}
+
+fn parse_common_invalid(
+    upstream_id: &str,
+    provider: BalanceProvider,
+    body: &Value,
+) -> Option<BalanceSnapshot> {
+    let data = body.get("data").unwrap_or(body);
+    let explicit_invalid = [body, data].iter().any(|obj| {
+        bool_any(obj, &["success", "isValid", "is_valid", "is_active"]) == Some(false)
+    });
+    if !explicit_invalid {
+        return None;
+    }
+    let message = string_any(data, &["message", "error", "invalid_message"])
+        .or_else(|| string_any(body, &["message", "error", "invalid_message"]))
+        .unwrap_or_else(|| "balance query failed".to_string());
+    Some(invalid_snapshot(upstream_id, provider, message))
+}
+
+fn default_common_unit(_provider: BalanceProvider, _data: &Value) -> &'static str {
+    "USD"
+}
+
+fn newapi_quota_to_usd(value: f64) -> f64 {
+    value / NEWAPI_QUOTA_PER_USD
+}
+
+fn invalid_snapshot(
+    upstream_id: &str,
+    provider: BalanceProvider,
+    message: String,
+) -> BalanceSnapshot {
+    BalanceSnapshot {
+        upstream_id: upstream_id.to_string(),
+        provider: provider.as_str().to_string(),
+        is_valid: false,
+        message: Some(message),
+        fetched_at: chrono::Utc::now().timestamp(),
+        ..BalanceSnapshot::default()
+    }
+}
+
 fn parse_f64_field(obj: &Value, field: &str) -> Option<f64> {
     obj.get(field)
         .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+}
+
+fn number_any(obj: &Value, fields: &[&str]) -> Option<f64> {
+    fields.iter().find_map(|field| parse_f64_field(obj, field))
+}
+
+fn string_any(obj: &Value, fields: &[&str]) -> Option<String> {
+    fields.iter().find_map(|field| {
+        obj.get(*field)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    })
+}
+
+fn bool_any(obj: &Value, fields: &[&str]) -> Option<bool> {
+    fields
+        .iter()
+        .find_map(|field| obj.get(*field).and_then(Value::as_bool))
 }
 
 #[cfg(test)]
@@ -163,6 +560,10 @@ mod tests {
             detect_provider("https://openrouter.ai/api/v1"),
             Some(BalanceProvider::OpenRouter)
         );
+        assert_eq!(
+            detect_provider("https://example.com/new-api/v1"),
+            Some(BalanceProvider::NewApi)
+        );
     }
 
     #[test]
@@ -175,5 +576,94 @@ mod tests {
         );
         assert_eq!(snapshot.remaining, Some(6.5));
         assert_eq!(snapshot.total, Some(10.0));
+    }
+
+    #[test]
+    fn parses_sub2api_usage_balance() {
+        let snapshot = parse_common_balance(
+            "u1",
+            BalanceProvider::Sub2Api,
+            &json!({
+                "mode": "quota_limited",
+                "isValid": true,
+                "quota": {"limit": 10.0, "used": 3.0, "remaining": 7.0, "unit": "USD"}
+            }),
+        )
+        .unwrap();
+        assert_eq!(snapshot.remaining, Some(7.0));
+        assert_eq!(snapshot.total, Some(10.0));
+        assert_eq!(snapshot.used, Some(3.0));
+        assert_eq!(snapshot.unit.as_deref(), Some("USD"));
+        assert!(snapshot.is_valid);
+    }
+
+    #[test]
+    fn parses_newapi_token_balance() {
+        let snapshot = parse_common_balance(
+            "u1",
+            BalanceProvider::NewApi,
+            &json!({
+                "success": true,
+                "data": {"remain_quota": 5000, "used_quota": 1200}
+            }),
+        )
+        .unwrap();
+        assert_eq!(snapshot.remaining, Some(0.01));
+        assert_eq!(snapshot.used, Some(0.0024));
+        assert_eq!(snapshot.total, Some(0.0124));
+        assert_eq!(snapshot.unit.as_deref(), Some("USD"));
+    }
+
+    #[test]
+    fn parses_newapi_user_self_balance() {
+        let snapshot = parse_common_balance(
+            "u1",
+            BalanceProvider::NewApi,
+            &json!({
+                "success": true,
+                "data": {"quota": 500000, "used_quota": 250000}
+            }),
+        )
+        .unwrap();
+        assert_eq!(snapshot.remaining, Some(1.0));
+        assert_eq!(snapshot.used, Some(0.5));
+        assert_eq!(snapshot.total, Some(1.5));
+        assert_eq!(snapshot.unit.as_deref(), Some("USD"));
+    }
+
+    #[test]
+    fn parses_sub2api_unrestricted_balance() {
+        let snapshot = parse_common_balance(
+            "u1",
+            BalanceProvider::Sub2Api,
+            &json!({
+                "mode": "unrestricted",
+                "isValid": true,
+                "remaining": 2.5,
+                "balance": 2.5,
+                "unit": "USD"
+            }),
+        )
+        .unwrap();
+        assert_eq!(snapshot.remaining, Some(2.5));
+        assert_eq!(snapshot.unit.as_deref(), Some("USD"));
+    }
+
+    #[test]
+    fn parses_dashboard_credit_grants_balance() {
+        let snapshot = parse_common_balance(
+            "u1",
+            BalanceProvider::Auto,
+            &json!({
+                "total_available": 6.25,
+                "total_granted": 10.0,
+                "total_used": 3.75
+            }),
+        )
+        .unwrap();
+        assert_eq!(snapshot.remaining, Some(6.25));
+        assert_eq!(snapshot.total, Some(10.0));
+        assert_eq!(snapshot.used, Some(3.75));
+        assert_eq!(snapshot.unit.as_deref(), Some("USD"));
     }
 }
