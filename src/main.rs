@@ -28,7 +28,10 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Codex Switch",
         native_options,
-        Box::new(move |_cc| Ok(Box::new(app::CodexSwitchApp::new(runtime, app_state)))),
+        Box::new(move |cc| {
+            app::install_fonts(&cc.egui_ctx);
+            Ok(Box::new(app::CodexSwitchApp::new(runtime, app_state)))
+        }),
     )
 }
 
