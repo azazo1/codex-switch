@@ -56,7 +56,11 @@ impl CodexSwitchApp {
                 if ui.radio(selected, "").clicked() && !selected {
                     current = Some(group.id.clone());
                 }
-                ui.label(format!("{} [{}]", group.name, mode_label(group.mode)));
+                ui.label(format!(
+                    "{} [{}]",
+                    group.name,
+                    schedule_group_summary(group, &upstreams)
+                ));
                 if ui.button("编辑").clicked() {
                     edit = Some(group.clone());
                 }
@@ -352,6 +356,21 @@ fn fixed_options(ui: &mut egui::Ui, group: &mut ScheduleGroup, upstreams: &[Upst
                 );
             }
         });
+}
+
+fn schedule_group_summary(group: &ScheduleGroup, upstreams: &[Upstream]) -> String {
+    if group.mode != ScheduleMode::Fixed {
+        return mode_label(group.mode).to_string();
+    }
+    match group
+        .fixed_upstream_id
+        .as_ref()
+        .and_then(|id| upstreams.iter().find(|upstream| upstream.id == *id))
+    {
+        Some(upstream) => format!("固定: {}", upstream.name),
+        None if group.fixed_upstream_id.is_some() => "固定: 上游不存在".to_string(),
+        None => "固定: 未选择".to_string(),
+    }
 }
 
 fn mode_label(mode: ScheduleMode) -> &'static str {
