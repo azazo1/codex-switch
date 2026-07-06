@@ -63,6 +63,7 @@ pub struct CodexSwitchApp {
     local_key: String,
     local_key_copied_at: Option<Instant>,
     last_seen_request_log_version: u64,
+    last_request_log_poll_at: Instant,
     last_seen_live_stream_version: u64,
     price_fetch_started: bool,
     price_fetch_pending: bool,
@@ -131,6 +132,7 @@ impl CodexSwitchApp {
             local_key,
             local_key_copied_at: None,
             last_seen_request_log_version,
+            last_request_log_poll_at: Instant::now(),
             last_seen_live_stream_version,
             price_fetch_started: false,
             price_fetch_pending: false,
@@ -175,7 +177,7 @@ impl CodexSwitchApp {
     }
 
     fn maybe_auto_refresh(&mut self, ctx: &egui::Context) {
-        ctx.request_repaint_after(Duration::from_secs(1));
+        ctx.request_repaint_after(Duration::from_millis(500));
         let live_version = self.state.events.live_stream_version();
         if live_version != self.last_seen_live_stream_version {
             self.last_seen_live_stream_version = live_version;
@@ -185,6 +187,26 @@ impl CodexSwitchApp {
         if version != self.last_seen_request_log_version {
             self.last_seen_request_log_version = version;
             self.refresh_all();
+            return;
+        }
+        if self.last_request_log_poll_at.elapsed() < Duration::from_millis(500) {
+            return;
+        }
+        self.last_request_log_poll_at = Instant::now();
+        let log_count = self.runtime.block_on(self.state.store.request_log_count());
+        match log_count {
+            Ok(count) if count != self.log_total_count => {
+                tracing::debug!(
+                    previous = self.log_total_count,
+                    current = count,
+                    "request log count changed, refreshing current log page"
+                );
+                self.refresh_all();
+            }
+            Ok(_) => {}
+            Err(err) => {
+                tracing::debug!(error = %err, "failed to poll request log count");
+            }
         }
     }
 
@@ -288,6 +310,7 @@ impl CodexSwitchApp {
                 self.provider_stats = data.provider_stats;
                 self.logs = data.logs;
                 self.log_total_count = data.log_total_count;
+                self.last_seen_request_log_version = self.state.events.request_log_version();
                 self.total_estimated_cost_usd = data.total_estimated_cost_usd;
                 self.today_estimated_cost_usd = data.today_estimated_cost_usd;
                 self.provider_estimated_cost_usd = data.provider_estimated_cost_usd;
