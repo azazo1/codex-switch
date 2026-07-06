@@ -64,7 +64,6 @@ pub struct CodexSwitchApp {
     local_key_copied_at: Option<Instant>,
     last_seen_request_log_version: u64,
     last_seen_live_stream_version: u64,
-    last_auto_refresh_at: Instant,
     price_fetch_started: bool,
     price_fetch_pending: bool,
     status: String,
@@ -133,7 +132,6 @@ impl CodexSwitchApp {
             local_key_copied_at: None,
             last_seen_request_log_version,
             last_seen_live_stream_version,
-            last_auto_refresh_at: Instant::now(),
             price_fetch_started: false,
             price_fetch_pending: false,
             status: "就绪".to_string(),
@@ -183,11 +181,6 @@ impl CodexSwitchApp {
             self.last_seen_live_stream_version = live_version;
             self.live_connections = self.state.live_requests.snapshots();
         }
-        let now = Instant::now();
-        if now.duration_since(self.last_auto_refresh_at) < Duration::from_secs(1) {
-            return;
-        }
-        self.last_auto_refresh_at = now;
         let version = self.state.events.request_log_version();
         if version != self.last_seen_request_log_version {
             self.last_seen_request_log_version = version;
