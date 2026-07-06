@@ -9,6 +9,7 @@ use crate::oauth;
 use crate::pricing;
 use crate::proxy::{self, ServerHandle};
 use crate::quota as quota_api;
+use crate::app::tray::{TrayCommand, TrayController};
 use data::load_view_data;
 use eframe::egui;
 use std::collections::{BTreeMap, BTreeSet};
@@ -50,6 +51,7 @@ enum UiTaskEvent {
     },
     PriceCacheFetched(anyhow::Result<usize>),
     PriceCacheOnceFetched(anyhow::Result<pricing::PriceFetchSummary>),
+    Tray(TrayCommand),
 }
 
 pub struct CodexSwitchApp {
@@ -59,6 +61,9 @@ pub struct CodexSwitchApp {
     task_rx: UnboundedReceiver<UiTaskEvent>,
     tab: Tab,
     server: Option<ServerHandle>,
+    tray: Option<TrayController>,
+    tray_init_failed: bool,
+    exit_requested: bool,
     bind_addr: String,
     local_key: String,
     local_key_copied_at: Option<Instant>,
@@ -128,6 +133,9 @@ impl CodexSwitchApp {
             task_rx,
             tab: Tab::Dashboard,
             server: None,
+            tray: None,
+            tray_init_failed: false,
+            exit_requested: false,
             bind_addr,
             local_key,
             local_key_copied_at: None,
@@ -210,7 +218,71 @@ impl CodexSwitchApp {
         }
     }
 
-    fn drain_task_events(&mut self) {
+    fn ensure_tray(&mut self, ctx: &egui::Context) {
+        if self.tray.is_some() || self.tray_init_failed {
+            return;
+        }
+        let tx = self.task_tx.clone();
+        let tray = TrayController::new(self.server.is_some(), ctx.clone(), move |command| {
+            if let Err(err) = tx.send(UiTaskEvent::Tray(command)) {
+                tracing::debug!(error = %err, "failed to send tray command");
+            }
+        });
+        match tray {
+            Ok(tray) => {
+                self.tray = Some(tray);
+            }
+            Err(err) => {
+                self.tray_init_failed = true;
+                self.status = format!("系统托盘初始化失败: {err}");
+                tracing::warn!(error = %err, "failed to initialize system tray");
+            }
+        }
+    }
+
+    fn handle_close_request(&mut self, ctx: &egui::Context) {
+        if !ctx.input(|input| input.viewport().close_requested()) {
+            return;
+        }
+        if self.exit_requested || self.tray.is_none() {
+            return;
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        self.status = "窗口已隐藏到系统托盘".to_string();
+    }
+
+    fn handle_tray_command(&mut self, ctx: &egui::Context, command: TrayCommand) {
+        match command {
+            TrayCommand::ShowWindow => self.show_main_window(ctx),
+            TrayCommand::ToggleService => {
+                if self.server.is_some() {
+                    self.stop_server();
+                } else {
+                    self.start_server();
+                }
+            }
+            TrayCommand::Quit => {
+                self.exit_requested = true;
+                self.stop_server();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
+    fn show_main_window(&mut self, ctx: &egui::Context) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        self.status = "主界面已打开".to_string();
+    }
+
+    fn sync_tray_service_state(&mut self) {
+        if let Some(tray) = &self.tray {
+            tray.set_server_running(self.server.is_some());
+        }
+    }
+
+    fn drain_task_events(&mut self, ctx: &egui::Context) {
         while let Ok(event) = self.task_rx.try_recv() {
             match event {
                 UiTaskEvent::OAuthStarted(result) => {
@@ -289,6 +361,7 @@ impl CodexSwitchApp {
                         }
                     }
                 }
+                UiTaskEvent::Tray(command) => self.handle_tray_command(ctx, command),
             }
         }
     }
@@ -341,6 +414,7 @@ impl CodexSwitchApp {
     fn start_server(&mut self) {
         if self.server.is_some() {
             self.status = "服务已经在运行".to_string();
+            self.sync_tray_service_state();
             return;
         }
         let bind_addr = self.bind_addr.clone();
@@ -349,6 +423,7 @@ impl CodexSwitchApp {
             .block_on(self.state.store.set_setting("bind_addr", &bind_addr))
         {
             self.status = format!("保存监听地址失败: {err}");
+            self.sync_tray_service_state();
             return;
         }
         let state = self.state.clone();
@@ -359,9 +434,11 @@ impl CodexSwitchApp {
             Ok(handle) => {
                 self.server = Some(handle);
                 self.status = format!("服务已启动: http://{bind_addr}");
+                self.sync_tray_service_state();
             }
             Err(err) => {
                 self.status = format!("服务启动失败: {err}");
+                self.sync_tray_service_state();
             }
         }
     }
@@ -371,6 +448,7 @@ impl CodexSwitchApp {
             handle.stop();
             self.status = "服务已停止".to_string();
         }
+        self.sync_tray_service_state();
     }
 
     fn refresh_local_key(&mut self) {
@@ -524,8 +602,10 @@ impl CodexSwitchApp {
 
 impl eframe::App for CodexSwitchApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.ensure_tray(ctx);
+        self.handle_close_request(ctx);
         self.maybe_auto_refresh(ctx);
-        self.drain_task_events();
+        self.drain_task_events(ctx);
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal(|ui| {

@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="cloud-fill" x1="62" y1="38" x2="199" y2="226" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#c9a7ff"/>
+      <stop offset="0.42" stop-color="#5f85ff"/>
+      <stop offset="1" stop-color="#2431ff"/>
+    </linearGradient>
+    <linearGradient id="cloud-rim" x1="74" y1="32" x2="196" y2="224" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f6f8ff" stop-opacity="0.72"/>
+      <stop offset="1" stop-color="#bcd0ff" stop-opacity="0.42"/>
+    </linearGradient>
+    <marker id="edge-arrow" viewBox="0 0 18 18" refX="15" refY="9" markerWidth="18" markerHeight="18" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M3 3 L15 9 L3 15 Z" fill="#f9ffff" fill-opacity="0.86"/>
+    </marker>
+    <marker id="shadow-arrow" viewBox="0 0 20 20" refX="17" refY="10" markerWidth="20" markerHeight="20" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M3 3 L17 10 L3 17 Z" fill="#1d30b8" fill-opacity="0.28"/>
+    </marker>
+  </defs>
+
+  <g transform="translate(128 128) rotate(45) scale(0.8) translate(-128 -128)">
+    <path d="M128 28 C154 28 176 49 178 78 C207 81 230 103 230 128 C230 156 207 177 178 179 C176 209 154 230 128 230 C102 230 80 209 78 179 C49 177 26 156 26 128 C26 103 49 81 78 78 C80 49 102 28 128 28 Z" transform="translate(0 8)" fill="#10184f" opacity="0.24"/>
+    <path d="M128 28 C154 28 176 49 178 78 C207 81 230 103 230 128 C230 156 207 177 178 179 C176 209 154 230 128 230 C102 230 80 209 78 179 C49 177 26 156 26 128 C26 103 49 81 78 78 C80 49 102 28 128 28 Z" fill="url(#cloud-fill)"/>
+    <path d="M128 28 C154 28 176 49 178 78 C207 81 230 103 230 128 C230 156 207 177 178 179 C176 209 154 230 128 230 C102 230 80 209 78 179 C49 177 26 156 26 128 C26 103 49 81 78 78 C80 49 102 28 128 28 Z" fill="none" stroke="url(#cloud-rim)" stroke-width="4" stroke-linejoin="round"/>
+
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <g stroke="#1d30b8" stroke-opacity="0.32" stroke-width="8" marker-end="url(#shadow-arrow)">
+        <path d="M78 78 C80 49 102 28 128 28 C154 28 176 49 178 78"/>
+        <path d="M178 78 C207 81 230 103 230 128 C230 156 207 177 178 179"/>
+        <path d="M178 179 C176 209 154 230 128 230 C102 230 80 209 78 179"/>
+        <path d="M78 179 C49 177 26 156 26 128 C26 103 49 81 78 78"/>
+      </g>
+      <g stroke="#f9ffff" stroke-opacity="0.82" stroke-width="5" marker-end="url(#edge-arrow)">
+        <path d="M78 78 C80 49 102 28 128 28 C154 28 176 49 178 78"/>
+        <path d="M178 78 C207 81 230 103 230 128 C230 156 207 177 178 179"/>
+        <path d="M178 179 C176 209 154 230 128 230 C102 230 80 209 78 179"/>
+        <path d="M78 179 C49 177 26 156 26 128 C26 103 49 81 78 78"/>
+      </g>
+    </g>
+  </g>
+
+  <g fill="none" stroke="#f8ffff" stroke-opacity="0.94" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M86 93 L112 128 L86 163" stroke-width="16"/>
+    <path d="M138 148 L176 148" stroke-width="14"/>
+  </g>
+</svg>

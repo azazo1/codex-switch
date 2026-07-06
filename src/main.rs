@@ -27,7 +27,15 @@ fn main() -> eframe::Result<()> {
         .block_on(app::AppState::new())
         .expect("failed to initialize application state");
 
-    let native_options = eframe::NativeOptions::default();
+    let native_options = eframe::NativeOptions {
+        viewport: eframe::egui::ViewportBuilder::default()
+            .with_title("Codex Switch")
+            .with_app_id("codex-switch")
+            .with_inner_size([1120.0, 760.0])
+            .with_min_inner_size([900.0, 560.0])
+            .with_icon(app::app_icon()),
+        ..Default::default()
+    };
     eframe::run_native(
         "Codex Switch",
         native_options,
