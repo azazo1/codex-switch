@@ -5,11 +5,16 @@ use crate::storage::Store;
 use chrono::{DateTime, Utc};
 use sqlx::Row;
 
+const UNASSIGNED_UPSTREAM_ID: &str = "none";
+
 impl Store {
     pub async fn insert_request_log(&self, log: RequestLog) -> anyhow::Result<()> {
         let now = log.ts.unwrap_or_else(Utc::now);
         let day = now.format("%Y-%m-%d").to_string();
-        let upstream_id = log.upstream_id.clone().unwrap_or_else(|| "none".to_string());
+        let upstream_id = log
+            .upstream_id
+            .clone()
+            .unwrap_or_else(|| UNASSIGNED_UPSTREAM_ID.to_string());
         let upstream_name = log
             .upstream_name
             .clone()
@@ -110,9 +115,11 @@ impl Store {
                     COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
                     COALESCE(SUM(total_tokens), 0) AS total_tokens
              FROM usage_rollups
+             WHERE upstream_id != ?1
              GROUP BY upstream_id, upstream_name
              ORDER BY total_tokens DESC",
         )
+        .bind(UNASSIGNED_UPSTREAM_ID)
         .fetch_all(self.pool())
         .await?;
         Ok(rows
@@ -221,5 +228,56 @@ fn usage_from_rollup(row: &sqlx::sqlite::SqliteRow) -> TokenUsage {
         cache_read_tokens: row.get("cache_read_tokens"),
         cache_creation_tokens: row.get("cache_creation_tokens"),
         total_tokens: row.get("total_tokens"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn provider_stats_hides_unassigned_rollup() {
+        let path = std::env::temp_dir()
+            .join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
+        let store = Store::open(path).await.unwrap();
+        store
+            .insert_request_log(test_log(None, None, 5))
+            .await
+            .unwrap();
+        store
+            .insert_request_log(test_log(Some("upstream-a"), Some("relay-a"), 7))
+            .await
+            .unwrap();
+
+        let stats = store.provider_stats().await.unwrap();
+
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].upstream_id, "upstream-a");
+        assert_eq!(stats[0].requests, 1);
+        assert_eq!(stats[0].usage.total_tokens, 7);
+    }
+
+    fn test_log(
+        upstream_id: Option<&str>,
+        upstream_name: Option<&str>,
+        total_tokens: i64,
+    ) -> RequestLog {
+        RequestLog {
+            ts: None,
+            upstream_id: upstream_id.map(str::to_string),
+            upstream_name: upstream_name.map(str::to_string),
+            endpoint: "/responses".to_string(),
+            model: Some("gpt-test".to_string()),
+            reasoning_effort: None,
+            status: 200,
+            usage: TokenUsage {
+                input_tokens: total_tokens,
+                total_tokens,
+                ..Default::default()
+            },
+            duration_ms: 10,
+            first_token_ms: None,
+            error: None,
+        }
     }
 }
