@@ -31,8 +31,6 @@ fn main() -> eframe::Result<()> {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Codex Switch")
             .with_app_id("codex-switch")
-            .with_inner_size([1120.0, 760.0])
-            .with_min_inner_size([900.0, 560.0])
             .with_icon(app::app_icon()),
         ..Default::default()
     };
