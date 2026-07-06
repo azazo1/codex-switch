@@ -1,4 +1,4 @@
-use crate::app::state::AppState;
+use crate::app::{platform, state::AppState};
 use crate::balance;
 use crate::core::models::{
     BalanceProvider, BalanceSnapshot, DashboardStats, ProviderStats, QuotaSnapshot, RequestLog,
@@ -249,6 +249,7 @@ impl CodexSwitchApp {
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        platform::hide_from_dock();
         self.status = "窗口已隐藏到系统托盘".to_string();
     }
 
@@ -271,6 +272,7 @@ impl CodexSwitchApp {
     }
 
     fn show_main_window(&mut self, ctx: &egui::Context) {
+        platform::show_in_dock();
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         self.status = "主界面已打开".to_string();

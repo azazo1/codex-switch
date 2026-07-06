@@ -1,5 +1,6 @@
 mod fonts;
 mod icon;
+mod platform;
 mod state;
 mod tray;
 mod ui;
