@@ -22,6 +22,7 @@ use upstream_editor::UpstreamEditor;
 
 const LOG_PAGE_SIZE: usize = 20;
 const ACTIVE_TAB_COUNT_MAX: usize = 999;
+const REQUEST_LOG_POLL_INTERVAL: Duration = Duration::from_secs(10);
 
 mod dashboard;
 mod active;
@@ -222,7 +223,7 @@ impl CodexSwitchApp {
             self.refresh_all();
             return;
         }
-        if self.last_request_log_poll_at.elapsed() < Duration::from_millis(500) {
+        if self.last_request_log_poll_at.elapsed() < REQUEST_LOG_POLL_INTERVAL {
             return;
         }
         self.last_request_log_poll_at = Instant::now();
