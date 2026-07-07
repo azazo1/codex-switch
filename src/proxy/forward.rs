@@ -454,8 +454,15 @@ fn build_live_response_stream(
                             Ok(()) if *terminate_rx.borrow() => {
                                 let error_message = "terminated by user".to_string();
                                 log_draft.merge_usage(&usage);
-                                log_draft.record(Some(error_message)).await;
+                                log_draft
+                                    .record_with_status(
+                                        StatusCode::from_u16(499)
+                                            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                                        Some(error_message.clone()),
+                                    )
+                                    .await;
                                 live_guard.finish();
+                                yield Err(io::Error::other(error_message));
                                 return;
                             }
                             Ok(()) => continue,

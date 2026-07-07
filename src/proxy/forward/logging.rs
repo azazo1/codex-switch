@@ -105,14 +105,21 @@ impl StreamLogDraft {
     }
 
     pub(super) async fn record(&self, error: Option<String>) {
-        let Some(log) = self.take_log(error) else {
+        let Some(log) = self.take_log(self.status, error) else {
+            return;
+        };
+        record_request_log(&self.state, log).await;
+    }
+
+    pub(super) async fn record_with_status(&self, status: StatusCode, error: Option<String>) {
+        let Some(log) = self.take_log(status, error) else {
             return;
         };
         record_request_log(&self.state, log).await;
     }
 
     pub(super) fn record_on_drop(&self) {
-        let Some(log) = self.take_log(None) else {
+        let Some(log) = self.take_log(self.status, None) else {
             return;
         };
         let state = self.state.clone();
@@ -121,7 +128,7 @@ impl StreamLogDraft {
         });
     }
 
-    fn take_log(&self, error: Option<String>) -> Option<RequestLog> {
+    fn take_log(&self, status: StatusCode, error: Option<String>) -> Option<RequestLog> {
         let Ok(mut inner) = self.inner.lock() else {
             return None;
         };
@@ -141,7 +148,7 @@ impl StreamLogDraft {
             endpoint: self.endpoint.clone(),
             model: self.model.clone(),
             reasoning_effort: self.reasoning_effort.clone(),
-            status: i64::from(self.status.as_u16()),
+            status: i64::from(status.as_u16()),
             usage,
             duration_ms: self.started.elapsed().as_millis() as i64,
             first_token_ms: inner.first_token_ms,
