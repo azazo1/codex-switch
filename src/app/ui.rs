@@ -23,6 +23,7 @@ use upstream_editor::UpstreamEditor;
 const LOG_PAGE_SIZE: usize = 20;
 const ACTIVE_TAB_COUNT_MAX: usize = 999;
 const REQUEST_LOG_POLL_INTERVAL: Duration = Duration::from_secs(10);
+const HIDDEN_REPAINT_INTERVAL: Duration = Duration::from_secs(5);
 
 mod dashboard;
 mod active;
@@ -215,6 +216,10 @@ impl CodexSwitchApp {
     }
 
     fn maybe_auto_refresh(&mut self, ctx: &egui::Context) {
+        if self.window_hidden_to_tray {
+            ctx.request_repaint_after(HIDDEN_REPAINT_INTERVAL);
+            return;
+        }
         ctx.request_repaint_after(Duration::from_millis(500));
         let live_version = self.state.events.live_stream_version();
         if live_version != self.last_seen_live_stream_version {
@@ -323,6 +328,7 @@ impl CodexSwitchApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         self.status = "主界面已打开".to_string();
+        self.refresh_all();
     }
 
     fn sync_tray_service_state(&mut self) {
@@ -353,7 +359,7 @@ impl CodexSwitchApp {
                         Ok(Some(upstream)) => {
                             self.status = format!("OAuth 账号已添加: {}", upstream.name);
                             self.oauth_device = None;
-                            self.refresh_all();
+                            self.refresh_all_if_visible();
                         }
                         Ok(None) => {
                             self.status = "等待用户授权中".to_string();
@@ -366,7 +372,7 @@ impl CodexSwitchApp {
                     match result {
                         Ok(()) => {
                             self.status = "额度已刷新".to_string();
-                            self.refresh_all();
+                            self.refresh_all_if_visible();
                         }
                         Err(err) => self.status = format!("额度查询失败: {err}"),
                     }
@@ -379,7 +385,7 @@ impl CodexSwitchApp {
                     match result {
                         Ok(()) => {
                             self.status = "余额已刷新".to_string();
-                            self.refresh_all();
+                            self.refresh_all_if_visible();
                         }
                         Err(err) => self.status = format!("余额查询失败: {err}"),
                     }
@@ -389,7 +395,7 @@ impl CodexSwitchApp {
                     match result {
                         Ok(count) => {
                             self.status = format!("模型价格已获取: {count} 条");
-                            self.refresh_all();
+                            self.refresh_all_if_visible();
                         }
                         Err(err) => self.status = format!("模型价格获取失败: {err}"),
                     }
@@ -400,7 +406,7 @@ impl CodexSwitchApp {
                         Ok(summary) => {
                             if summary.fetched {
                                 self.status = format!("模型价格已获取: {} 条", summary.count);
-                                self.refresh_all();
+                                self.refresh_all_if_visible();
                             } else if summary.count > 0 {
                                 self.status = format!("模型价格缓存可用: {} 条", summary.count);
                             }
@@ -447,6 +453,13 @@ impl CodexSwitchApp {
                 self.status = format!("刷新失败: {err}");
             }
         }
+    }
+
+    fn refresh_all_if_visible(&mut self) {
+        if self.window_hidden_to_tray {
+            return;
+        }
+        self.refresh_all();
     }
 
     fn sync_schedule_group_editor(&mut self) {
