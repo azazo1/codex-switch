@@ -92,7 +92,7 @@ impl LiveRequestStore {
         let Ok(inner) = self.inner.read() else {
             return Vec::new();
         };
-        inner
+        let mut snapshots = inner
             .values()
             .map(|request| LiveRequestSnapshot {
                 id: request.meta.id.clone(),
@@ -104,7 +104,13 @@ impl LiveRequestStore {
                 started_at: request.started_at,
                 terminating: request.terminating,
             })
-            .collect()
+            .collect::<Vec<_>>();
+        snapshots.sort_by(|left, right| {
+            left.started_at
+                .cmp(&right.started_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        snapshots
     }
 }
 
@@ -165,5 +171,18 @@ mod tests {
         store.finish("request-a");
 
         assert!(store.snapshots().is_empty());
+    }
+
+    #[test]
+    fn snapshots_are_sorted_by_start_time() {
+        let store = LiveRequestStore::default();
+        store.start(request_meta());
+        let mut meta = request_meta();
+        meta.id = "request-b".to_string();
+        store.start(meta);
+
+        let snapshots = store.snapshots();
+
+        assert!(snapshots[0].started_at <= snapshots[1].started_at);
     }
 }

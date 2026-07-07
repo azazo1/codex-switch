@@ -3,9 +3,10 @@ use crate::live::LiveRequestSnapshot;
 use chrono::{Local, Utc};
 use eframe::egui;
 
-const LIVE_TAIL_MIN_WIDTH: f32 = 220.0;
-const LIVE_TAIL_MAX_WIDTH: f32 = 720.0;
-const LIVE_TAIL_RESERVED_WIDTH: f32 = 520.0;
+const LIVE_TAIL_MIN_WIDTH: f32 = 200.0;
+const LIVE_TAIL_MAX_WIDTH: f32 = 640.0;
+const LIVE_TAIL_RESERVED_WIDTH: f32 = 580.0;
+const LIVE_GRID_COLUMN_SPACING: f32 = 18.0;
 const APPROX_CHAR_WIDTH: f32 = 9.0;
 
 impl CodexSwitchApp {
@@ -17,13 +18,13 @@ impl CodexSwitchApp {
         }
         let tail_width = live_tail_width(ui.available_width());
         let mut terminate_request_id = None;
-        egui::ScrollArea::both()
+        egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 egui::Grid::new("active_connections_grid")
                     .striped(true)
                     .num_columns(8)
-                    .spacing([24.0, 10.0])
+                    .spacing([LIVE_GRID_COLUMN_SPACING, 10.0])
                     .show(ui, |ui| {
                         ui.strong("上游");
                         ui.strong("模型");

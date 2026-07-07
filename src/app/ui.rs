@@ -21,6 +21,7 @@ use tokio::runtime::Runtime;
 use upstream_editor::UpstreamEditor;
 
 const LOG_PAGE_SIZE: usize = 20;
+const ACTIVE_TAB_COUNT_MAX: usize = 999;
 
 mod dashboard;
 mod active;
@@ -620,7 +621,12 @@ impl eframe::App for CodexSwitchApp {
                 tab_button(ui, &mut self.tab, Tab::Dashboard, "仪表盘");
                 tab_button(ui, &mut self.tab, Tab::Upstreams, "上游");
                 tab_button(ui, &mut self.tab, Tab::Scheduler, "调度组");
-                tab_button(ui, &mut self.tab, Tab::ActiveConnections, "活跃连接");
+                tab_button(
+                    ui,
+                    &mut self.tab,
+                    Tab::ActiveConnections,
+                    &active_connections_tab_text(self.live_connections.len()),
+                );
                 tab_button(ui, &mut self.tab, Tab::Logs, "日志");
                 if ui.button("刷新").clicked() {
                     self.refresh_all();
@@ -683,4 +689,8 @@ fn tab_button(ui: &mut egui::Ui, tab: &mut Tab, value: Tab, text: &str) {
     if ui.selectable_label(*tab == value, text).clicked() {
         *tab = value;
     }
+}
+
+fn active_connections_tab_text(count: usize) -> String {
+    format!("活跃连接({:03})", count.min(ACTIVE_TAB_COUNT_MAX))
 }
