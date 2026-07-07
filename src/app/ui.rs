@@ -83,6 +83,8 @@ pub struct CodexSwitchApp {
     bind_addr: String,
     local_key: String,
     local_key_copied_at: Option<Instant>,
+    local_key_refresh_open: bool,
+    local_key_refresh_value: String,
     last_seen_request_log_version: u64,
     last_request_log_poll_at: Instant,
     last_seen_live_stream_version: u64,
@@ -162,6 +164,8 @@ impl CodexSwitchApp {
             bind_addr,
             local_key,
             local_key_copied_at: None,
+            local_key_refresh_open: false,
+            local_key_refresh_value: String::new(),
             last_seen_request_log_version,
             last_request_log_poll_at: Instant::now(),
             last_seen_live_stream_version,
@@ -497,8 +501,7 @@ impl CodexSwitchApp {
         self.sync_tray_service_state();
     }
 
-    fn refresh_local_key(&mut self) {
-        let key = format!("cs-{}", uuid::Uuid::new_v4());
+    fn refresh_local_key(&mut self, key: String) {
         match self
             .runtime
             .block_on(self.state.store.set_setting("local_access_key", &key))

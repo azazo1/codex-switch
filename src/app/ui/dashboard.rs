@@ -30,8 +30,8 @@ impl CodexSwitchApp {
                 ui.ctx().copy_text(self.local_key.clone());
                 self.local_key_copied_at = Some(Instant::now());
             }
-            if ui.button("刷新 key").on_hover_text("生成新的本地访问 key").clicked() {
-                self.refresh_local_key();
+            if ui.button("刷新 key").on_hover_text("打开 key 刷新确认").clicked() {
+                self.open_local_key_refresh_window();
             }
             if let Some(copied_at) = self.local_key_copied_at {
                 let elapsed = copied_at.elapsed();
@@ -45,6 +45,7 @@ impl CodexSwitchApp {
                 }
             }
         });
+        self.local_key_refresh_window(ui.ctx());
         ui.separator();
         ui.horizontal_wrapped(|ui| {
             ui.label(format!("总请求: {}", self.stats.total_requests));
@@ -187,6 +188,65 @@ impl CodexSwitchApp {
             ui.label(format!("日志条数: {}", self.database_info.request_log_count));
         });
     }
+
+    fn open_local_key_refresh_window(&mut self) {
+        self.local_key_refresh_value = generate_local_key();
+        self.local_key_refresh_open = true;
+    }
+
+    fn local_key_refresh_window(&mut self, ctx: &egui::Context) {
+        if !self.local_key_refresh_open {
+            return;
+        }
+        let mut open = self.local_key_refresh_open;
+        let mut confirm_requested = false;
+        let mut cancel_requested = false;
+        egui::Window::new("刷新本地访问 key")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label("刷新后 Codex 需要使用新 key");
+                ui.horizontal(|ui| {
+                    ui.label("当前 key");
+                    ui.monospace(&self.local_key);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("新 key");
+                    ui.text_edit_singleline(&mut self.local_key_refresh_value);
+                    if ui.button("生成随机 key").clicked() {
+                        self.local_key_refresh_value = generate_local_key();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("确认刷新").clicked() {
+                        confirm_requested = true;
+                    }
+                    if ui.button("取消").clicked() {
+                        cancel_requested = true;
+                    }
+                });
+            });
+        if confirm_requested {
+            let key = self.local_key_refresh_value.trim().to_string();
+            if key.is_empty() {
+                self.status = "本地访问 key 不能为空".to_string();
+                self.local_key_refresh_open = true;
+            } else {
+                self.local_key_refresh_open = false;
+                self.refresh_local_key(key);
+            }
+        } else if cancel_requested {
+            self.local_key_refresh_open = false;
+        } else {
+            self.local_key_refresh_open = open;
+        }
+    }
+}
+
+fn generate_local_key() -> String {
+    format!("cs-{}", uuid::Uuid::new_v4())
 }
 
 fn database_total_bytes(info: &crate::core::models::DatabaseInfo) -> u64 {
