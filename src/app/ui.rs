@@ -66,6 +66,8 @@ pub struct CodexSwitchApp {
     tray_init_failed: bool,
     exit_requested: bool,
     exit_confirm_open: bool,
+    window_hidden_to_tray: bool,
+    background_reopen: platform::BackgroundReopenMonitor,
     bind_addr: String,
     local_key: String,
     local_key_copied_at: Option<Instant>,
@@ -139,6 +141,8 @@ impl CodexSwitchApp {
             tray_init_failed: false,
             exit_requested: false,
             exit_confirm_open: false,
+            window_hidden_to_tray: false,
+            background_reopen: platform::BackgroundReopenMonitor::default(),
             bind_addr,
             local_key,
             local_key_copied_at: None,
@@ -252,8 +256,19 @@ impl CodexSwitchApp {
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        self.window_hidden_to_tray = true;
+        self.background_reopen.mark_hidden();
         platform::hide_from_dock();
         self.status = "窗口已隐藏到系统托盘".to_string();
+    }
+
+    fn handle_dock_reopen(&mut self, ctx: &egui::Context) {
+        if !self.window_hidden_to_tray {
+            return;
+        }
+        if self.background_reopen.should_show_hidden_window() {
+            self.show_main_window(ctx);
+        }
     }
 
     fn handle_tray_command(&mut self, ctx: &egui::Context, command: TrayCommand) {
@@ -280,6 +295,8 @@ impl CodexSwitchApp {
 
     fn show_main_window(&mut self, ctx: &egui::Context) {
         platform::show_in_dock();
+        self.window_hidden_to_tray = false;
+        self.background_reopen.mark_shown();
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         self.status = "主界面已打开".to_string();
@@ -613,6 +630,7 @@ impl eframe::App for CodexSwitchApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.ensure_tray(ctx);
         self.handle_close_request(ctx);
+        self.handle_dock_reopen(ctx);
         self.maybe_auto_refresh(ctx);
         self.drain_task_events(ctx);
 
