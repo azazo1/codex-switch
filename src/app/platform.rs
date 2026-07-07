@@ -3,6 +3,7 @@ mod macos {
     use anyhow::{Context, bail};
     use objc2::MainThreadMarker;
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+    use std::{path::Path, process::Command};
 
     #[derive(Debug, Clone, Copy, Default)]
     enum ReopenState {
@@ -83,10 +84,25 @@ mod macos {
         }
         Ok(())
     }
+
+    pub fn open_file_location(path: impl AsRef<Path>) -> anyhow::Result<()> {
+        let status = Command::new("open")
+            .arg("-R")
+            .arg(path.as_ref())
+            .status()
+            .context("failed to open file location")?;
+        if !status.success() {
+            bail!("open returned {status}");
+        }
+        Ok(())
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
 mod macos {
+    use anyhow::{Context, bail};
+    use std::{path::Path, process::Command};
+
     #[derive(Debug, Default)]
     pub struct BackgroundReopenMonitor;
 
@@ -107,6 +123,24 @@ mod macos {
     pub fn app_is_active() -> bool {
         false
     }
+
+    pub fn open_file_location(path: impl AsRef<Path>) -> anyhow::Result<()> {
+        let path = path.as_ref();
+        #[cfg(target_os = "windows")]
+        let status = Command::new("explorer")
+            .arg(format!("/select,{}", path.display()))
+            .status()
+            .context("failed to open file location")?;
+        #[cfg(not(target_os = "windows"))]
+        let status = Command::new("xdg-open")
+            .arg(path.parent().unwrap_or(path))
+            .status()
+            .context("failed to open file location")?;
+        if !status.success() {
+            bail!("file browser returned {status}");
+        }
+        Ok(())
+    }
 }
 
-pub use macos::{BackgroundReopenMonitor, hide_from_dock, show_in_dock};
+pub use macos::{BackgroundReopenMonitor, hide_from_dock, open_file_location, show_in_dock};

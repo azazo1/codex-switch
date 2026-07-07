@@ -1,6 +1,7 @@
-use super::{CodexSwitchApp, tokens};
+use super::{CodexSwitchApp, LogRetentionChoice, tokens};
 use crate::core::models::RequestLog;
-use chrono::Local;
+use crate::storage::RequestLogRetention;
+use chrono::{Duration, Local, Utc};
 use eframe::egui;
 
 const LOG_RANGE_LABEL_WIDTH: f32 = 220.0;
@@ -9,7 +10,11 @@ const LOG_PAGE_SLOT_COUNT: usize = 7;
 
 impl CodexSwitchApp {
     pub(super) fn logs_ui(&mut self, ui: &mut egui::Ui) {
-        ui.heading("最近请求");
+        ui.horizontal(|ui| {
+            ui.heading("最近请求");
+            self.log_cleanup_button(ui);
+        });
+        self.log_cleanup_window(ui.ctx());
         self.log_pagination_ui(ui);
         let mut token_display_mode = self.token_display_mode;
         egui::ScrollArea::both()
@@ -49,6 +54,61 @@ impl CodexSwitchApp {
                     });
             });
         self.token_display_mode = token_display_mode;
+    }
+
+    fn log_cleanup_button(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .button("清理日志")
+            .on_hover_text("打开日志清理选项")
+            .clicked()
+        {
+            self.log_cleanup_open = true;
+        }
+    }
+
+    fn log_cleanup_window(&mut self, ctx: &egui::Context) {
+        if !self.log_cleanup_open {
+            return;
+        }
+        let mut open = self.log_cleanup_open;
+        let mut cleanup_requested = false;
+        let mut cancel_requested = false;
+        egui::Window::new("清理日志")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(format!("当前共有 {} 条日志", self.log_total_count));
+                ui.horizontal(|ui| {
+                    ui.label("保留范围");
+                    retention_choice_ui(ui, &mut self.log_retention_choice);
+                });
+                if self.log_retention_choice == LogRetentionChoice::Count {
+                    ui.add(
+                        egui::DragValue::new(&mut self.log_retention_count)
+                            .range(0..=1_000_000)
+                            .prefix("保留 ")
+                            .suffix(" 条"),
+                    );
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("清理").clicked() {
+                        cleanup_requested = true;
+                    }
+                    if ui.button("取消").clicked() {
+                        cancel_requested = true;
+                    }
+                });
+            });
+        if cleanup_requested {
+            self.log_cleanup_open = false;
+            self.cleanup_logs();
+        } else if cancel_requested {
+            self.log_cleanup_open = false;
+        } else {
+            self.log_cleanup_open = open;
+        }
     }
 
     fn log_pagination_ui(&mut self, ui: &mut egui::Ui) {
@@ -110,6 +170,67 @@ impl CodexSwitchApp {
             self.refresh_all();
         }
     }
+
+    fn cleanup_logs(&mut self) {
+        let retention = match self.log_retention_choice {
+            LogRetentionChoice::OneDay => {
+                RequestLogRetention::Since(Utc::now() - Duration::days(1))
+            }
+            LogRetentionChoice::OneWeek => {
+                RequestLogRetention::Since(Utc::now() - Duration::weeks(1))
+            }
+            LogRetentionChoice::OneMonth => {
+                RequestLogRetention::Since(Utc::now() - Duration::days(30))
+            }
+            LogRetentionChoice::OneYear => {
+                RequestLogRetention::Since(Utc::now() - Duration::days(365))
+            }
+            LogRetentionChoice::Count => RequestLogRetention::Newest(self.log_retention_count),
+            LogRetentionChoice::Failed => RequestLogRetention::Failed,
+        };
+        match self
+            .runtime
+            .block_on(self.state.store.cleanup_request_logs(retention))
+        {
+            Ok(deleted) => {
+                self.log_page = 0;
+                self.status = format!("日志已清理: 删除 {deleted} 条");
+                self.state.events.bump_request_logs();
+                self.refresh_all();
+            }
+            Err(err) => {
+                self.status = format!("日志清理失败: {err}");
+            }
+        }
+    }
+}
+
+fn log_retention_label(choice: LogRetentionChoice) -> &'static str {
+    match choice {
+        LogRetentionChoice::OneDay => "保留一天",
+        LogRetentionChoice::OneWeek => "保留一周",
+        LogRetentionChoice::OneMonth => "保留一个月",
+        LogRetentionChoice::OneYear => "保留一年",
+        LogRetentionChoice::Count => "保留指定条数",
+        LogRetentionChoice::Failed => "只清理失败请求",
+    }
+}
+
+fn retention_choice_ui(ui: &mut egui::Ui, choice: &mut LogRetentionChoice) {
+    egui::ComboBox::from_id_salt("log_retention_choice")
+        .selected_text(log_retention_label(*choice))
+        .show_ui(ui, |ui| {
+            for value in [
+                LogRetentionChoice::OneDay,
+                LogRetentionChoice::OneWeek,
+                LogRetentionChoice::OneMonth,
+                LogRetentionChoice::OneYear,
+                LogRetentionChoice::Count,
+                LogRetentionChoice::Failed,
+            ] {
+                ui.selectable_value(choice, value, log_retention_label(value));
+            }
+        });
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

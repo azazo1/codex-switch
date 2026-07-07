@@ -1,7 +1,7 @@
 use crate::app::state::AppState;
 use crate::core::models::{
-    BalanceSnapshot, DashboardStats, ModelUsageStats, ProviderStats, QuotaSnapshot, RequestLog,
-    ScheduleGroup, ScheduleGroupMember, Upstream,
+    BalanceSnapshot, DashboardStats, DatabaseInfo, ModelUsageStats, ProviderStats, QuotaSnapshot,
+    RequestLog, ScheduleGroup, ScheduleGroupMember, Upstream,
 };
 use crate::pricing;
 use std::collections::BTreeMap;
@@ -21,6 +21,7 @@ pub(super) struct ViewData {
     pub log_estimated_cost_usd: Vec<Option<f64>>,
     pub price_cache_count: i64,
     pub price_cache_age_seconds: Option<i64>,
+    pub database_info: DatabaseInfo,
     pub quota_snapshots: Vec<(String, Option<QuotaSnapshot>)>,
     pub balance_snapshots: Vec<(String, Option<BalanceSnapshot>)>,
 }
@@ -53,6 +54,7 @@ pub(super) async fn load_view_data(
     let log_estimated_cost_usd = estimate_log_costs(state, &logs).await?;
     let price_cache_count = state.store.model_price_count().await?;
     let price_cache_age_seconds = state.store.model_price_cache_age_seconds().await?;
+    let database_info = state.store.database_info().await?;
     let mut quota_snapshots = Vec::new();
     let mut balance_snapshots = Vec::new();
     for upstream in &upstreams {
@@ -80,6 +82,7 @@ pub(super) async fn load_view_data(
         log_estimated_cost_usd,
         price_cache_count,
         price_cache_age_seconds,
+        database_info,
         quota_snapshots,
         balance_snapshots,
     })

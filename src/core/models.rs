@@ -327,6 +327,18 @@ pub struct DashboardStats {
 }
 
 #[derive(Debug, Clone, Default)]
+pub struct DatabaseInfo {
+    pub path: String,
+    pub main_file_bytes: u64,
+    pub wal_file_bytes: u64,
+    pub shm_file_bytes: u64,
+    pub page_count: i64,
+    pub page_size: i64,
+    pub freelist_count: i64,
+    pub request_log_count: i64,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct ProviderStats {
     pub upstream_id: String,
     pub upstream_name: String,

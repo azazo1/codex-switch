@@ -1,8 +1,8 @@
 use crate::app::{platform, state::AppState};
 use crate::balance;
 use crate::core::models::{
-    BalanceProvider, BalanceSnapshot, DashboardStats, ProviderStats, QuotaSnapshot, RequestLog,
-    ScheduleGroup, ScheduleGroupMember, Upstream, WireApi,
+    BalanceProvider, BalanceSnapshot, DashboardStats, DatabaseInfo, ProviderStats, QuotaSnapshot,
+    RequestLog, ScheduleGroup, ScheduleGroupMember, Upstream, WireApi,
 };
 use crate::live::LiveRequestSnapshot;
 use crate::oauth;
@@ -42,6 +42,16 @@ enum Tab {
     Logs,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogRetentionChoice {
+    OneDay,
+    OneWeek,
+    OneMonth,
+    OneYear,
+    Count,
+    Failed,
+}
+
 enum UiTaskEvent {
     OAuthStarted(anyhow::Result<oauth::DeviceFlow>),
     OAuthPolled(anyhow::Result<Option<Upstream>>),
@@ -66,6 +76,7 @@ pub struct CodexSwitchApp {
     tray_init_failed: bool,
     exit_requested: bool,
     exit_confirm_open: bool,
+    log_cleanup_open: bool,
     window_hidden_to_tray: bool,
     background_reopen: platform::BackgroundReopenMonitor,
     bind_addr: String,
@@ -90,12 +101,15 @@ pub struct CodexSwitchApp {
     log_page: usize,
     log_page_size: usize,
     log_total_count: i64,
+    log_retention_choice: LogRetentionChoice,
+    log_retention_count: i64,
     total_estimated_cost_usd: Option<f64>,
     today_estimated_cost_usd: Option<f64>,
     provider_estimated_cost_usd: BTreeMap<String, Option<f64>>,
     log_estimated_cost_usd: Vec<Option<f64>>,
     price_cache_count: i64,
     price_cache_age_seconds: Option<i64>,
+    database_info: DatabaseInfo,
     token_display_mode: tokens::TokenDisplayMode,
     oauth_start_pending: bool,
     oauth_poll_pending: bool,
@@ -141,6 +155,7 @@ impl CodexSwitchApp {
             tray_init_failed: false,
             exit_requested: false,
             exit_confirm_open: false,
+            log_cleanup_open: false,
             window_hidden_to_tray: false,
             background_reopen: platform::BackgroundReopenMonitor::default(),
             bind_addr,
@@ -165,12 +180,15 @@ impl CodexSwitchApp {
             log_page: 0,
             log_page_size: LOG_PAGE_SIZE,
             log_total_count: 0,
+            log_retention_choice: LogRetentionChoice::OneMonth,
+            log_retention_count: 1000,
             total_estimated_cost_usd: None,
             today_estimated_cost_usd: None,
             provider_estimated_cost_usd: BTreeMap::new(),
             log_estimated_cost_usd: Vec::new(),
             price_cache_count: 0,
             price_cache_age_seconds: None,
+            database_info: DatabaseInfo::default(),
             token_display_mode: tokens::TokenDisplayMode::Human,
             oauth_start_pending: false,
             oauth_poll_pending: false,
@@ -416,6 +434,7 @@ impl CodexSwitchApp {
                 self.log_estimated_cost_usd = data.log_estimated_cost_usd;
                 self.price_cache_count = data.price_cache_count;
                 self.price_cache_age_seconds = data.price_cache_age_seconds;
+                self.database_info = data.database_info;
                 self.quota_snapshots = data.quota_snapshots;
                 self.balance_snapshots = data.balance_snapshots;
             }

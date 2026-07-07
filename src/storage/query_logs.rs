@@ -7,6 +7,13 @@ use sqlx::Row;
 
 const UNASSIGNED_UPSTREAM_ID: &str = "none";
 
+#[derive(Debug, Clone, Copy)]
+pub enum RequestLogRetention {
+    Since(DateTime<Utc>),
+    Newest(i64),
+    Failed,
+}
+
 impl Store {
     pub async fn insert_request_log(&self, log: RequestLog) -> anyhow::Result<()> {
         let now = log.ts.unwrap_or_else(Utc::now);
@@ -194,6 +201,71 @@ impl Store {
             .await?;
         Ok(row.get("count"))
     }
+
+    pub async fn cleanup_request_logs(
+        &self,
+        retention: RequestLogRetention,
+    ) -> anyhow::Result<i64> {
+        let mut tx = self.pool().begin().await?;
+        let deleted = match retention {
+            RequestLogRetention::Since(cutoff) => sqlx::query("DELETE FROM request_logs WHERE ts < ?1")
+                .bind(cutoff.to_rfc3339())
+                .execute(&mut *tx)
+                .await?
+                .rows_affected(),
+            RequestLogRetention::Newest(limit) => {
+                let keep_count = limit.max(0);
+                sqlx::query(
+                    "DELETE FROM request_logs
+                     WHERE id NOT IN (
+                        SELECT id FROM request_logs ORDER BY id DESC LIMIT ?1
+                     )",
+                )
+                .bind(keep_count)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected()
+            }
+            RequestLogRetention::Failed => sqlx::query("DELETE FROM request_logs WHERE status >= 400")
+                .execute(&mut *tx)
+                .await?
+                .rows_affected(),
+        };
+        rebuild_usage_rollups(&mut tx).await?;
+        tx.commit().await?;
+        Ok(deleted as i64)
+    }
+}
+
+async fn rebuild_usage_rollups(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM usage_rollups")
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query(
+        "INSERT INTO usage_rollups (
+            day, upstream_id, upstream_name, requests, input_tokens, output_tokens,
+            cache_read_tokens, cache_creation_tokens, total_tokens
+         )
+         SELECT
+            substr(ts, 1, 10),
+            COALESCE(upstream_id, ?1),
+            COALESCE(MAX(upstream_name), ?2),
+            COUNT(*),
+            COALESCE(SUM(input_tokens), 0),
+            COALESCE(SUM(output_tokens), 0),
+            COALESCE(SUM(cache_read_tokens), 0),
+            COALESCE(SUM(cache_creation_tokens), 0),
+            COALESCE(SUM(total_tokens), 0)
+         FROM request_logs
+         GROUP BY substr(ts, 1, 10), COALESCE(upstream_id, ?1)",
+    )
+    .bind(UNASSIGNED_UPSTREAM_ID)
+    .bind("未选择")
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 fn request_log_from_row(row: sqlx::sqlite::SqliteRow) -> RequestLog {
@@ -234,6 +306,7 @@ fn usage_from_rollup(row: &sqlx::sqlite::SqliteRow) -> TokenUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[tokio::test]
     async fn provider_stats_hides_unassigned_rollup() {
@@ -257,13 +330,104 @@ mod tests {
         assert_eq!(stats[0].usage.total_tokens, 7);
     }
 
+    #[tokio::test]
+    async fn cleanup_request_logs_rebuilds_rollups() {
+        let path = std::env::temp_dir()
+            .join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
+        let store = Store::open(path).await.unwrap();
+        let old_ts = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+        let new_ts = Utc.with_ymd_and_hms(2024, 1, 3, 12, 0, 0).unwrap();
+        store
+            .insert_request_log(test_log_at(
+                old_ts,
+                Some("upstream-a"),
+                Some("relay-a"),
+                5,
+            ))
+            .await
+            .unwrap();
+        store
+            .insert_request_log(test_log_at(
+                new_ts,
+                Some("upstream-a"),
+                Some("relay-a"),
+                7,
+            ))
+            .await
+            .unwrap();
+
+        let deleted = store
+            .cleanup_request_logs(RequestLogRetention::Since(
+                Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap(),
+            ))
+            .await
+            .unwrap();
+        let stats = store.dashboard_stats().await.unwrap();
+        let providers = store.provider_stats().await.unwrap();
+
+        assert_eq!(deleted, 1);
+        assert_eq!(store.request_log_count().await.unwrap(), 1);
+        assert_eq!(stats.total_requests, 1);
+        assert_eq!(stats.total_usage.total_tokens, 7);
+        assert_eq!(providers[0].requests, 1);
+        assert_eq!(providers[0].usage.total_tokens, 7);
+    }
+
+    #[tokio::test]
+    async fn cleanup_request_logs_can_delete_failed_requests() {
+        let path = std::env::temp_dir()
+            .join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
+        let store = Store::open(path).await.unwrap();
+        store
+            .insert_request_log(test_log_with_status(Some("upstream-a"), Some("relay-a"), 5, 200))
+            .await
+            .unwrap();
+        store
+            .insert_request_log(test_log_with_status(Some("upstream-a"), Some("relay-a"), 7, 500))
+            .await
+            .unwrap();
+
+        let deleted = store
+            .cleanup_request_logs(RequestLogRetention::Failed)
+            .await
+            .unwrap();
+        let logs = store.recent_logs_page(10, 0).await.unwrap();
+        let stats = store.dashboard_stats().await.unwrap();
+
+        assert_eq!(deleted, 1);
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].status, 200);
+        assert_eq!(stats.total_requests, 1);
+        assert_eq!(stats.total_usage.total_tokens, 5);
+    }
+
     fn test_log(
         upstream_id: Option<&str>,
         upstream_name: Option<&str>,
         total_tokens: i64,
     ) -> RequestLog {
+        test_log_at(Utc::now(), upstream_id, upstream_name, total_tokens)
+    }
+
+    fn test_log_with_status(
+        upstream_id: Option<&str>,
+        upstream_name: Option<&str>,
+        total_tokens: i64,
+        status: i64,
+    ) -> RequestLog {
+        let mut log = test_log(upstream_id, upstream_name, total_tokens);
+        log.status = status;
+        log
+    }
+
+    fn test_log_at(
+        ts: DateTime<Utc>,
+        upstream_id: Option<&str>,
+        upstream_name: Option<&str>,
+        total_tokens: i64,
+    ) -> RequestLog {
         RequestLog {
-            ts: None,
+            ts: Some(ts),
             upstream_id: upstream_id.map(str::to_string),
             upstream_name: upstream_name.map(str::to_string),
             endpoint: "/responses".to_string(),

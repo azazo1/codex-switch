@@ -2,6 +2,7 @@ use super::{
     upstreams::{balance_snapshot_for, balance_snapshot_label},
     CodexSwitchApp, tokens,
 };
+use crate::app::platform;
 use crate::core::models::UpstreamKind;
 use eframe::egui::{self, Color32};
 use std::time::{Duration, Instant};
@@ -139,6 +140,74 @@ impl CodexSwitchApp {
             self.query_selected_balance(&id);
         }
         self.token_display_mode = token_display_mode;
+        ui.separator();
+        ui.heading("SQLite 数据库");
+        ui.horizontal_wrapped(|ui| {
+            ui.label("路径");
+            ui.monospace(&self.database_info.path);
+            if ui
+                .add_enabled(
+                    !self.database_info.path.is_empty(),
+                    egui::Button::new("打开位置"),
+                )
+                .clicked()
+            {
+                match platform::open_file_location(&self.database_info.path) {
+                    Ok(()) => {
+                        self.status = "已打开数据库位置".to_string();
+                    }
+                    Err(err) => {
+                        self.status = format!("打开数据库位置失败: {err}");
+                    }
+                }
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!(
+                "文件大小: {}",
+                format_bytes(database_total_bytes(&self.database_info))
+            ));
+            ui.label(format!(
+                "主文件: {}",
+                format_bytes(self.database_info.main_file_bytes)
+            ));
+            ui.label(format!(
+                "WAL: {}",
+                format_bytes(self.database_info.wal_file_bytes)
+            ));
+            ui.label(format!(
+                "SHM: {}",
+                format_bytes(self.database_info.shm_file_bytes)
+            ));
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!("页面: {}", self.database_info.page_count));
+            ui.label(format!("页面大小: {}", format_bytes(self.database_info.page_size as u64)));
+            ui.label(format!("空闲页: {}", self.database_info.freelist_count));
+            ui.label(format!("日志条数: {}", self.database_info.request_log_count));
+        });
+    }
+}
+
+fn database_total_bytes(info: &crate::core::models::DatabaseInfo) -> u64 {
+    info.main_file_bytes + info.wal_file_bytes + info.shm_file_bytes
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut value = bytes as f64;
+    let mut unit = UNITS[0];
+    for next_unit in UNITS.iter().skip(1) {
+        if value < 1024.0 {
+            break;
+        }
+        value /= 1024.0;
+        unit = next_unit;
+    }
+    if unit == "B" {
+        format!("{bytes} {unit}")
+    } else {
+        format!("{value:.1} {unit}")
     }
 }
 
