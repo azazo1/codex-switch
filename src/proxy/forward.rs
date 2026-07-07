@@ -420,7 +420,7 @@ fn build_live_response_stream(
     let live_guard = LiveRequestGuard::new(state.clone(), request_id.clone(), log_draft.clone());
     stream! {
         let mut live_guard = live_guard;
-        state.live_requests.start(LiveRequestMeta {
+        let mut terminate_rx = state.live_requests.start(LiveRequestMeta {
             id: request_id.clone(),
             upstream_name: Some(upstream_name.clone()),
             endpoint: endpoint.clone(),
@@ -434,6 +434,7 @@ fn build_live_response_stream(
         let mut usage = TokenUsage::default();
         let mut sse_buffer = String::new();
         let mut upstream_stream = response.bytes_stream();
+        let mut termination_closed = false;
 
         if convert_chat {
             let created = format!(
@@ -443,7 +444,33 @@ fn build_live_response_stream(
             yield Ok(Bytes::from(created));
         }
 
-        while let Some(chunk) = upstream_stream.next().await {
+        loop {
+            let next_chunk = if termination_closed {
+                upstream_stream.next().await
+            } else {
+                tokio::select! {
+                    changed = terminate_rx.changed() => {
+                        match changed {
+                            Ok(()) if *terminate_rx.borrow() => {
+                                let error_message = "terminated by user".to_string();
+                                log_draft.merge_usage(&usage);
+                                log_draft.record(Some(error_message)).await;
+                                live_guard.finish();
+                                return;
+                            }
+                            Ok(()) => continue,
+                            Err(_) => {
+                                termination_closed = true;
+                                continue;
+                            }
+                        }
+                    }
+                    chunk = upstream_stream.next() => chunk,
+                }
+            };
+            let Some(chunk) = next_chunk else {
+                break;
+            };
             let chunk = match chunk {
                 Ok(chunk) => chunk,
                 Err(err) => {

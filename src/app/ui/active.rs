@@ -16,12 +16,13 @@ impl CodexSwitchApp {
             return;
         }
         let tail_width = live_tail_width(ui.available_width());
+        let mut terminate_request_id = None;
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 egui::Grid::new("active_connections_grid")
                     .striped(true)
-                    .num_columns(7)
+                    .num_columns(8)
                     .spacing([24.0, 10.0])
                     .show(ui, |ui| {
                         ui.strong("上游");
@@ -31,6 +32,7 @@ impl CodexSwitchApp {
                         ui.strong("实时输出窗口");
                         ui.strong("已持续");
                         ui.strong("开始时间");
+                        ui.strong("操作");
                         ui.end_row();
 
                         for item in &self.live_connections {
@@ -42,10 +44,30 @@ impl CodexSwitchApp {
                             live_tail_label(ui, item, tail_width);
                             ui.label(format_elapsed(item));
                             ui.label(format_started_at(item));
+                            if ui
+                                .add_enabled(!item.terminating, egui::Button::new(terminate_text(item)))
+                                .on_hover_text("直接终止该活跃请求")
+                                .clicked()
+                            {
+                                terminate_request_id = Some(item.id.clone());
+                            }
                             ui.end_row();
                         }
                     });
             });
+        if let Some(request_id) = terminate_request_id {
+            self.terminate_live_connection(&request_id);
+        }
+    }
+
+    fn terminate_live_connection(&mut self, request_id: &str) {
+        if self.state.live_requests.terminate(request_id) {
+            self.status = "正在终止活跃请求".to_string();
+            self.live_connections = self.state.live_requests.snapshots();
+            self.state.events.bump_live_streams();
+        } else {
+            self.status = "活跃请求已经结束".to_string();
+        }
     }
 }
 
@@ -69,6 +91,14 @@ fn live_tail_label(ui: &mut egui::Ui, item: &LiveRequestSnapshot, width: f32) {
         egui::Label::new(visible).truncate(),
     )
     .on_hover_text(text);
+}
+
+fn terminate_text(item: &LiveRequestSnapshot) -> &'static str {
+    if item.terminating {
+        "终止中"
+    } else {
+        "终止"
+    }
 }
 
 fn tail_window(text: &str, max_chars: usize) -> &str {

@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
+use tokio::sync::watch;
 
 const MAX_TAIL_BYTES: usize = 768;
 
@@ -27,6 +28,7 @@ pub struct LiveRequestSnapshot {
     pub reasoning_effort: Option<String>,
     pub tail: String,
     pub started_at: DateTime<Utc>,
+    pub terminating: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -34,18 +36,24 @@ struct LiveRequest {
     meta: LiveRequestMeta,
     tail: String,
     started_at: DateTime<Utc>,
+    terminate_tx: watch::Sender<bool>,
+    terminating: bool,
 }
 
 impl LiveRequestStore {
-    pub fn start(&self, meta: LiveRequestMeta) {
+    pub fn start(&self, meta: LiveRequestMeta) -> watch::Receiver<bool> {
+        let (terminate_tx, terminate_rx) = watch::channel(false);
         let request = LiveRequest {
             meta: meta.clone(),
             tail: String::new(),
             started_at: Utc::now(),
+            terminate_tx,
+            terminating: false,
         };
         if let Ok(mut inner) = self.inner.write() {
             inner.insert(meta.id, request);
         }
+        terminate_rx
     }
 
     pub fn append_delta(&self, id: &str, delta: &str) -> bool {
@@ -68,6 +76,18 @@ impl LiveRequestStore {
         }
     }
 
+    pub fn terminate(&self, id: &str) -> bool {
+        let Ok(mut inner) = self.inner.write() else {
+            return false;
+        };
+        let Some(request) = inner.get_mut(id) else {
+            return false;
+        };
+        request.terminating = true;
+        request.terminate_tx.send_replace(true);
+        true
+    }
+
     pub fn snapshots(&self) -> Vec<LiveRequestSnapshot> {
         let Ok(inner) = self.inner.read() else {
             return Vec::new();
@@ -82,6 +102,7 @@ impl LiveRequestStore {
                 reasoning_effort: request.meta.reasoning_effort.clone(),
                 tail: request.tail.clone(),
                 started_at: request.started_at,
+                terminating: request.terminating,
             })
             .collect()
     }
@@ -106,5 +127,43 @@ fn append_tail(tail: &mut String, delta: &str) {
         .unwrap_or(0);
     if split > 0 {
         tail.drain(..split);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request_meta() -> LiveRequestMeta {
+        LiveRequestMeta {
+            id: "request-a".to_string(),
+            upstream_name: Some("upstream-a".to_string()),
+            endpoint: "/responses".to_string(),
+            model: Some("model-a".to_string()),
+            reasoning_effort: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn terminate_marks_snapshot_and_notifies_receiver() {
+        let store = LiveRequestStore::default();
+        let mut terminate_rx = store.start(request_meta());
+
+        assert!(!store.snapshots()[0].terminating);
+        assert!(store.terminate("request-a"));
+        assert!(store.snapshots()[0].terminating);
+
+        terminate_rx.changed().await.unwrap();
+        assert!(*terminate_rx.borrow());
+    }
+
+    #[test]
+    fn finish_removes_request() {
+        let store = LiveRequestStore::default();
+        store.start(request_meta());
+
+        store.finish("request-a");
+
+        assert!(store.snapshots().is_empty());
     }
 }
