@@ -64,6 +64,7 @@ pub struct CodexSwitchApp {
     tray: Option<TrayController>,
     tray_init_failed: bool,
     exit_requested: bool,
+    exit_confirm_open: bool,
     bind_addr: String,
     local_key: String,
     local_key_copied_at: Option<Instant>,
@@ -136,6 +137,7 @@ impl CodexSwitchApp {
             tray: None,
             tray_init_failed: false,
             exit_requested: false,
+            exit_confirm_open: false,
             bind_addr,
             local_key,
             local_key_copied_at: None,
@@ -264,11 +266,15 @@ impl CodexSwitchApp {
                 }
             }
             TrayCommand::Quit => {
-                self.exit_requested = true;
-                self.stop_server();
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                self.exit_app(ctx);
             }
         }
+    }
+
+    fn exit_app(&mut self, ctx: &egui::Context) {
+        self.exit_requested = true;
+        self.stop_server();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
     fn show_main_window(&mut self, ctx: &egui::Context) {
@@ -619,8 +625,14 @@ impl eframe::App for CodexSwitchApp {
                 if ui.button("刷新").clicked() {
                     self.refresh_all();
                 }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("退出").clicked() {
+                        self.exit_confirm_open = true;
+                    }
+                });
             });
         });
+        self.exit_confirm_window(ctx);
 
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -637,6 +649,33 @@ impl eframe::App for CodexSwitchApp {
                 Tab::Logs => self.logs_ui(ui),
             }
         });
+    }
+}
+
+impl CodexSwitchApp {
+    fn exit_confirm_window(&mut self, ctx: &egui::Context) {
+        if !self.exit_confirm_open {
+            return;
+        }
+        let mut open = self.exit_confirm_open;
+        egui::Window::new("确认退出")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label("确认退出 Codex Switch?");
+                ui.horizontal(|ui| {
+                    if ui.button("退出").clicked() {
+                        self.exit_confirm_open = false;
+                        self.exit_app(ctx);
+                    }
+                    if ui.button("取消").clicked() {
+                        self.exit_confirm_open = false;
+                    }
+                });
+            });
+        self.exit_confirm_open = open && self.exit_confirm_open;
     }
 }
 
