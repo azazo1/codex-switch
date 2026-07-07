@@ -3,6 +3,10 @@ use crate::core::models::RequestLog;
 use chrono::Local;
 use eframe::egui;
 
+const LOG_RANGE_LABEL_WIDTH: f32 = 220.0;
+const LOG_PAGE_BUTTON_WIDTH: f32 = 32.0;
+const LOG_PAGE_SLOT_COUNT: usize = 7;
+
 impl CodexSwitchApp {
     pub(super) fn logs_ui(&mut self, ui: &mut egui::Ui) {
         ui.heading("最近请求");
@@ -57,10 +61,13 @@ impl CodexSwitchApp {
         let mut target_page = None;
         let mut target_page_size = None;
         ui.horizontal(|ui| {
-            ui.label(format!(
-                "显示 {range_start} 至 {range_end} 共 {} 条结果",
-                self.log_total_count
-            ));
+            ui.add_sized(
+                [LOG_RANGE_LABEL_WIDTH, ui.spacing().interact_size.y],
+                egui::Label::new(format!(
+                    "显示 {range_start} 至 {range_end} 共 {} 条结果",
+                    self.log_total_count
+                )),
+            );
             ui.label("每页:");
             let mut page_size = self.log_page_size;
             egui::ComboBox::from_id_salt("log_page_size")
@@ -75,32 +82,22 @@ impl CodexSwitchApp {
                         }
                     }
                 });
-            if ui
-                .add_enabled(self.log_page > 0, egui::Button::new("<"))
-                .clicked()
-            {
+            if log_page_button(ui, self.log_page > 0, false, "<").clicked() {
                 target_page = Some(self.log_page - 1);
             }
             for item in log_page_items(self.log_page, total_pages) {
                 match item {
-                    Some(page) => {
+                    LogPageItem::Page(page) => {
                         let selected = page == self.log_page;
-                        if ui
-                            .selectable_label(selected, (page + 1).to_string())
-                            .clicked()
-                        {
+                        if log_page_button(ui, true, selected, (page + 1).to_string()).clicked() {
                             target_page = Some(page);
                         }
                     }
-                    None => {
-                        ui.label("...");
-                    }
+                    LogPageItem::Ellipsis => log_page_slot(ui, "..."),
+                    LogPageItem::Empty => log_page_slot(ui, ""),
                 }
             }
-            if ui
-                .add_enabled(self.log_page + 1 < total_pages, egui::Button::new(">"))
-                .clicked()
-            {
+            if log_page_button(ui, self.log_page + 1 < total_pages, false, ">").clicked() {
                 target_page = Some(self.log_page + 1);
             }
         });
@@ -115,6 +112,41 @@ impl CodexSwitchApp {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogPageItem {
+    Page(usize),
+    Ellipsis,
+    Empty,
+}
+
+fn log_page_button(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    selected: bool,
+    text: impl Into<egui::WidgetText>,
+) -> egui::Response {
+    let response = ui
+        .add_enabled_ui(enabled, |ui| {
+            ui.add_sized(
+                [LOG_PAGE_BUTTON_WIDTH, ui.spacing().interact_size.y],
+                egui::Button::new(text).selected(selected),
+            )
+        })
+        .inner;
+    if enabled {
+        response
+    } else {
+        response.on_disabled_hover_text("不可翻页")
+    }
+}
+
+fn log_page_slot(ui: &mut egui::Ui, text: &str) {
+    ui.add_sized(
+        [LOG_PAGE_BUTTON_WIDTH, ui.spacing().interact_size.y],
+        egui::Label::new(text),
+    );
+}
+
 fn log_result_range(page: usize, page_size: usize, total_count: i64) -> (i64, i64) {
     if total_count <= 0 || page_size == 0 {
         return (0, 0);
@@ -124,33 +156,51 @@ fn log_result_range(page: usize, page_size: usize, total_count: i64) -> (i64, i6
     (start.min(total_count), end.min(total_count))
 }
 
-fn log_page_items(current_page: usize, total_pages: usize) -> Vec<Option<usize>> {
+fn log_page_items(current_page: usize, total_pages: usize) -> Vec<LogPageItem> {
     if total_pages == 0 {
-        return Vec::new();
+        return vec![LogPageItem::Empty; LOG_PAGE_SLOT_COUNT];
     }
-    if total_pages <= 6 {
-        return (0..total_pages).map(Some).collect();
+    if total_pages <= LOG_PAGE_SLOT_COUNT {
+        return (0..LOG_PAGE_SLOT_COUNT)
+            .map(|index| {
+                if index < total_pages {
+                    LogPageItem::Page(index)
+                } else {
+                    LogPageItem::Empty
+                }
+            })
+            .collect();
     }
     if current_page <= 2 {
-        return vec![Some(0), Some(1), Some(2), None, Some(total_pages - 1)];
+        return vec![
+            LogPageItem::Page(0),
+            LogPageItem::Page(1),
+            LogPageItem::Page(2),
+            LogPageItem::Page(3),
+            LogPageItem::Page(4),
+            LogPageItem::Ellipsis,
+            LogPageItem::Page(total_pages - 1),
+        ];
     }
     if current_page + 3 >= total_pages {
         return vec![
-            Some(0),
-            None,
-            Some(total_pages - 3),
-            Some(total_pages - 2),
-            Some(total_pages - 1),
+            LogPageItem::Page(0),
+            LogPageItem::Ellipsis,
+            LogPageItem::Page(total_pages - 5),
+            LogPageItem::Page(total_pages - 4),
+            LogPageItem::Page(total_pages - 3),
+            LogPageItem::Page(total_pages - 2),
+            LogPageItem::Page(total_pages - 1),
         ];
     }
     vec![
-        Some(0),
-        None,
-        Some(current_page - 1),
-        Some(current_page),
-        Some(current_page + 1),
-        None,
-        Some(total_pages - 1),
+        LogPageItem::Page(0),
+        LogPageItem::Ellipsis,
+        LogPageItem::Page(current_page - 1),
+        LogPageItem::Page(current_page),
+        LogPageItem::Page(current_page + 1),
+        LogPageItem::Ellipsis,
+        LogPageItem::Page(total_pages - 1),
     ]
 }
 
