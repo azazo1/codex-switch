@@ -3,7 +3,7 @@ use crate::proxy::forward;
 use axum::{
     Router,
     body::Bytes,
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, State},
     http::{HeaderMap, Method, StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -36,6 +36,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/v1/chat/completions", post(chat_completions))
         .route("/chat/completions", post(chat_completions))
+        .layer(DefaultBodyLimit::disable())
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -192,6 +193,27 @@ mod tests {
         let logs = state.store.recent_logs(10).await.unwrap();
         assert_eq!(logs.len(), 3);
         assert!(logs.iter().any(|log| log.endpoint == "/responses/compact"));
+    }
+
+    #[tokio::test]
+    async fn responses_route_accepts_large_payloads() {
+        let (mock_base, hits) = spawn_mock(MockMode::ResponsesJson).await;
+        let state = test_state(&mock_base, WireApi::Responses).await;
+        let proxy_base = spawn_proxy(state).await;
+        let input = "x".repeat(3 * 1024 * 1024);
+
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({"model":"gpt-test","input":input}))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let hits = hits.lock().await;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].body["input"].as_str().map(str::len), Some(3 * 1024 * 1024));
     }
 
     #[tokio::test]
@@ -355,6 +377,7 @@ mod tests {
         };
         let router = Router::new()
             .route("/*path", get(mock_handler).post(mock_handler))
+            .layer(DefaultBodyLimit::disable())
             .with_state(state);
         (spawn_server(router).await, hits)
     }
