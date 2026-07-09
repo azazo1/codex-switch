@@ -24,7 +24,11 @@ pub fn rewrite_model(body: &[u8], model: &str) -> anyhow::Result<Vec<u8>> {
 }
 
 pub fn responses_subpath_from_uri(path: &str) -> String {
-    for marker in ["/v1/responses", "/responses", "/backend-api/codex/responses"] {
+    for marker in [
+        "/v1/responses",
+        "/responses",
+        "/backend-api/codex/responses",
+    ] {
         if let Some(rest) = path.strip_prefix(marker) {
             return rest.trim_end_matches('/').to_string();
         }
@@ -69,7 +73,10 @@ mod tests {
 
     #[test]
     fn preserves_images_subpath() {
-        assert_eq!(images_subpath_from_uri("/v1/images/generations"), "/generations");
+        assert_eq!(
+            images_subpath_from_uri("/v1/images/generations"),
+            "/generations"
+        );
         assert_eq!(images_subpath_from_uri("/images/edits"), "/edits");
     }
 
@@ -88,8 +95,11 @@ mod tests {
 
     #[test]
     fn rewrites_root_model() {
-        let body = rewrite_model(br#"{"model":"client-model","input":"hello"}"#, "target-model")
-            .unwrap();
+        let body = rewrite_model(
+            br#"{"model":"client-model","input":"hello"}"#,
+            "target-model",
+        )
+        .unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["model"], "target-model");
     }

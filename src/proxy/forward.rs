@@ -6,8 +6,8 @@ use crate::proxy::transform;
 use crate::quota;
 use crate::scheduler::{self, SchedulerFailureKind};
 use crate::usage;
-use auth::validate_local_access;
 use async_stream::stream;
+use auth::validate_local_access;
 use axum::{
     body::Bytes,
     http::{HeaderMap, Method, StatusCode, Uri},
@@ -15,7 +15,9 @@ use axum::{
 };
 use futures_util::StreamExt;
 use headers::apply_headers;
-use logging::{ActiveRequestGuard, AttemptLog, LiveRequestGuard, StreamLogDraft, record_attempt_log};
+use logging::{
+    ActiveRequestGuard, AttemptLog, LiveRequestGuard, StreamLogDraft, record_attempt_log,
+};
 use response::{build_response, build_stream_response, to_axum_headers};
 use select::selection_plan;
 use serde_json::{Value, json};
@@ -224,7 +226,8 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
     let candidate_count = plan.candidates.len();
     let mut last_error = None;
     for (index, upstream) in plan.candidates.iter().cloned().enumerate() {
-        match forward_with_upstream(&request, upstream.clone(), plan.target_model.as_deref()).await {
+        match forward_with_upstream(&request, upstream.clone(), plan.target_model.as_deref()).await
+        {
             Ok(result) => {
                 if let Some(failure) = result.failure_kind {
                     let count = request
@@ -330,9 +333,9 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
             }
         }
     }
-    Err(ForwardFailure::unlogged(
-        last_error.unwrap_or_else(|| anyhow::anyhow!("no scheduled upstream handled request")),
-    ))
+    Err(ForwardFailure::unlogged(last_error.unwrap_or_else(|| {
+        anyhow::anyhow!("no scheduled upstream handled request")
+    })))
 }
 
 async fn forward_with_upstream(
@@ -353,15 +356,13 @@ async fn forward_with_upstream(
             anyhow::bail!("codex oauth upstream is only available for responses requests");
         }
         target_body = transform::normalize_oauth_body(&target_body, request.compact)?;
-        target_url = format!(
-            "https://chatgpt.com/backend-api/codex{}",
-            request.endpoint
-        );
+        target_url = format!("https://chatgpt.com/backend-api/codex{}", request.endpoint);
     } else if request.endpoint_kind.is_responses() && upstream.wire_api == WireApi::ChatCompletions
     {
         target_body = usage::responses_to_chat_json(&target_body)?;
         target_url = transform::build_endpoint(&upstream.base_url, "/chat/completions");
-    } else if request.endpoint_kind.is_responses() || request.endpoint_kind == OpenAiEndpoint::Images
+    } else if request.endpoint_kind.is_responses()
+        || request.endpoint_kind == OpenAiEndpoint::Images
     {
         target_url = transform::build_endpoint(&upstream.base_url, &request.endpoint);
     } else {

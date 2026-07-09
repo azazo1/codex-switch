@@ -1,3 +1,4 @@
+use crate::app::tray::{TrayCommand, TrayController};
 use crate::app::{platform, state::AppState};
 use crate::balance;
 use crate::cache_keepalive::CacheKeepaliveSessionSnapshot;
@@ -11,17 +12,16 @@ use crate::oauth;
 use crate::pricing;
 use crate::proxy::{self, ServerHandle};
 use crate::quota as quota_api;
-use crate::app::tray::{TrayCommand, TrayController};
 use crate::storage::RequestLogFilter;
 use chrono::{Datelike, Local, TimeZone, Timelike, Utc};
 use data::load_view_data;
 use eframe::egui;
+use scheduler::ScheduleGroupEditor;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use scheduler::ScheduleGroupEditor;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::runtime::Runtime;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use upstream_editor::UpstreamEditor;
 
 const LOG_PAGE_SIZE: usize = 20;
@@ -30,9 +30,9 @@ const REQUEST_LOG_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const HIDDEN_REPAINT_INTERVAL: Duration = Duration::from_secs(5);
 const CACHE_KEEPALIVE_VISIBLE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
-mod dashboard;
 mod active;
 mod cache_keepalive;
+mod dashboard;
 mod data;
 mod logs;
 mod quota;
@@ -693,15 +693,12 @@ impl CodexSwitchApp {
     fn refresh_all(&mut self) {
         let log_limit = self.log_page_size as i64;
         let log_offset = (self.log_page * self.log_page_size) as i64;
-        match self
-            .runtime
-            .block_on(load_view_data(
-                &self.state,
-                log_limit,
-                log_offset,
-                &self.log_runtime_filter,
-            ))
-        {
+        match self.runtime.block_on(load_view_data(
+            &self.state,
+            log_limit,
+            log_offset,
+            &self.log_runtime_filter,
+        )) {
             Ok(data) => {
                 self.upstreams = data.upstreams;
                 self.cache_keepalive_settings = data.cache_keepalive_settings;
@@ -1016,15 +1013,13 @@ impl eframe::App for CodexSwitchApp {
             });
         });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            match self.tab {
-                Tab::Dashboard => self.dashboard_ui(ui),
-                Tab::Upstreams => self.upstreams_ui(ui),
-                Tab::Scheduler => self.scheduler_ui(ui),
-                Tab::CacheKeepalive => self.cache_keepalive_ui(ui),
-                Tab::ActiveConnections => self.active_connections_ui(ui),
-                Tab::Logs => self.logs_ui(ui),
-            }
+        egui::CentralPanel::default().show(ctx, |ui| match self.tab {
+            Tab::Dashboard => self.dashboard_ui(ui),
+            Tab::Upstreams => self.upstreams_ui(ui),
+            Tab::Scheduler => self.scheduler_ui(ui),
+            Tab::CacheKeepalive => self.cache_keepalive_ui(ui),
+            Tab::ActiveConnections => self.active_connections_ui(ui),
+            Tab::Logs => self.logs_ui(ui),
         });
     }
 }

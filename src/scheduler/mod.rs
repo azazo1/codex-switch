@@ -92,9 +92,7 @@ impl SchedulerRuntime {
             ScheduleMode::ModelMapping => {
                 anyhow::bail!("model mapping schedule group has no matching route");
             }
-            ScheduleMode::Random | ScheduleMode::RoundRobin
-                if has_affinity_candidate =>
-            {
+            ScheduleMode::Random | ScheduleMode::RoundRobin if has_affinity_candidate => {
                 affinity_candidates(upstreams, affinity_upstream_id.as_deref())
             }
             ScheduleMode::Random => random_candidates(&group, upstreams),
@@ -102,8 +100,7 @@ impl SchedulerRuntime {
             ScheduleMode::Failover => failover_candidates(&inner, &group, upstreams),
         };
 
-        if let Some(upstream_id) = affinity_upstream_id
-        {
+        if let Some(upstream_id) = affinity_upstream_id {
             move_candidate_to_front(&mut candidates, &upstream_id);
         }
 
@@ -192,7 +189,10 @@ pub fn classify_response(status: StatusCode, body: &[u8]) -> Option<SchedulerFai
     None
 }
 
-fn fixed_candidates(group: &ScheduleGroup, upstreams: Vec<Upstream>) -> anyhow::Result<Vec<Upstream>> {
+fn fixed_candidates(
+    group: &ScheduleGroup,
+    upstreams: Vec<Upstream>,
+) -> anyhow::Result<Vec<Upstream>> {
     let Some(id) = &group.fixed_upstream_id else {
         anyhow::bail!("fixed schedule group has no upstream selected");
     };
@@ -286,7 +286,10 @@ fn weighted_index(upstreams: &[Upstream], mut value: i64) -> Option<usize> {
 }
 
 fn total_weight(upstreams: &[Upstream]) -> Option<i64> {
-    let total = upstreams.iter().map(|upstream| upstream.weight.max(1)).sum();
+    let total = upstreams
+        .iter()
+        .map(|upstream| upstream.weight.max(1))
+        .sum();
     if total > 0 { Some(total) } else { None }
 }
 
@@ -378,7 +381,10 @@ pub fn rewrite_model_template(template: &str, captures: &[String]) -> String {
 }
 
 pub fn is_exact_pattern(pattern: &str) -> bool {
-    !pattern.as_bytes().iter().any(|byte| matches!(byte, b'*' | b'?'))
+    !pattern
+        .as_bytes()
+        .iter()
+        .any(|byte| matches!(byte, b'*' | b'?'))
 }
 
 fn glob_captures_inner(
@@ -497,7 +503,13 @@ mod tests {
         let upstreams = vec![upstream("a"), upstream("b")];
 
         let first = runtime
-            .plan(group.clone(), upstreams.clone(), body, "/responses", Some("gpt-test"))
+            .plan(
+                group.clone(),
+                upstreams.clone(),
+                body,
+                "/responses",
+                Some("gpt-test"),
+            )
             .await
             .unwrap();
         let selected = first.candidates[0].id.clone();
@@ -542,7 +554,10 @@ mod tests {
         let captures = glob_captures("vendor/*/model-?", "vendor/acme/model-a").unwrap();
         assert_eq!(captures, vec!["acme", "a"]);
         assert_eq!(rewrite_model_template("*/?", &captures), "acme/a");
-        assert_eq!(rewrite_model_template("fixed-model", &captures), "fixed-model");
+        assert_eq!(
+            rewrite_model_template("fixed-model", &captures),
+            "fixed-model"
+        );
     }
 
     fn upstream(id: &str) -> Upstream {

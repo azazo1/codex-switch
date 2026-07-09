@@ -133,8 +133,14 @@ pub async fn query_and_store(
     let snapshot = match upstream.balance_provider {
         BalanceProvider::Auto => {
             if let Some(provider) = detect_provider(&upstream.base_url) {
-                query_balance(state, &upstream.id, provider, &upstream.base_url, &credentials)
-                    .await?
+                query_balance(
+                    state,
+                    &upstream.id,
+                    provider,
+                    &upstream.base_url,
+                    &credentials,
+                )
+                .await?
             } else {
                 query_common_panel(
                     state,
@@ -148,7 +154,14 @@ pub async fn query_and_store(
         }
         BalanceProvider::Unsupported => return Err(anyhow!("unsupported balance provider")),
         provider => {
-            query_balance(state, &upstream.id, provider, &upstream.base_url, &credentials).await?
+            query_balance(
+                state,
+                &upstream.id,
+                provider,
+                &upstream.base_url,
+                &credentials,
+            )
+            .await?
         }
     };
     state.store.save_balance_snapshot(&snapshot).await?;
@@ -263,8 +276,8 @@ fn parse_balance(
         }
         BalanceProvider::SiliconFlowCn | BalanceProvider::SiliconFlowGlobal => {
             let data = body.get("data").unwrap_or(body);
-            snapshot.remaining = parse_f64_field(data, "totalBalance")
-                .or_else(|| parse_f64_field(data, "balance"));
+            snapshot.remaining =
+                parse_f64_field(data, "totalBalance").or_else(|| parse_f64_field(data, "balance"));
         }
         BalanceProvider::OpenRouter => {
             let data = body.get("data").unwrap_or(body);
@@ -312,10 +325,7 @@ async fn query_common_panel(
         if let Some(user_id) = headers.newapi_user_id {
             request = request.header("New-Api-User", user_id);
         }
-        let response = match request
-            .send()
-            .await
-        {
+        let response = match request.send().await {
             Ok(response) => response,
             Err(err) => {
                 last_error = Some(format!("{}: {err}", item.url));
@@ -343,7 +353,10 @@ async fn query_common_panel(
             last_error = Some(format!(
                 "{}: {}",
                 item.url,
-                snapshot.message.as_deref().unwrap_or("balance query failed")
+                snapshot
+                    .message
+                    .as_deref()
+                    .unwrap_or("balance query failed")
             ));
             continue;
         }
@@ -519,7 +532,13 @@ fn parse_common_balance(
         .or_else(|| {
             number_any(
                 data,
-                &["used", "used_quota", "quota_used", "total_usage", "total_used"],
+                &[
+                    "used",
+                    "used_quota",
+                    "quota_used",
+                    "total_usage",
+                    "total_used",
+                ],
             )
         });
 
@@ -644,9 +663,9 @@ fn parse_common_invalid(
     body: &Value,
 ) -> Option<BalanceSnapshot> {
     let data = body.get("data").unwrap_or(body);
-    let explicit_invalid = [body, data].iter().any(|obj| {
-        bool_any(obj, &["success", "isValid", "is_valid", "is_active"]) == Some(false)
-    });
+    let explicit_invalid = [body, data]
+        .iter()
+        .any(|obj| bool_any(obj, &["success", "isValid", "is_valid", "is_active"]) == Some(false));
     if !explicit_invalid {
         return None;
     }
@@ -680,8 +699,10 @@ fn invalid_snapshot(
 }
 
 fn parse_f64_field(obj: &Value, field: &str) -> Option<f64> {
-    obj.get(field)
-        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+    obj.get(field).and_then(|v| {
+        v.as_f64()
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+    })
 }
 
 fn number_any(obj: &Value, fields: &[&str]) -> Option<f64> {
@@ -689,11 +710,9 @@ fn number_any(obj: &Value, fields: &[&str]) -> Option<f64> {
 }
 
 fn string_any(obj: &Value, fields: &[&str]) -> Option<String> {
-    fields.iter().find_map(|field| {
-        obj.get(*field)
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    })
+    fields
+        .iter()
+        .find_map(|field| obj.get(*field).and_then(Value::as_str).map(str::to_string))
 }
 
 fn bool_any(obj: &Value, fields: &[&str]) -> Option<bool> {

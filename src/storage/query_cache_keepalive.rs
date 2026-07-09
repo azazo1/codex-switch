@@ -8,12 +8,11 @@ impl Store {
         &self,
         upstream_id: &str,
     ) -> anyhow::Result<UpstreamCacheKeepaliveSettings> {
-        let row = sqlx::query(
-            "SELECT * FROM upstream_cache_keepalive_settings WHERE upstream_id = ?1",
-        )
-        .bind(upstream_id)
-        .fetch_optional(self.pool())
-        .await?;
+        let row =
+            sqlx::query("SELECT * FROM upstream_cache_keepalive_settings WHERE upstream_id = ?1")
+                .bind(upstream_id)
+                .fetch_optional(self.pool())
+                .await?;
         Ok(row
             .map(row_to_settings)
             .unwrap_or_else(|| UpstreamCacheKeepaliveSettings::new(upstream_id.to_string())))
@@ -83,8 +82,10 @@ mod tests {
 
     #[tokio::test]
     async fn settings_are_scoped_per_upstream() {
-        let path = std::env::temp_dir()
-            .join(format!("codex-switch-cache-{}.sqlite", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-cache-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
         let store = Store::open(path).await.unwrap();
         let first = upstream("first");
         let second = upstream("second");
@@ -95,7 +96,10 @@ mod tests {
         settings.enabled = true;
         settings.mode = CacheKeepaliveMode::Always;
         settings.max_cacheable_tokens = 230_000;
-        store.save_cache_keepalive_settings(&settings).await.unwrap();
+        store
+            .save_cache_keepalive_settings(&settings)
+            .await
+            .unwrap();
 
         let first_settings = store.cache_keepalive_settings(&first.id).await.unwrap();
         let second_settings = store.cache_keepalive_settings(&second.id).await.unwrap();

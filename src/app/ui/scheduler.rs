@@ -322,7 +322,10 @@ impl CodexSwitchApp {
             }
             for existing in existing_route_rules {
                 if !route_rule_ids.contains(&existing.id) {
-                    self.state.store.delete_schedule_route_rule(&existing.id).await?;
+                    self.state
+                        .store
+                        .delete_schedule_route_rule(&existing.id)
+                        .await?;
                 }
             }
             for rule in route_rules {
@@ -371,11 +374,10 @@ impl CodexSwitchApp {
 
     fn save_scheduler_route_max_hops(&mut self) {
         self.scheduler_route_max_hops = self.scheduler_route_max_hops.max(1);
-        match self.runtime.block_on(
-            self.state
-                .store
-                .set_setting("scheduler_route_max_hops", &self.scheduler_route_max_hops.to_string()),
-        ) {
+        match self.runtime.block_on(self.state.store.set_setting(
+            "scheduler_route_max_hops",
+            &self.scheduler_route_max_hops.to_string(),
+        )) {
             Ok(()) => self.status = "路由设置已保存".to_string(),
             Err(err) => self.status = format!("保存路由设置失败: {err}"),
         }

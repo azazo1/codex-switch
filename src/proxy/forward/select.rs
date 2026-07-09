@@ -1,7 +1,6 @@
 use crate::app::AppState;
 use crate::core::models::{
-    ScheduleGroup, ScheduleMode, ScheduleRouteRule, ScheduleRouteTargetKind, Upstream,
-    UpstreamKind,
+    ScheduleGroup, ScheduleMode, ScheduleRouteRule, ScheduleRouteTargetKind, Upstream, UpstreamKind,
 };
 use crate::scheduler::{
     DirectSchedulerPlan, ScheduleRouteTraceStep, SchedulerPlan, glob_captures,
@@ -128,12 +127,13 @@ async fn resolve_schedule_route(
         }
         let matching_model = target_model.as_deref().unwrap_or(original_model);
         let rules = state.store.list_schedule_route_rules(&group.id).await?;
-        let Some((rule, captures)) = rules
-            .into_iter()
-            .filter(|rule| rule.enabled)
-            .find_map(|rule| {
-                glob_captures(&rule.pattern, matching_model).map(|captures| (rule, captures))
-            })
+        let Some((rule, captures)) =
+            rules
+                .into_iter()
+                .filter(|rule| rule.enabled)
+                .find_map(|rule| {
+                    glob_captures(&rule.pattern, matching_model).map(|captures| (rule, captures))
+                })
         else {
             anyhow::bail!("模型映射调度组没有匹配的路由规则");
         };

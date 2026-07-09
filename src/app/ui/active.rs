@@ -46,7 +46,10 @@ impl CodexSwitchApp {
                             ui.label(format_elapsed(item));
                             ui.label(format_started_at(item));
                             if ui
-                                .add_enabled(!item.terminating, egui::Button::new(terminate_text(item)))
+                                .add_enabled(
+                                    !item.terminating,
+                                    egui::Button::new(terminate_text(item)),
+                                )
                                 .on_hover_text("直接终止该活跃请求")
                                 .clicked()
                             {

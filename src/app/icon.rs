@@ -28,14 +28,9 @@ pub fn tray_icon() -> anyhow::Result<tray_icon::Icon> {
 fn render_svg(svg: &str, size: u32) -> anyhow::Result<Vec<u8>> {
     let tree = usvg::Tree::from_data(svg.as_bytes(), &usvg::Options::default())
         .context("failed to parse icon svg")?;
-    let mut pixmap =
-        tiny_skia::Pixmap::new(size, size).context("failed to create icon pixmap")?;
+    let mut pixmap = tiny_skia::Pixmap::new(size, size).context("failed to create icon pixmap")?;
     let mut pixmap_mut = pixmap.as_mut();
-    resvg::render(
-        &tree,
-        tiny_skia::Transform::identity(),
-        &mut pixmap_mut,
-    );
+    resvg::render(&tree, tiny_skia::Transform::identity(), &mut pixmap_mut);
     Ok(demultiply_rgba(&pixmap))
 }
 

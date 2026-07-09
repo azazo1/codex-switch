@@ -21,9 +21,8 @@ fn main() -> eframe::Result<()> {
         eprintln!("failed to initialize tracing: {err}");
     }
 
-    let runtime = Arc::new(
-        Runtime::new().expect("failed to create tokio runtime for codex switch"),
-    );
+    let runtime =
+        Arc::new(Runtime::new().expect("failed to create tokio runtime for codex switch"));
     let app_state = runtime
         .block_on(app::AppState::new())
         .expect("failed to initialize application state");

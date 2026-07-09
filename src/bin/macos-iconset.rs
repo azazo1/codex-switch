@@ -69,8 +69,7 @@ fn render_png(tree: &usvg::Tree, size: u32, path: &Path) -> anyhow::Result<Vec<u
         bail!("invalid svg size for icon rendering");
     }
 
-    let mut pixmap =
-        tiny_skia::Pixmap::new(size, size).context("failed to create icon pixmap")?;
+    let mut pixmap = tiny_skia::Pixmap::new(size, size).context("failed to create icon pixmap")?;
     let mut pixmap_mut = pixmap.as_mut();
     resvg::render(
         tree,
@@ -88,7 +87,10 @@ fn write_icns(path: &Path, chunks: &[(&str, Vec<u8>)]) -> anyhow::Result<()> {
         if chunk_type.len() != 4 {
             bail!("invalid icns chunk type {}", chunk_type);
         }
-        let chunk_len = data.len().checked_add(8).context("icns chunk is too large")?;
+        let chunk_len = data
+            .len()
+            .checked_add(8)
+            .context("icns chunk is too large")?;
         total_len = total_len
             .checked_add(u32::try_from(chunk_len).context("icns chunk is too large")?)
             .context("icns file is too large")?;

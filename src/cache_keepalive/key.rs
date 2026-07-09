@@ -3,7 +3,12 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
-pub(super) fn session_key(upstream_id: &str, model: &str, endpoint: &str, body: &[u8]) -> Option<String> {
+pub(super) fn session_key(
+    upstream_id: &str,
+    model: &str,
+    endpoint: &str,
+    body: &[u8],
+) -> Option<String> {
     let value = serde_json::from_slice::<Value>(body).ok()?;
     let raw_session = find_string(&value, "prompt_cache_key")
         .or_else(|| find_string(&value, "conversation_id"))
@@ -21,7 +26,13 @@ fn cacheable_prefix_fingerprint(value: &Value) -> String {
     let prefix = match value {
         Value::Object(map) => {
             let mut prefix = serde_json::Map::new();
-            for key in ["instructions", "messages", "tools", "text", "response_format"] {
+            for key in [
+                "instructions",
+                "messages",
+                "tools",
+                "text",
+                "response_format",
+            ] {
                 if let Some(value) = map.get(key) {
                     prefix.insert(key.to_string(), value.clone());
                 }

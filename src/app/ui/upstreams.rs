@@ -35,10 +35,7 @@ impl CodexSwitchApp {
         ui.heading("Codex OAuth");
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(
-                    !self.oauth_start_pending,
-                    egui::Button::new("开始登录"),
-                )
+                .add_enabled(!self.oauth_start_pending, egui::Button::new("开始登录"))
                 .clicked()
             {
                 self.start_oauth();

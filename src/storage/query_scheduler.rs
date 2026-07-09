@@ -117,7 +117,8 @@ impl Store {
             .as_deref()
             == Some(id)
         {
-            self.set_setting("current_schedule_group_id", "default").await?;
+            self.set_setting("current_schedule_group_id", "default")
+                .await?;
         }
         Ok(())
     }
@@ -275,10 +276,7 @@ impl Store {
         rows.into_iter().map(row_to_route_rule).collect()
     }
 
-    pub async fn save_schedule_route_rule(
-        &self,
-        rule: &ScheduleRouteRule,
-    ) -> anyhow::Result<()> {
+    pub async fn save_schedule_route_rule(&self, rule: &ScheduleRouteRule) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO schedule_route_rules (
                 id, group_id, name, enabled, pattern, target_kind,
@@ -340,7 +338,9 @@ fn row_to_schedule_group(row: sqlx::sqlite::SqliteRow) -> anyhow::Result<Schedul
         name: row.get("name"),
         mode: ScheduleMode::from_str(&row.get::<String, _>("mode")),
         use_all_upstreams: row.get::<i64, _>("use_all_upstreams") != 0,
-        fixed_target_kind: ScheduleRouteTargetKind::from_str(&row.get::<String, _>("fixed_target_kind")),
+        fixed_target_kind: ScheduleRouteTargetKind::from_str(
+            &row.get::<String, _>("fixed_target_kind"),
+        ),
         fixed_upstream_id: row.get("fixed_upstream_id"),
         fixed_group_id: row.get("fixed_group_id"),
         failure_threshold: row.get("failure_threshold"),
@@ -423,8 +423,10 @@ mod tests {
 
     #[tokio::test]
     async fn route_rules_are_saved_and_removed_with_target_group() {
-        let path = std::env::temp_dir()
-            .join(format!("codex-switch-route-{}.sqlite", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-route-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
         let store = Store::open(&path).await.unwrap();
         let source = ScheduleGroup::new("source".to_string());
         let target = ScheduleGroup::new("target".to_string());
@@ -452,8 +454,10 @@ mod tests {
 
     #[tokio::test]
     async fn deleting_upstream_removes_direct_route_rules() {
-        let path = std::env::temp_dir()
-            .join(format!("codex-switch-upstream-route-{}.sqlite", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-upstream-route-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
         let store = Store::open(&path).await.unwrap();
         let group = ScheduleGroup::new("source".to_string());
         store.save_schedule_group(&group).await.unwrap();

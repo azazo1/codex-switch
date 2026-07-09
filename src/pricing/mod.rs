@@ -92,12 +92,17 @@ pub fn estimate_cache_keepalive_cost(
     }
     let output_price = price.output_usd_per_million.unwrap_or(0.0);
     Some(CacheKeepaliveCost {
-        keepalive_usd: usd_for_tokens(cached_tokens, cached_price) + usd_for_tokens(1, output_price),
+        keepalive_usd: usd_for_tokens(cached_tokens, cached_price)
+            + usd_for_tokens(1, output_price),
         refresh_loss_usd: usd_for_tokens(cached_tokens, input_price - cached_price),
     })
 }
 
-pub fn should_keepalive_cache(cached_tokens: i64, keepalive_count: i64, price: &ModelPrice) -> bool {
+pub fn should_keepalive_cache(
+    cached_tokens: i64,
+    keepalive_count: i64,
+    price: &ModelPrice,
+) -> bool {
     let Some(cost) = estimate_cache_keepalive_cost(cached_tokens, price) else {
         return false;
     };

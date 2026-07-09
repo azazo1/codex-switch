@@ -60,7 +60,10 @@ async fn snapshots_are_sorted_and_include_runtime_fields() {
     assert_eq!(snapshots[0].upstream_name, "upstream-a");
     assert_eq!(snapshots[0].model, "model-a");
     assert_eq!(snapshots[0].cached_tokens, 2048);
-    assert_eq!(snapshots[0].body_bytes, registration_body("model-a", "session-a").len());
+    assert_eq!(
+        snapshots[0].body_bytes,
+        registration_body("model-a", "session-a").len()
+    );
     assert!(snapshots[0].next_keepalive_seconds > 0);
 }
 
@@ -144,8 +147,10 @@ async fn prune_disabled_sessions_removes_expired_sessions() {
 }
 
 async fn test_runtime() -> CacheKeepaliveRuntime {
-    let path = std::env::temp_dir()
-        .join(format!("codex-switch-cache-runtime-{}.sqlite", uuid::Uuid::new_v4()));
+    let path = std::env::temp_dir().join(format!(
+        "codex-switch-cache-runtime-{}.sqlite",
+        uuid::Uuid::new_v4()
+    ));
     let store = Store::open(path).await.unwrap();
     let credentials = CredentialStore::new_for_tests(store.clone());
     CacheKeepaliveRuntime::new(

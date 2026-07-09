@@ -86,8 +86,12 @@ pub async fn poll_device_flow(
         return Err(anyhow!("device poll failed: {status} {body}"));
     }
     let success: DevicePollSuccess = response.json().await.context("invalid poll response")?;
-    let tokens = exchange_code(&state.http, &success.authorization_code, &success.code_verifier)
-        .await?;
+    let tokens = exchange_code(
+        &state.http,
+        &success.authorization_code,
+        &success.code_verifier,
+    )
+    .await?;
     store_oauth_account(state, tokens).await.map(Some)
 }
 
@@ -124,7 +128,10 @@ async fn store_oauth_account(
             .await?;
     }
     if let Some(id_token) = tokens.id_token {
-        state.credentials.put(&upstream.id, "id_token", &id_token).await?;
+        state
+            .credentials
+            .put(&upstream.id, "id_token", &id_token)
+            .await?;
     }
     Ok(upstream)
 }

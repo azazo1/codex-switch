@@ -140,18 +140,14 @@ async fn ws_placeholder() -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::models::{
-        BalanceProvider, CacheKeepaliveMode, ScheduleGroup, ScheduleGroupMember,
-        ScheduleMode, ScheduleRouteRule, ScheduleRouteTargetKind, Upstream,
-        UpstreamCacheKeepaliveSettings, WireApi,
-    };
     use crate::cache_keepalive::CacheKeepaliveRuntime;
-    use crate::storage::{Store, credentials::CredentialStore};
-    use axum::{
-        body::Body,
-        http::header,
-        routing::get,
+    use crate::core::models::{
+        BalanceProvider, CacheKeepaliveMode, ScheduleGroup, ScheduleGroupMember, ScheduleMode,
+        ScheduleRouteRule, ScheduleRouteTargetKind, Upstream, UpstreamCacheKeepaliveSettings,
+        WireApi,
     };
+    use crate::storage::{Store, credentials::CredentialStore};
+    use axum::{body::Body, http::header, routing::get};
     use futures_util::StreamExt;
     use serde_json::{Value, json};
     use std::sync::Arc;
@@ -227,15 +223,19 @@ mod tests {
         }
 
         let hits = hits.lock().await;
-        let paths = hits
-            .iter()
-            .map(|hit| hit.path.as_str())
-            .collect::<Vec<_>>();
+        let paths = hits.iter().map(|hit| hit.path.as_str()).collect::<Vec<_>>();
         assert_eq!(
             paths,
-            ["/v1/responses", "/v1/responses/compact", "/v1/responses/input_tokens"]
+            [
+                "/v1/responses",
+                "/v1/responses/compact",
+                "/v1/responses/input_tokens"
+            ]
         );
-        assert!(hits.iter().all(|hit| hit.authorization.as_deref() == Some("Bearer sk-test")));
+        assert!(
+            hits.iter()
+                .all(|hit| hit.authorization.as_deref() == Some("Bearer sk-test"))
+        );
 
         let logs = state.store.recent_logs(10).await.unwrap();
         assert_eq!(logs.len(), 3);
@@ -260,7 +260,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let hits = hits.lock().await;
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].body["input"].as_str().map(str::len), Some(3 * 1024 * 1024));
+        assert_eq!(
+            hits[0].body["input"].as_str().map(str::len),
+            Some(3 * 1024 * 1024)
+        );
     }
 
     #[tokio::test]
@@ -486,7 +489,10 @@ mod tests {
         assert_eq!(logs.len(), 2);
         assert_eq!(logs[0].upstream_name.as_deref(), Some("good"));
         assert_eq!(logs[1].upstream_name.as_deref(), Some("bad"));
-        assert_eq!(logs[1].status, i64::from(StatusCode::PAYMENT_REQUIRED.as_u16()));
+        assert_eq!(
+            logs[1].status,
+            i64::from(StatusCode::PAYMENT_REQUIRED.as_u16())
+        );
     }
 
     #[tokio::test]
@@ -494,7 +500,12 @@ mod tests {
         let (default_base, default_hits) = spawn_mock(MockMode::ResponsesJson).await;
         let (glm_base, glm_hits) = spawn_mock(MockMode::ResponsesJson).await;
         let state = test_state_with_relays(vec![
-            ("default-upstream", default_base.as_str(), WireApi::Responses, 0),
+            (
+                "default-upstream",
+                default_base.as_str(),
+                WireApi::Responses,
+                0,
+            ),
             ("glm-upstream", glm_base.as_str(), WireApi::Responses, 0),
         ])
         .await;
@@ -576,8 +587,18 @@ mod tests {
         let (default_base, default_hits) = spawn_mock(MockMode::ResponsesJson).await;
         let (nested_base, nested_hits) = spawn_mock(MockMode::ResponsesJson).await;
         let state = test_state_with_relays(vec![
-            ("default-upstream", default_base.as_str(), WireApi::Responses, 0),
-            ("nested-upstream", nested_base.as_str(), WireApi::Responses, 0),
+            (
+                "default-upstream",
+                default_base.as_str(),
+                WireApi::Responses,
+                0,
+            ),
+            (
+                "nested-upstream",
+                nested_base.as_str(),
+                WireApi::Responses,
+                0,
+            ),
         ])
         .await;
         let nested_upstream = upstream_by_name(&state, "nested-upstream").await;
@@ -591,7 +612,11 @@ mod tests {
         default_group.mode = ScheduleMode::Fixed;
         default_group.fixed_target_kind = ScheduleRouteTargetKind::Group;
         default_group.fixed_group_id = Some(nested_group.id);
-        state.store.save_schedule_group(&default_group).await.unwrap();
+        state
+            .store
+            .save_schedule_group(&default_group)
+            .await
+            .unwrap();
         let proxy_base = spawn_proxy(state.clone()).await;
 
         let response = reqwest::Client::new()
@@ -643,10 +668,12 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
         let value = response.json::<Value>().await.unwrap();
         assert_eq!(value["error"]["type"], "proxy_error");
-        assert!(value["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("模型路由超过最大跳转次数"));
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("模型路由超过最大跳转次数")
+        );
         assert_eq!(hits.lock().await.len(), 0);
     }
 
@@ -655,10 +682,13 @@ mod tests {
     }
 
     async fn test_state_with_relays(relays: Vec<(&str, &str, WireApi, i64)>) -> AppState {
-        let path = std::env::temp_dir()
-            .join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
         let store = Store::open(path).await.unwrap();
-        store.set_setting("local_access_key", "local-test").await.unwrap();
+        store
+            .set_setting("local_access_key", "local-test")
+            .await
+            .unwrap();
         let credentials = CredentialStore::new_for_tests(store.clone());
         for (name, base_url, wire_api, priority) in relays {
             let mut upstream = Upstream::new_relay(
@@ -670,7 +700,10 @@ mod tests {
             );
             upstream.priority = priority;
             store.save_upstream(&upstream).await.unwrap();
-            credentials.put(&upstream.id, "api_key", "sk-test").await.unwrap();
+            credentials
+                .put(&upstream.id, "api_key", "sk-test")
+                .await
+                .unwrap();
         }
         let events: crate::app::AppEvents = Default::default();
         let cache_keepalive = CacheKeepaliveRuntime::new(
@@ -713,7 +746,11 @@ mod tests {
         for upstream in state.store.list_upstreams().await.unwrap() {
             let mut member = ScheduleGroupMember::new(group_id.to_string(), upstream.id.clone());
             member.enabled = upstream.id == upstream_id;
-            state.store.save_schedule_group_member(&member).await.unwrap();
+            state
+                .store
+                .save_schedule_group_member(&member)
+                .await
+                .unwrap();
         }
     }
 
@@ -739,7 +776,11 @@ mod tests {
         for upstream in state.store.list_upstreams().await.unwrap() {
             let mut member = ScheduleGroupMember::new(group.id.clone(), upstream.id.clone());
             member.enabled = upstream.id == upstream_id;
-            state.store.save_schedule_group_member(&member).await.unwrap();
+            state
+                .store
+                .save_schedule_group_member(&member)
+                .await
+                .unwrap();
         }
         group
     }

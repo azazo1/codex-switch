@@ -1,6 +1,6 @@
 use super::{
-    upstreams::{balance_snapshot_for, balance_snapshot_label, cache_keepalive_label},
     CodexSwitchApp, tokens,
+    upstreams::{balance_snapshot_for, balance_snapshot_label, cache_keepalive_label},
 };
 use crate::app::platform;
 use crate::core::models::UpstreamKind;
@@ -26,11 +26,19 @@ impl CodexSwitchApp {
         ui.label(format!("Base URL: http://{}/v1", self.bind_addr));
         ui.horizontal(|ui| {
             ui.label("本地访问 key");
-            if ui.button(&self.local_key).on_hover_text("点击复制").clicked() {
+            if ui
+                .button(&self.local_key)
+                .on_hover_text("点击复制")
+                .clicked()
+            {
                 ui.ctx().copy_text(self.local_key.clone());
                 self.local_key_copied_at = Some(Instant::now());
             }
-            if ui.button("刷新 key").on_hover_text("打开 key 刷新确认").clicked() {
+            if ui
+                .button("刷新 key")
+                .on_hover_text("打开 key 刷新确认")
+                .clicked()
+            {
                 self.open_local_key_refresh_window();
             }
             if let Some(copied_at) = self.local_key_copied_at {
@@ -112,10 +120,7 @@ impl CodexSwitchApp {
                         .map(tokens::format_usd)
                         .unwrap_or_else(|| "无价格缓存".to_string());
                     ui.label(cost);
-                    cache_keepalive_label(
-                        ui,
-                        self.cache_keepalive_settings.get(&item.upstream_id),
-                    );
+                    cache_keepalive_label(ui, self.cache_keepalive_settings.get(&item.upstream_id));
                     balance_snapshot_label(
                         ui,
                         balance_snapshot_for(&self.balance_snapshots, &item.upstream_id),
@@ -130,10 +135,7 @@ impl CodexSwitchApp {
                     {
                         let pending = self.balance_query_pending_ids.contains(&item.upstream_id);
                         let label = if pending { "查询中" } else { "刷新余额" };
-                        if ui
-                            .add_enabled(!pending, egui::Button::new(label))
-                            .clicked()
-                        {
+                        if ui.add_enabled(!pending, egui::Button::new(label)).clicked() {
                             query_balance = Some(item.upstream_id.clone());
                         }
                     } else {
@@ -188,9 +190,15 @@ impl CodexSwitchApp {
         });
         ui.horizontal_wrapped(|ui| {
             ui.label(format!("页面: {}", self.database_info.page_count));
-            ui.label(format!("页面大小: {}", format_bytes(self.database_info.page_size as u64)));
+            ui.label(format!(
+                "页面大小: {}",
+                format_bytes(self.database_info.page_size as u64)
+            ));
             ui.label(format!("空闲页: {}", self.database_info.freelist_count));
-            ui.label(format!("日志条数: {}", self.database_info.request_log_count));
+            ui.label(format!(
+                "日志条数: {}",
+                self.database_info.request_log_count
+            ));
         });
     }
 

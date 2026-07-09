@@ -85,7 +85,10 @@ impl CodexSwitchApp {
             self.log_filter_open = true;
         }
         if ui
-            .add_enabled(self.log_filter_applied.is_active(), egui::Button::new("清空筛选"))
+            .add_enabled(
+                self.log_filter_applied.is_active(),
+                egui::Button::new("清空筛选"),
+            )
             .on_hover_text("清空当前日志筛选条件")
             .clicked()
         {
@@ -145,17 +148,17 @@ impl CodexSwitchApp {
                             &endpoint_options,
                             "全部 endpoint",
                         );
-                        status_filter_row(ui, &mut self.log_filter_editor.status, &mut self.log_filter_editor.status_custom);
+                        status_filter_row(
+                            ui,
+                            &mut self.log_filter_editor.status,
+                            &mut self.log_filter_editor.status_custom,
+                        );
                         date_time_filter_row(
                             ui,
                             "开始时间",
                             &mut self.log_filter_editor.started_at,
                         );
-                        date_time_filter_row(
-                            ui,
-                            "结束时间",
-                            &mut self.log_filter_editor.ended_at,
-                        );
+                        date_time_filter_row(ui, "结束时间", &mut self.log_filter_editor.ended_at);
                         f64_range_filter_row(ui, "价格 USD", &mut self.log_filter_editor.price_usd);
                         i64_range_filter_row(
                             ui,
@@ -224,7 +227,10 @@ impl CodexSwitchApp {
                 self.log_filter_open = false;
                 self.log_page = 0;
                 self.status = if self.log_filter_applied.is_active() {
-                    format!("日志筛选已应用: {} 项", self.log_filter_applied.active_count())
+                    format!(
+                        "日志筛选已应用: {} 项",
+                        self.log_filter_applied.active_count()
+                    )
                 } else {
                     "日志筛选已清空".to_string()
                 };
@@ -293,11 +299,8 @@ impl CodexSwitchApp {
 
     fn log_pagination_ui(&mut self, ui: &mut egui::Ui) {
         let total_pages = log_total_pages(self.log_total_count, self.log_page_size);
-        let (range_start, range_end) = log_result_range(
-            self.log_page,
-            self.log_page_size,
-            self.log_total_count,
-        );
+        let (range_start, range_end) =
+            log_result_range(self.log_page, self.log_page_size, self.log_total_count);
         let mut target_page = None;
         let mut target_page_size = None;
         ui.horizontal(|ui| {
@@ -779,7 +782,9 @@ fn log_hover_text(log: &RequestLog) -> String {
 }
 
 fn format_optional_duration(value: Option<i64>) -> String {
-    value.map(format_duration).unwrap_or_else(|| "-".to_string())
+    value
+        .map(format_duration)
+        .unwrap_or_else(|| "-".to_string())
 }
 
 fn format_duration(value: i64) -> String {

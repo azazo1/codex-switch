@@ -1,6 +1,4 @@
-use crate::core::models::{
-    DashboardStats, ModelUsageStats, ProviderStats, RequestLog, TokenUsage,
-};
+use crate::core::models::{DashboardStats, ModelUsageStats, ProviderStats, RequestLog, TokenUsage};
 use crate::pricing;
 use crate::storage::Store;
 use chrono::{DateTime, Utc};
@@ -177,7 +175,10 @@ impl Store {
             .collect())
     }
 
-    pub async fn model_usage_stats(&self, today_only: bool) -> anyhow::Result<Vec<ModelUsageStats>> {
+    pub async fn model_usage_stats(
+        &self,
+        today_only: bool,
+    ) -> anyhow::Result<Vec<ModelUsageStats>> {
         let today = Utc::now().format("%Y-%m-%d").to_string();
         let query = if today_only {
             "SELECT upstream_id, upstream_name, model,
@@ -266,11 +267,13 @@ impl Store {
     ) -> anyhow::Result<i64> {
         let mut tx = self.pool().begin().await?;
         let deleted = match retention {
-            RequestLogRetention::Since(cutoff) => sqlx::query("DELETE FROM request_logs WHERE ts < ?1")
-                .bind(cutoff.to_rfc3339())
-                .execute(&mut *tx)
-                .await?
-                .rows_affected(),
+            RequestLogRetention::Since(cutoff) => {
+                sqlx::query("DELETE FROM request_logs WHERE ts < ?1")
+                    .bind(cutoff.to_rfc3339())
+                    .execute(&mut *tx)
+                    .await?
+                    .rows_affected()
+            }
             RequestLogRetention::Newest(limit) => {
                 let keep_count = limit.max(0);
                 sqlx::query(
@@ -284,10 +287,12 @@ impl Store {
                 .await?
                 .rows_affected()
             }
-            RequestLogRetention::Failed => sqlx::query("DELETE FROM request_logs WHERE status >= 400")
-                .execute(&mut *tx)
-                .await?
-                .rows_affected(),
+            RequestLogRetention::Failed => {
+                sqlx::query("DELETE FROM request_logs WHERE status >= 400")
+                    .execute(&mut *tx)
+                    .await?
+                    .rows_affected()
+            }
         };
         rebuild_usage_rollups(&mut tx).await?;
         tx.commit().await?;
@@ -336,14 +341,54 @@ fn append_request_log_filters(builder: &mut QueryBuilder<'_, Sqlite>, filter: &R
     }
     push_i64_min(builder, &mut has_where, "status", filter.status_min);
     push_i64_max(builder, &mut has_where, "status", filter.status_max);
-    push_i64_min(builder, &mut has_where, "duration_ms", filter.duration_ms_min);
-    push_i64_max(builder, &mut has_where, "duration_ms", filter.duration_ms_max);
-    push_i64_min(builder, &mut has_where, "first_token_ms", filter.first_token_ms_min);
-    push_i64_max(builder, &mut has_where, "first_token_ms", filter.first_token_ms_max);
-    push_i64_min(builder, &mut has_where, "input_tokens", filter.input_tokens_min);
-    push_i64_max(builder, &mut has_where, "input_tokens", filter.input_tokens_max);
-    push_i64_min(builder, &mut has_where, "output_tokens", filter.output_tokens_min);
-    push_i64_max(builder, &mut has_where, "output_tokens", filter.output_tokens_max);
+    push_i64_min(
+        builder,
+        &mut has_where,
+        "duration_ms",
+        filter.duration_ms_min,
+    );
+    push_i64_max(
+        builder,
+        &mut has_where,
+        "duration_ms",
+        filter.duration_ms_max,
+    );
+    push_i64_min(
+        builder,
+        &mut has_where,
+        "first_token_ms",
+        filter.first_token_ms_min,
+    );
+    push_i64_max(
+        builder,
+        &mut has_where,
+        "first_token_ms",
+        filter.first_token_ms_max,
+    );
+    push_i64_min(
+        builder,
+        &mut has_where,
+        "input_tokens",
+        filter.input_tokens_min,
+    );
+    push_i64_max(
+        builder,
+        &mut has_where,
+        "input_tokens",
+        filter.input_tokens_max,
+    );
+    push_i64_min(
+        builder,
+        &mut has_where,
+        "output_tokens",
+        filter.output_tokens_min,
+    );
+    push_i64_max(
+        builder,
+        &mut has_where,
+        "output_tokens",
+        filter.output_tokens_max,
+    );
     push_i64_min(
         builder,
         &mut has_where,
@@ -368,8 +413,18 @@ fn append_request_log_filters(builder: &mut QueryBuilder<'_, Sqlite>, filter: &R
         "cache_creation_tokens",
         filter.cache_creation_tokens_max,
     );
-    push_i64_min(builder, &mut has_where, "total_tokens", filter.total_tokens_min);
-    push_i64_max(builder, &mut has_where, "total_tokens", filter.total_tokens_max);
+    push_i64_min(
+        builder,
+        &mut has_where,
+        "total_tokens",
+        filter.total_tokens_min,
+    );
+    push_i64_max(
+        builder,
+        &mut has_where,
+        "total_tokens",
+        filter.total_tokens_max,
+    );
     push_f64_min(
         builder,
         &mut has_where,
@@ -495,9 +550,7 @@ fn wildcard_like_pattern(value: &str) -> String {
     pattern
 }
 
-async fn rebuild_usage_rollups(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-) -> anyhow::Result<()> {
+async fn rebuild_usage_rollups(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>) -> anyhow::Result<()> {
     sqlx::query("DELETE FROM usage_rollups")
         .execute(&mut **tx)
         .await?;
@@ -565,13 +618,13 @@ fn usage_from_rollup(row: &sqlx::sqlite::SqliteRow) -> TokenUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
     use crate::core::models::ModelPrice;
+    use chrono::TimeZone;
 
     #[tokio::test]
     async fn provider_stats_hides_unassigned_rollup() {
-        let path = std::env::temp_dir()
-            .join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
         let store = Store::open(path).await.unwrap();
         store
             .insert_request_log(test_log(None, None, 5))
@@ -592,27 +645,17 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_request_logs_rebuilds_rollups() {
-        let path = std::env::temp_dir()
-            .join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
         let store = Store::open(path).await.unwrap();
         let old_ts = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
         let new_ts = Utc.with_ymd_and_hms(2024, 1, 3, 12, 0, 0).unwrap();
         store
-            .insert_request_log(test_log_at(
-                old_ts,
-                Some("upstream-a"),
-                Some("relay-a"),
-                5,
-            ))
+            .insert_request_log(test_log_at(old_ts, Some("upstream-a"), Some("relay-a"), 5))
             .await
             .unwrap();
         store
-            .insert_request_log(test_log_at(
-                new_ts,
-                Some("upstream-a"),
-                Some("relay-a"),
-                7,
-            ))
+            .insert_request_log(test_log_at(new_ts, Some("upstream-a"), Some("relay-a"), 7))
             .await
             .unwrap();
 
@@ -635,15 +678,25 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_request_logs_can_delete_failed_requests() {
-        let path = std::env::temp_dir()
-            .join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
         let store = Store::open(path).await.unwrap();
         store
-            .insert_request_log(test_log_with_status(Some("upstream-a"), Some("relay-a"), 5, 200))
+            .insert_request_log(test_log_with_status(
+                Some("upstream-a"),
+                Some("relay-a"),
+                5,
+                200,
+            ))
             .await
             .unwrap();
         store
-            .insert_request_log(test_log_with_status(Some("upstream-a"), Some("relay-a"), 7, 500))
+            .insert_request_log(test_log_with_status(
+                Some("upstream-a"),
+                Some("relay-a"),
+                7,
+                500,
+            ))
             .await
             .unwrap();
 
@@ -663,8 +716,8 @@ mod tests {
 
     #[tokio::test]
     async fn request_log_filter_uses_stored_estimated_cost() {
-        let path = std::env::temp_dir()
-            .join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
         let store = Store::open(path).await.unwrap();
         store
             .replace_model_prices(&[ModelPrice {
@@ -694,7 +747,10 @@ mod tests {
             estimated_cost_usd_min: Some(1.0),
             ..Default::default()
         };
-        let logs = store.recent_logs_page_filtered(10, 0, &filter).await.unwrap();
+        let logs = store
+            .recent_logs_page_filtered(10, 0, &filter)
+            .await
+            .unwrap();
 
         assert_eq!(store.request_log_count_filtered(&filter).await.unwrap(), 1);
         assert_eq!(logs.len(), 1);
@@ -704,8 +760,8 @@ mod tests {
 
     #[tokio::test]
     async fn request_log_model_filter_supports_wildcards() {
-        let path = std::env::temp_dir()
-            .join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
         let store = Store::open(path).await.unwrap();
         let mut gpt_log = test_log(Some("upstream-a"), Some("relay-a"), 5);
         gpt_log.model = Some("gpt-5-codex".to_string());
@@ -718,7 +774,10 @@ mod tests {
             model: Some("gpt-*".to_string()),
             ..Default::default()
         };
-        let logs = store.recent_logs_page_filtered(10, 0, &filter).await.unwrap();
+        let logs = store
+            .recent_logs_page_filtered(10, 0, &filter)
+            .await
+            .unwrap();
 
         assert_eq!(store.request_log_count_filtered(&filter).await.unwrap(), 1);
         assert_eq!(logs[0].model.as_deref(), Some("gpt-5-codex"));

@@ -140,13 +140,11 @@ impl Store {
         upstream_id: &str,
         name: &str,
     ) -> anyhow::Result<Option<String>> {
-        let row = sqlx::query(
-            "SELECT value FROM credentials WHERE upstream_id = ?1 AND name = ?2",
-        )
-        .bind(upstream_id)
-        .bind(name)
-        .fetch_optional(self.pool())
-        .await?;
+        let row = sqlx::query("SELECT value FROM credentials WHERE upstream_id = ?1 AND name = ?2")
+            .bind(upstream_id)
+            .bind(name)
+            .fetch_optional(self.pool())
+            .await?;
         Ok(row.map(|r| r.get::<String, _>("value")))
     }
 }

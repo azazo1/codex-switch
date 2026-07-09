@@ -32,10 +32,8 @@ pub(super) struct UpstreamEditor {
 
 impl UpstreamEditor {
     fn new(upstream: Upstream, cache_keepalive: UpstreamCacheKeepaliveSettings) -> Self {
-        let min_cacheable_tokens_input =
-            format_token_input(cache_keepalive.min_cacheable_tokens);
-        let max_cacheable_tokens_input =
-            format_token_input(cache_keepalive.max_cacheable_tokens);
+        let min_cacheable_tokens_input = format_token_input(cache_keepalive.min_cacheable_tokens);
+        let max_cacheable_tokens_input = format_token_input(cache_keepalive.max_cacheable_tokens);
         Self {
             upstream,
             cache_keepalive,
@@ -317,7 +315,10 @@ fn cache_keepalive_form(
                     ui.selectable_value(&mut settings.mode, mode, mode.as_str());
                 }
             });
-        ui.checkbox(&mut settings.prefer_extended_retention, "优先 24h retention");
+        ui.checkbox(
+            &mut settings.prefer_extended_retention,
+            "优先 24h retention",
+        );
     });
     ui.horizontal(|ui| {
         ui.label("间隔秒");

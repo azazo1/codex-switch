@@ -57,7 +57,11 @@ impl Store {
             self.set_setting("local_access_key", &format!("cs-{}", uuid::Uuid::new_v4()))
                 .await?;
         }
-        if self.get_setting("scheduler_route_max_hops").await?.is_none() {
+        if self
+            .get_setting("scheduler_route_max_hops")
+            .await?
+            .is_none()
+        {
             self.set_setting("scheduler_route_max_hops", "8").await?;
         }
         self.ensure_default_schedule_group().await?;
@@ -93,7 +97,8 @@ impl Store {
             false
         };
         if !current_is_valid {
-            self.set_setting("current_schedule_group_id", "default").await?;
+            self.set_setting("current_schedule_group_id", "default")
+                .await?;
         }
         Ok(())
     }
@@ -352,8 +357,10 @@ mod tests {
 
     #[tokio::test]
     async fn records_schema_version_and_keeps_migrations_idempotent() {
-        let path = std::env::temp_dir()
-            .join(format!("codex-switch-migrate-{}.sqlite", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-migrate-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
         let store = Store::open(&path).await.unwrap();
 
         let rows = sqlx::query("SELECT version, name FROM schema_migrations ORDER BY version")
@@ -373,15 +380,9 @@ mod tests {
             "request_log_reasoning_effort"
         );
         assert_eq!(rows[4].get::<i64, _>("version"), 5);
-        assert_eq!(
-            rows[4].get::<String, _>("name"),
-            "schedule_route_rules"
-        );
+        assert_eq!(rows[4].get::<String, _>("name"), "schedule_route_rules");
         assert_eq!(rows[5].get::<i64, _>("version"), 6);
-        assert_eq!(
-            rows[5].get::<String, _>("name"),
-            "nested_schedule_groups"
-        );
+        assert_eq!(rows[5].get::<String, _>("name"), "nested_schedule_groups");
         assert_eq!(rows[6].get::<i64, _>("version"), 7);
         assert_eq!(
             rows[6].get::<String, _>("name"),

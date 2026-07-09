@@ -149,7 +149,10 @@ async fn estimate_provider_costs(
         totals.insert(provider.upstream_id.clone(), (0.0, false));
     }
     for row in rows {
-        let upstream_id = row.upstream_id.clone().unwrap_or_else(|| "none".to_string());
+        let upstream_id = row
+            .upstream_id
+            .clone()
+            .unwrap_or_else(|| "none".to_string());
         let Some(model) = row.model.as_deref() else {
             continue;
         };

@@ -31,8 +31,10 @@ mod tests {
 
     #[tokio::test]
     async fn stores_credential_as_plaintext() {
-        let path = std::env::temp_dir()
-            .join(format!("codex-switch-credential-{}.sqlite", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-credential-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
         let store = Store::open(path).await.unwrap();
         let credentials = CredentialStore::new_for_tests(store.clone());
         let upstream = Upstream::new_relay(
@@ -44,7 +46,10 @@ mod tests {
         );
         store.save_upstream(&upstream).await.unwrap();
 
-        credentials.put(&upstream.id, "api_key", "sk-plain").await.unwrap();
+        credentials
+            .put(&upstream.id, "api_key", "sk-plain")
+            .await
+            .unwrap();
 
         assert_eq!(
             store

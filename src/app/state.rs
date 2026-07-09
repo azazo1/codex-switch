@@ -6,8 +6,8 @@ use anyhow::Context;
 use directories::ProjectDirs;
 use std::path::PathBuf;
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
     Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
 };
 
 type RepaintRequester = Arc<dyn Fn() + Send + Sync>;
@@ -51,8 +51,7 @@ impl AppEvents {
     }
 
     pub fn bump_cache_keepalive(&self) {
-        self.cache_keepalive_version
-            .fetch_add(1, Ordering::Relaxed);
+        self.cache_keepalive_version.fetch_add(1, Ordering::Relaxed);
         self.request_repaint();
     }
 
@@ -93,8 +92,12 @@ impl AppState {
             .build()
             .context("failed to build http client")?;
         let events = AppEvents::default();
-        let cache_keepalive =
-            CacheKeepaliveRuntime::new(store.clone(), credentials.clone(), http.clone(), events.clone());
+        let cache_keepalive = CacheKeepaliveRuntime::new(
+            store.clone(),
+            credentials.clone(),
+            http.clone(),
+            events.clone(),
+        );
         let state = Self {
             store,
             credentials,

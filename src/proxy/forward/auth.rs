@@ -33,7 +33,9 @@ pub(super) async fn validate_local_access(
     }
     Err((
         StatusCode::UNAUTHORIZED,
-        axum::Json(json!({"error":{"message":"invalid local access key","type":"authentication_error"}})),
+        axum::Json(
+            json!({"error":{"message":"invalid local access key","type":"authentication_error"}}),
+        ),
     )
         .into_response())
 }

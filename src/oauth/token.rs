@@ -141,5 +141,8 @@ async fn parse_token_response(response: reqwest::Response) -> anyhow::Result<OAu
         let body = response.text().await.unwrap_or_default();
         return Err(anyhow!("oauth token request failed: {status} {body}"));
     }
-    response.json().await.context("invalid oauth token response")
+    response
+        .json()
+        .await
+        .context("invalid oauth token response")
 }

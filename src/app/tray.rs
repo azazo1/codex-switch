@@ -2,9 +2,7 @@ use super::icon;
 use eframe::egui;
 use std::sync::Arc;
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
-use tray_icon::{
-    MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent,
-};
+use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 const OPEN_MENU_ID: &str = "codex-switch-open-window";
 const TOGGLE_SERVICE_MENU_ID: &str = "codex-switch-toggle-service";
@@ -34,8 +32,7 @@ impl TrayController {
         let send_command: Arc<dyn Fn(TrayCommand) + Send + Sync> = Arc::new(send_command);
         install_handlers(egui_ctx, send_command);
 
-        let open_item =
-            MenuItem::with_id(MenuId::new(OPEN_MENU_ID), "打开主界面", true, None);
+        let open_item = MenuItem::with_id(MenuId::new(OPEN_MENU_ID), "打开主界面", true, None);
         let toggle_service_item = MenuItem::with_id(
             MenuId::new(TOGGLE_SERVICE_MENU_ID),
             service_menu_text(server_running),
@@ -75,10 +72,7 @@ impl TrayController {
     }
 }
 
-fn install_handlers(
-    egui_ctx: egui::Context,
-    send_command: Arc<dyn Fn(TrayCommand) + Send + Sync>,
-) {
+fn install_handlers(egui_ctx: egui::Context, send_command: Arc<dyn Fn(TrayCommand) + Send + Sync>) {
     let menu_ctx = egui_ctx.clone();
     let menu_sender = Arc::clone(&send_command);
     MenuEvent::set_event_handler(Some(move |event: MenuEvent| {

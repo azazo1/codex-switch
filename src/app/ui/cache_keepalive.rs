@@ -97,7 +97,11 @@ fn cache_keepalive_detail_ui(ui: &mut egui::Ui, session: &CacheKeepaliveSessionS
         .spacing([18.0, 8.0])
         .show(ui, |ui| {
             detail_row(ui, "状态", status_text(session));
-            detail_row(ui, "停用原因", session.disabled_reason.as_deref().unwrap_or("-"));
+            detail_row(
+                ui,
+                "停用原因",
+                session.disabled_reason.as_deref().unwrap_or("-"),
+            );
             detail_row(ui, "上游", &session.upstream_name);
             detail_row(ui, "上游 ID", &session.upstream_id);
             detail_row(ui, "模型", &session.model);
@@ -115,11 +119,7 @@ fn cache_keepalive_detail_ui(ui: &mut egui::Ui, session: &CacheKeepaliveSessionS
                 "最近活动",
                 &format_seconds(session.last_activity_elapsed_seconds),
             );
-            detail_row(
-                ui,
-                "下次保活",
-                &format_next_keepalive(session),
-            );
+            detail_row(ui, "下次保活", &format_next_keepalive(session));
             detail_row(ui, "请求体大小", &format_body_bytes(session.body_bytes));
             ui.strong("session key");
             ui.monospace(short_key(&session.key))

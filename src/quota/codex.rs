@@ -1,7 +1,7 @@
 use crate::app::AppState;
 use crate::core::models::{QuotaSnapshot, UpstreamKind};
 use crate::oauth;
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use axum::http::HeaderMap;
 use serde::Deserialize;
 
@@ -25,10 +25,7 @@ struct RateLimitWindow {
     reset_after_seconds: i64,
 }
 
-pub async fn query_and_store(
-    state: &AppState,
-    upstream_id: &str,
-) -> anyhow::Result<QuotaSnapshot> {
+pub async fn query_and_store(state: &AppState, upstream_id: &str) -> anyhow::Result<QuotaSnapshot> {
     let upstream = state
         .store
         .get_upstream(upstream_id)
@@ -79,10 +76,7 @@ pub fn snapshot_from_headers(upstream_id: &str, headers: &HeaderMap) -> Option<Q
     normalize_windows(upstream_id, primary, secondary)
 }
 
-fn snapshot_from_rate_limit(
-    upstream_id: &str,
-    rate_limit: Option<&RateLimit>,
-) -> QuotaSnapshot {
+fn snapshot_from_rate_limit(upstream_id: &str, rate_limit: Option<&RateLimit>) -> QuotaSnapshot {
     let primary = rate_limit
         .and_then(|r| r.primary_window.as_ref())
         .map(window_from_usage)
@@ -174,8 +168,14 @@ mod tests {
         headers.insert("x-codex-secondary-used-percent", "34".parse().unwrap());
         headers.insert("x-codex-primary-window-minutes", "300".parse().unwrap());
         headers.insert("x-codex-secondary-window-minutes", "10080".parse().unwrap());
-        headers.insert("x-codex-primary-reset-after-seconds", "600".parse().unwrap());
-        headers.insert("x-codex-secondary-reset-after-seconds", "86400".parse().unwrap());
+        headers.insert(
+            "x-codex-primary-reset-after-seconds",
+            "600".parse().unwrap(),
+        );
+        headers.insert(
+            "x-codex-secondary-reset-after-seconds",
+            "86400".parse().unwrap(),
+        );
         let snapshot = snapshot_from_headers("u1", &headers).unwrap();
         assert_eq!(snapshot.used_5h_percent, Some(12.0));
         assert_eq!(snapshot.used_7d_percent, Some(34.0));

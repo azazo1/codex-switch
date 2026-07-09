@@ -60,7 +60,9 @@ async fn file_size(path: &Path) -> anyhow::Result<u64> {
     match tokio::fs::metadata(path).await {
         Ok(metadata) => Ok(metadata.len()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(0),
-        Err(err) => Err(err).with_context(|| format!("failed to read file size {}", path.display())),
+        Err(err) => {
+            Err(err).with_context(|| format!("failed to read file size {}", path.display()))
+        }
     }
 }
 

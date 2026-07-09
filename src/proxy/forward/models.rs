@@ -38,7 +38,10 @@ pub(super) async fn query_models(state: &AppState, headers: &HeaderMap) -> anyho
     }
 
     if models.is_empty() && !errors.is_empty() {
-        anyhow::bail!("failed to query models from all upstreams: {}", errors.join("; "));
+        anyhow::bail!(
+            "failed to query models from all upstreams: {}",
+            errors.join("; ")
+        );
     }
 
     Ok(json!({"object":"list","data":models}))
@@ -94,18 +97,26 @@ async fn reachable_model_sources(
             }
             match rule.target_kind {
                 ScheduleRouteTargetKind::Group => {
-                    let Some(target_group_id) =
-                        rule.target_group_id.as_deref().map(str::trim).filter(|id| !id.is_empty())
+                    let Some(target_group_id) = rule
+                        .target_group_id
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|id| !id.is_empty())
                     else {
                         continue;
                     };
-                    if let Some(target_group) = state.store.get_schedule_group(target_group_id).await? {
+                    if let Some(target_group) =
+                        state.store.get_schedule_group(target_group_id).await?
+                    {
                         queue.push_back((target_group, hops + 1));
                     }
                 }
                 ScheduleRouteTargetKind::Upstream => {
-                    let Some(target_upstream_id) =
-                        rule.target_upstream_id.as_deref().map(str::trim).filter(|id| !id.is_empty())
+                    let Some(target_upstream_id) = rule
+                        .target_upstream_id
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|id| !id.is_empty())
                     else {
                         continue;
                     };

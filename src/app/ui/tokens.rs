@@ -16,11 +16,7 @@ impl TokenDisplayMode {
     }
 }
 
-pub(super) fn usage_tokens(
-    ui: &mut egui::Ui,
-    mode: &mut TokenDisplayMode,
-    usage: &TokenUsage,
-) {
+pub(super) fn usage_tokens(ui: &mut egui::Ui, mode: &mut TokenDisplayMode, usage: &TokenUsage) {
     token_value(ui, mode, "输入", usage.input_tokens);
     token_value(ui, mode, "缓存输入", usage.cache_read_tokens);
     if usage.cache_creation_tokens > 0 {
@@ -30,12 +26,7 @@ pub(super) fn usage_tokens(
     token_value(ui, mode, "总计", usage.total_tokens);
 }
 
-pub(super) fn token_value(
-    ui: &mut egui::Ui,
-    mode: &mut TokenDisplayMode,
-    label: &str,
-    value: i64,
-) {
+pub(super) fn token_value(ui: &mut egui::Ui, mode: &mut TokenDisplayMode, label: &str, value: i64) {
     let text = format!("{label}: {}", format_tokens(*mode, value));
     let response = ui
         .add(egui::Label::new(text).sense(egui::Sense::click()))

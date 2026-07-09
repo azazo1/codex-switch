@@ -312,30 +312,38 @@ impl CacheKeepaliveRuntime {
     }
 
     async fn keepalive_once(&self, session: CacheKeepaliveSession) -> anyhow::Result<()> {
-        let settings = self.store.cache_keepalive_settings(&session.upstream.id).await?;
+        let settings = self
+            .store
+            .cache_keepalive_settings(&session.upstream.id)
+            .await?;
         if !settings.is_active() {
-            self.disable_session(&session.key, "settings disabled").await;
+            self.disable_session(&session.key, "settings disabled")
+                .await;
             return Ok(());
         }
         let idle = session.last_user_request_at.elapsed();
         if idle > Duration::from_secs(settings.max_idle_seconds.max(60) as u64) {
-            self.disable_session(&session.key, "max idle exceeded").await;
+            self.disable_session(&session.key, "max idle exceeded")
+                .await;
             return Ok(());
         }
         if session.cached_tokens < settings.min_cacheable_tokens.max(1024) {
-            self.disable_session(&session.key, "not enough cached tokens").await;
+            self.disable_session(&session.key, "not enough cached tokens")
+                .await;
             return Ok(());
         }
         let max_cacheable_tokens = settings
             .max_cacheable_tokens
             .max(settings.min_cacheable_tokens.max(1024));
         if session.cached_tokens > max_cacheable_tokens {
-            self.disable_session(&session.key, "too many cached tokens").await;
+            self.disable_session(&session.key, "too many cached tokens")
+                .await;
             return Ok(());
         }
         let Some(price) = self.store.find_model_price(&session.model).await? else {
             if settings.mode == CacheKeepaliveMode::Smart {
-                self.disable_session(&session.key, "missing model price").await;
+                self.disable_session(&session.key, "missing model price")
+                    .await;
             } else {
                 self.schedule_next(&session.key, &settings, None).await;
             }
@@ -348,7 +356,8 @@ impl CacheKeepaliveRuntime {
                 &price,
             )
         {
-            self.disable_session(&session.key, "smart cost rejected").await;
+            self.disable_session(&session.key, "smart cost rejected")
+                .await;
             return Ok(());
         }
         let started = Instant::now();
@@ -384,7 +393,8 @@ impl CacheKeepaliveRuntime {
                         .await;
                     StatusCode::OK
                 };
-                self.record_log(&session, status, usage, started, None).await;
+                self.record_log(&session, status, usage, started, None)
+                    .await;
             }
             Err(err) => {
                 self.disable_session(&session.key, "request failed").await;

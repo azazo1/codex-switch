@@ -4,19 +4,26 @@ use serde_json::{Value, json};
 pub fn extract_model(body: &[u8]) -> Option<String> {
     serde_json::from_slice::<Value>(body)
         .ok()
-        .and_then(|value| value.get("model").and_then(|v| v.as_str()).map(str::to_string))
+        .and_then(|value| {
+            value
+                .get("model")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
 }
 
 pub fn extract_reasoning_effort(body: &[u8]) -> Option<String> {
-    serde_json::from_slice::<Value>(body).ok().and_then(|value| {
-        value
-            .pointer("/reasoning/effort")
-            .or_else(|| value.get("reasoning_effort"))
-            .or_else(|| value.get("reasoningEffort"))
-            .or_else(|| value.get("reasoning"))
-            .and_then(Value::as_str)
-            .map(format_reasoning_effort)
-    })
+    serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .pointer("/reasoning/effort")
+                .or_else(|| value.get("reasoning_effort"))
+                .or_else(|| value.get("reasoningEffort"))
+                .or_else(|| value.get("reasoning"))
+                .and_then(Value::as_str)
+                .map(format_reasoning_effort)
+        })
 }
 
 pub fn extract_usage_from_json(value: &Value) -> TokenUsage {
@@ -167,10 +174,7 @@ pub fn chat_to_responses_json(value: &Value) -> Value {
 }
 
 fn input_item_to_chat_message(item: &Value) -> Option<Value> {
-    let role = item
-        .get("role")
-        .and_then(|v| v.as_str())
-        .unwrap_or("user");
+    let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("user");
     let content = match item.get("content") {
         Some(Value::String(text)) => text.clone(),
         Some(Value::Array(parts)) => parts
@@ -297,8 +301,8 @@ mod tests {
 
     #[test]
     fn converts_responses_to_chat() {
-        let body = responses_to_chat_json(br#"{"model":"gpt","input":"hello","stream":true}"#)
-            .unwrap();
+        let body =
+            responses_to_chat_json(br#"{"model":"gpt","input":"hello","stream":true}"#).unwrap();
         let value: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["messages"][0]["content"], "hello");
         assert_eq!(value["stream_options"]["include_usage"], true);
