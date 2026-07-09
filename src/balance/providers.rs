@@ -6,6 +6,76 @@ use serde_json::Value;
 use std::time::Duration;
 
 const NEWAPI_QUOTA_PER_USD: f64 = 500000.0;
+pub(crate) const API_KEY_CREDENTIAL: &str = "api_key";
+pub(crate) const NEWAPI_USER_KEY_CREDENTIAL: &str = "newapi_user_key";
+pub(crate) const NEWAPI_USER_ID_CREDENTIAL: &str = "newapi_user_id";
+
+#[derive(Debug, Clone)]
+struct BalanceCredentials {
+    api_key: String,
+    newapi_user_key: Option<String>,
+    newapi_user_id: Option<String>,
+}
+
+impl BalanceCredentials {
+    fn common_auth(&self, provider: BalanceProvider) -> anyhow::Result<CommonBalanceAuth<'_>> {
+        match provider {
+            BalanceProvider::NewApi => {
+                let user_key = self
+                    .newapi_user_key
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("missing new-api user key"))?;
+                let user_id = self
+                    .newapi_user_id
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("missing new-api user id"))?;
+                Ok(CommonBalanceAuth::NewApi { user_key, user_id })
+            }
+            BalanceProvider::Auto => Ok(CommonBalanceAuth::Auto {
+                api_key: &self.api_key,
+                newapi_user_key: self.newapi_user_key.as_deref(),
+                newapi_user_id: self.newapi_user_id.as_deref(),
+            }),
+            _ => Ok(CommonBalanceAuth::ApiKey {
+                api_key: &self.api_key,
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CommonBalanceAuth<'a> {
+    ApiKey {
+        api_key: &'a str,
+    },
+    NewApi {
+        user_key: &'a str,
+        user_id: &'a str,
+    },
+    Auto {
+        api_key: &'a str,
+        newapi_user_key: Option<&'a str>,
+        newapi_user_id: Option<&'a str>,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CommonBalanceHeaders<'a> {
+    bearer: &'a str,
+    newapi_user_id: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CommonBalanceUrlKind {
+    Generic,
+    NewApi,
+}
+
+#[derive(Debug, Clone)]
+struct CommonBalanceUrl {
+    url: String,
+    kind: CommonBalanceUrlKind,
+}
 
 pub fn detect_provider(base_url: &str) -> Option<BalanceProvider> {
     let url = base_url.to_lowercase();
@@ -44,27 +114,41 @@ pub async fn query_and_store(
     }
     let api_key = state
         .credentials
-        .get(&upstream.id, "api_key")
+        .get(&upstream.id, API_KEY_CREDENTIAL)
         .await?
         .ok_or_else(|| anyhow!("missing api key"))?;
+    let newapi_user_key = state
+        .credentials
+        .get(&upstream.id, NEWAPI_USER_KEY_CREDENTIAL)
+        .await?;
+    let newapi_user_id = state
+        .credentials
+        .get(&upstream.id, NEWAPI_USER_ID_CREDENTIAL)
+        .await?;
+    let credentials = BalanceCredentials {
+        api_key,
+        newapi_user_key,
+        newapi_user_id,
+    };
     let snapshot = match upstream.balance_provider {
         BalanceProvider::Auto => {
             if let Some(provider) = detect_provider(&upstream.base_url) {
-                query_balance(state, &upstream.id, provider, &upstream.base_url, &api_key).await?
+                query_balance(state, &upstream.id, provider, &upstream.base_url, &credentials)
+                    .await?
             } else {
                 query_common_panel(
                     state,
                     &upstream.id,
                     BalanceProvider::Auto,
                     &upstream.base_url,
-                    &api_key,
+                    credentials.common_auth(BalanceProvider::Auto)?,
                 )
                 .await?
             }
         }
         BalanceProvider::Unsupported => return Err(anyhow!("unsupported balance provider")),
         provider => {
-            query_balance(state, &upstream.id, provider, &upstream.base_url, &api_key).await?
+            query_balance(state, &upstream.id, provider, &upstream.base_url, &credentials).await?
         }
     };
     state.store.save_balance_snapshot(&snapshot).await?;
@@ -76,17 +160,31 @@ async fn query_balance(
     upstream_id: &str,
     provider: BalanceProvider,
     base_url: &str,
-    api_key: &str,
+    credentials: &BalanceCredentials,
 ) -> anyhow::Result<BalanceSnapshot> {
     match provider {
         BalanceProvider::Sub2Api | BalanceProvider::NewApi => {
-            query_common_panel(state, upstream_id, provider, base_url, api_key).await
+            query_common_panel(
+                state,
+                upstream_id,
+                provider,
+                base_url,
+                credentials.common_auth(provider)?,
+            )
+            .await
         }
         BalanceProvider::Auto => {
-            query_common_panel(state, upstream_id, provider, base_url, api_key).await
+            query_common_panel(
+                state,
+                upstream_id,
+                provider,
+                base_url,
+                credentials.common_auth(provider)?,
+            )
+            .await
         }
         BalanceProvider::Unsupported => Err(anyhow!("unsupported balance provider")),
-        provider => query_provider(state, upstream_id, provider, api_key).await,
+        provider => query_provider(state, upstream_id, provider, &credentials.api_key).await,
     }
 }
 
@@ -197,22 +295,30 @@ async fn query_common_panel(
     upstream_id: &str,
     provider: BalanceProvider,
     base_url: &str,
-    api_key: &str,
+    auth: CommonBalanceAuth<'_>,
 ) -> anyhow::Result<BalanceSnapshot> {
     let mut last_error = None;
-    for url in common_balance_urls(base_url, provider) {
-        let response = match state
+    for item in common_balance_urls(base_url, provider) {
+        let Some(headers) = auth.headers_for(item.kind) else {
+            last_error = Some(format!("{}: missing new-api user key or user id", item.url));
+            continue;
+        };
+        let mut request = state
             .http
-            .get(&url)
-            .bearer_auth(api_key)
+            .get(&item.url)
+            .bearer_auth(headers.bearer)
             .header("Accept", "application/json")
-            .timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(15));
+        if let Some(user_id) = headers.newapi_user_id {
+            request = request.header("New-Api-User", user_id);
+        }
+        let response = match request
             .send()
             .await
         {
             Ok(response) => response,
             Err(err) => {
-                last_error = Some(format!("{url}: {err}"));
+                last_error = Some(format!("{}: {err}", item.url));
                 continue;
             }
         };
@@ -221,7 +327,7 @@ async fn query_common_panel(
         let body = serde_json::from_str::<Value>(&body_text).unwrap_or(Value::Null);
         if !status.is_success() {
             if should_try_next_common_status(status) {
-                last_error = Some(format!("{url}: HTTP {status}"));
+                last_error = Some(format!("{}: HTTP {status}", item.url));
                 continue;
             }
             return Ok(invalid_snapshot(
@@ -235,12 +341,13 @@ async fn query_common_panel(
         }
         if let Some(snapshot) = parse_common_invalid(upstream_id, provider, &body) {
             last_error = Some(format!(
-                "{url}: {}",
+                "{}: {}",
+                item.url,
                 snapshot.message.as_deref().unwrap_or("balance query failed")
             ));
             continue;
         }
-        last_error = Some(format!("{url}: unsupported balance response {body}"));
+        last_error = Some(format!("{}: unsupported balance response {body}", item.url));
     }
     Ok(invalid_snapshot(
         upstream_id,
@@ -249,19 +356,73 @@ async fn query_common_panel(
     ))
 }
 
-fn common_balance_urls(base_url: &str, provider: BalanceProvider) -> Vec<String> {
+impl<'a> CommonBalanceAuth<'a> {
+    fn headers_for(self, kind: CommonBalanceUrlKind) -> Option<CommonBalanceHeaders<'a>> {
+        match (self, kind) {
+            (Self::ApiKey { api_key }, CommonBalanceUrlKind::Generic) => {
+                Some(CommonBalanceHeaders {
+                    bearer: api_key,
+                    newapi_user_id: None,
+                })
+            }
+            (Self::ApiKey { .. }, CommonBalanceUrlKind::NewApi) => None,
+            (Self::NewApi { user_key, user_id }, CommonBalanceUrlKind::NewApi) => {
+                Some(CommonBalanceHeaders {
+                    bearer: user_key,
+                    newapi_user_id: Some(user_id),
+                })
+            }
+            (Self::NewApi { .. }, CommonBalanceUrlKind::Generic) => None,
+            (Self::Auto { api_key, .. }, CommonBalanceUrlKind::Generic) => {
+                Some(CommonBalanceHeaders {
+                    bearer: api_key,
+                    newapi_user_id: None,
+                })
+            }
+            (
+                Self::Auto {
+                    newapi_user_key,
+                    newapi_user_id,
+                    ..
+                },
+                CommonBalanceUrlKind::NewApi,
+            ) => Some(CommonBalanceHeaders {
+                bearer: newapi_user_key?,
+                newapi_user_id: Some(newapi_user_id?),
+            }),
+        }
+    }
+}
+
+fn common_balance_urls(base_url: &str, provider: BalanceProvider) -> Vec<CommonBalanceUrl> {
     let mut urls = Vec::new();
     match provider {
         BalanceProvider::Sub2Api => {
-            push_unique_url(&mut urls, append_path_url(base_url, "usage"));
-            push_unique_url(&mut urls, root_path_url(base_url, "/v1/usage"));
+            push_unique_url(
+                &mut urls,
+                append_path_url(base_url, "usage"),
+                CommonBalanceUrlKind::Generic,
+            );
+            push_unique_url(
+                &mut urls,
+                root_path_url(base_url, "/v1/usage"),
+                CommonBalanceUrlKind::Generic,
+            );
         }
         BalanceProvider::NewApi => {
             push_newapi_urls(&mut urls, base_url);
         }
         BalanceProvider::Auto => {
-            push_unique_url(&mut urls, append_path_url(base_url, "usage"));
-            push_unique_url(&mut urls, root_path_url(base_url, "/v1/usage"));
+            push_unique_url(
+                &mut urls,
+                append_path_url(base_url, "usage"),
+                CommonBalanceUrlKind::Generic,
+            );
+            push_unique_url(
+                &mut urls,
+                root_path_url(base_url, "/v1/usage"),
+                CommonBalanceUrlKind::Generic,
+            );
             push_newapi_urls(&mut urls, base_url);
         }
         _ => {}
@@ -269,20 +430,12 @@ fn common_balance_urls(base_url: &str, provider: BalanceProvider) -> Vec<String>
     urls
 }
 
-fn push_newapi_urls(urls: &mut Vec<String>, base_url: &str) {
-    for path in [
-        "/api/token/self",
-        "/api/user/self",
-        "/api/user/profile",
-        "/api/user/token",
-        "/api/v1/token/self",
-        "/api/v1/user/self",
-        "/api/v1/user/profile",
-        "/dashboard/billing/credit_grants",
-        "/v1/dashboard/billing/credit_grants",
-    ] {
-        push_unique_url(urls, root_path_url(base_url, path));
-    }
+fn push_newapi_urls(urls: &mut Vec<CommonBalanceUrl>, base_url: &str) {
+    push_unique_url(
+        urls,
+        root_path_url(base_url, "/api/user/self"),
+        CommonBalanceUrlKind::NewApi,
+    );
 }
 
 fn append_path_url(base_url: &str, path: &str) -> Option<String> {
@@ -302,12 +455,16 @@ fn root_path_url(base_url: &str, path: &str) -> Option<String> {
     Some(url.to_string())
 }
 
-fn push_unique_url(urls: &mut Vec<String>, url: Option<String>) {
+fn push_unique_url(
+    urls: &mut Vec<CommonBalanceUrl>,
+    url: Option<String>,
+    kind: CommonBalanceUrlKind,
+) {
     let Some(url) = url else {
         return;
     };
-    if !urls.iter().any(|existing| existing == &url) {
-        urls.push(url);
+    if !urls.iter().any(|existing| existing.url == url) {
+        urls.push(CommonBalanceUrl { url, kind });
     }
 }
 

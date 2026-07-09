@@ -20,6 +20,8 @@ const BALANCE_PROVIDERS: &[BalanceProvider] = &[
 pub(super) struct UpstreamEditor {
     upstream: Upstream,
     api_key: String,
+    newapi_user_key: String,
+    newapi_user_id: String,
 }
 
 impl UpstreamEditor {
@@ -27,6 +29,8 @@ impl UpstreamEditor {
         Self {
             upstream,
             api_key: String::new(),
+            newapi_user_key: String::new(),
+            newapi_user_id: String::new(),
         }
     }
 }
@@ -81,6 +85,9 @@ impl CodexSwitchApp {
         upstream.base_url = upstream.base_url.trim().to_string();
         upstream.weight = upstream.weight.max(1);
         let api_key = editor.api_key.trim().to_string();
+        let newapi_user_key = editor.newapi_user_key.trim().to_string();
+        let newapi_user_id = editor.newapi_user_id.trim().to_string();
+        let uses_newapi_balance = uses_newapi_balance(&upstream);
 
         if upstream.name.is_empty() {
             self.status = "上游名称不能为空".to_string();
@@ -93,7 +100,36 @@ impl CodexSwitchApp {
         let result = self.runtime.block_on(async {
             self.state.store.save_upstream(&upstream).await?;
             if upstream.kind == UpstreamKind::RelayApiKey && !api_key.is_empty() {
-                self.state.credentials.put(&upstream.id, "api_key", &api_key).await?;
+                self.state
+                    .credentials
+                    .put(&upstream.id, balance::API_KEY_CREDENTIAL, &api_key)
+                    .await?;
+            }
+            if upstream.kind == UpstreamKind::RelayApiKey
+                && uses_newapi_balance
+                && !newapi_user_key.is_empty()
+            {
+                self.state
+                    .credentials
+                    .put(
+                        &upstream.id,
+                        balance::NEWAPI_USER_KEY_CREDENTIAL,
+                        &newapi_user_key,
+                    )
+                    .await?;
+            }
+            if upstream.kind == UpstreamKind::RelayApiKey
+                && uses_newapi_balance
+                && !newapi_user_id.is_empty()
+            {
+                self.state
+                    .credentials
+                    .put(
+                        &upstream.id,
+                        balance::NEWAPI_USER_ID_CREDENTIAL,
+                        &newapi_user_id,
+                    )
+                    .await?;
             }
             anyhow::Ok(())
         });
@@ -146,6 +182,24 @@ impl UpstreamEditor {
                     .hint_text("留空则不修改"),
             );
         });
+        if uses_newapi_balance(&self.upstream) {
+            ui.horizontal(|ui| {
+                ui.label("NewApi 用户 Key");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.newapi_user_key)
+                        .password(true)
+                        .hint_text("仅余额查询使用, 留空则不修改"),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label("NewApi 用户 ID");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.newapi_user_id)
+                        .password(true)
+                        .hint_text("仅余额查询使用, 留空则不修改"),
+                );
+            });
+        }
         ui.horizontal(|ui| {
             ui.radio_value(&mut self.upstream.wire_api, WireApi::Responses, "Responses");
             ui.radio_value(
@@ -188,6 +242,12 @@ fn provider_combo(ui: &mut egui::Ui, provider: &mut BalanceProvider) {
                 ui.selectable_value(provider, *value, value.as_str());
             }
         });
+}
+
+fn uses_newapi_balance(upstream: &Upstream) -> bool {
+    upstream.balance_provider == BalanceProvider::NewApi
+        || (upstream.balance_provider == BalanceProvider::Auto
+            && balance::detect_provider(&upstream.base_url) == Some(BalanceProvider::NewApi))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

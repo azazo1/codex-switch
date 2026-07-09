@@ -558,7 +558,11 @@ impl CodexSwitchApp {
         );
         let result = self.runtime.block_on(async {
             self.state.store.save_upstream(&upstream).await?;
-            self.state.credentials.put(&upstream.id, "api_key", &api_key).await
+            self.state
+                .credentials
+                .put(&upstream.id, balance::API_KEY_CREDENTIAL, &api_key)
+                .await?;
+            anyhow::Ok(())
         });
         match result {
             Ok(()) => {
