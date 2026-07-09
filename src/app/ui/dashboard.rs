@@ -74,10 +74,7 @@ impl CodexSwitchApp {
                 "获取模型价格"
             };
             if ui
-                .add_enabled(
-                    !self.price_fetch_pending && self.price_cache_count == 0,
-                    egui::Button::new(label),
-                )
+                .add_enabled(!self.price_fetch_pending, egui::Button::new(label))
                 .clicked()
             {
                 self.fetch_price_cache();
