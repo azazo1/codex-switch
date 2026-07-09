@@ -13,7 +13,7 @@ impl CodexSwitchApp {
     pub(super) fn active_connections_ui(&mut self, ui: &mut egui::Ui) {
         ui.heading("活跃连接");
         if self.live_connections.is_empty() {
-            ui.label("当前没有活跃流式请求");
+            ui.label("当前没有活跃请求");
             return;
         }
         let tail_width = live_tail_width(ui.available_width());
@@ -80,7 +80,9 @@ fn live_tail_width(available_width: f32) -> f32 {
 }
 
 fn live_tail_label(ui: &mut egui::Ui, item: &LiveRequestSnapshot, width: f32) {
-    let text = if item.tail.is_empty() {
+    let text = if !item.streaming {
+        "非流式"
+    } else if item.tail.is_empty() {
         "等待输出"
     } else {
         item.tail.as_str()

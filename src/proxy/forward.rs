@@ -14,12 +14,13 @@ use axum::{
 };
 use futures_util::StreamExt;
 use headers::apply_headers;
-use logging::{AttemptLog, LiveRequestGuard, StreamLogDraft, record_attempt_log};
+use logging::{ActiveRequestGuard, AttemptLog, LiveRequestGuard, StreamLogDraft, record_attempt_log};
 use response::{build_response, build_stream_response, to_axum_headers};
 use select::selection_plan;
 use serde_json::{Value, json};
 use std::io;
 use std::time::Instant;
+use tokio::sync::watch;
 
 mod auth;
 mod headers;
@@ -353,7 +354,18 @@ async fn forward_with_upstream(
     if let Some(query) = request.uri.query() {
         tracing::debug!(query, "client query observed");
     }
-    let response = upstream_request.send().await?;
+    let mut terminate_rx = request.state.live_requests.start(LiveRequestMeta {
+        id: request.request_id.clone(),
+        upstream_name: Some(upstream.name.clone()),
+        endpoint: request.endpoint.clone(),
+        model: request.model.clone(),
+        reasoning_effort: request.reasoning_effort.clone(),
+        streaming: false,
+    });
+    request.state.events.bump_live_streams();
+    let mut active_guard =
+        ActiveRequestGuard::new(request.state.clone(), request.request_id.clone());
+    let response = send_upstream_request(upstream_request, &mut terminate_rx).await?;
     let status = StatusCode::from_u16(response.status().as_u16())?;
     let response_headers = response.headers().clone();
     if upstream.kind == UpstreamKind::CodexOauth
@@ -371,7 +383,19 @@ async fn forward_with_upstream(
         .to_string();
 
     if content_type.contains("text/event-stream") {
-        let stream = build_live_response_stream(request, upstream.clone(), status, response);
+        request
+            .state
+            .live_requests
+            .set_streaming(&request.request_id, true);
+        request.state.events.bump_live_streams();
+        let stream = build_live_response_stream(
+            request,
+            upstream.clone(),
+            status,
+            response,
+            active_guard,
+            terminate_rx,
+        );
         let failure_kind = scheduler::classify_response(status, &[]);
         Ok(ForwardResult {
             upstream,
@@ -383,7 +407,8 @@ async fn forward_with_upstream(
             response: build_stream_response(status, response_headers, stream),
         })
     } else {
-        let bytes = response.bytes().await?;
+        let bytes = read_response_bytes(response, &mut terminate_rx).await?;
+        active_guard.finish();
         let value = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
         let mut usage = usage::extract_usage_from_json(&value);
         usage.finish();
@@ -406,11 +431,60 @@ async fn forward_with_upstream(
     }
 }
 
+async fn send_upstream_request(
+    upstream_request: reqwest::RequestBuilder,
+    terminate_rx: &mut watch::Receiver<bool>,
+) -> anyhow::Result<reqwest::Response> {
+    let send_future = upstream_request.send();
+    tokio::pin!(send_future);
+    loop {
+        tokio::select! {
+            changed = terminate_rx.changed() => {
+                if termination_requested(changed, terminate_rx) {
+                    anyhow::bail!("terminated by user");
+                }
+            }
+            response = &mut send_future => {
+                return Ok(response?);
+            }
+        }
+    }
+}
+
+async fn read_response_bytes(
+    response: reqwest::Response,
+    terminate_rx: &mut watch::Receiver<bool>,
+) -> anyhow::Result<Bytes> {
+    let bytes_future = response.bytes();
+    tokio::pin!(bytes_future);
+    loop {
+        tokio::select! {
+            changed = terminate_rx.changed() => {
+                if termination_requested(changed, terminate_rx) {
+                    anyhow::bail!("terminated by user");
+                }
+            }
+            bytes = &mut bytes_future => {
+                return Ok(bytes?);
+            }
+        }
+    }
+}
+
+fn termination_requested(
+    changed: Result<(), watch::error::RecvError>,
+    terminate_rx: &watch::Receiver<bool>,
+) -> bool {
+    changed.is_ok() && *terminate_rx.borrow()
+}
+
 fn build_live_response_stream(
     request: &ForwardRequest<'_>,
     upstream: Upstream,
     status: StatusCode,
     response: reqwest::Response,
+    active_guard: ActiveRequestGuard,
+    mut terminate_rx: watch::Receiver<bool>,
 ) -> impl futures_util::Stream<Item = Result<Bytes, io::Error>> + Send + 'static {
     let state = request.state.clone();
     let request_id = request.request_id.clone();
@@ -420,7 +494,6 @@ fn build_live_response_stream(
     let started = request.started;
     let convert_chat = request.responses_api && upstream.wire_api == WireApi::ChatCompletions;
     let response_id = format!("resp_{}", uuid::Uuid::new_v4());
-    let upstream_name = upstream.name.clone();
     let log_draft = StreamLogDraft::new(
         state.clone(),
         &upstream,
@@ -430,18 +503,9 @@ fn build_live_response_stream(
         status,
         started,
     );
-    let live_guard = LiveRequestGuard::new(state.clone(), request_id.clone(), log_draft.clone());
+    let live_guard = LiveRequestGuard::from_active(active_guard, log_draft.clone());
     stream! {
         let mut live_guard = live_guard;
-        let mut terminate_rx = state.live_requests.start(LiveRequestMeta {
-            id: request_id.clone(),
-            upstream_name: Some(upstream_name.clone()),
-            endpoint: endpoint.clone(),
-            model: model.clone(),
-            reasoning_effort: reasoning_effort.clone(),
-        });
-        state.events.bump_live_streams();
-        live_guard.mark_active();
 
         let mut first_token_ms = None;
         let mut usage = TokenUsage::default();

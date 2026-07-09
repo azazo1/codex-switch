@@ -17,6 +17,7 @@ pub struct LiveRequestMeta {
     pub endpoint: String,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
+    pub streaming: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +27,7 @@ pub struct LiveRequestSnapshot {
     pub endpoint: String,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
+    pub streaming: bool,
     pub tail: String,
     pub started_at: DateTime<Utc>,
     pub terminating: bool,
@@ -70,6 +72,17 @@ impl LiveRequestStore {
         true
     }
 
+    pub fn set_streaming(&self, id: &str, streaming: bool) -> bool {
+        let Ok(mut inner) = self.inner.write() else {
+            return false;
+        };
+        let Some(request) = inner.get_mut(id) else {
+            return false;
+        };
+        request.meta.streaming = streaming;
+        true
+    }
+
     pub fn finish(&self, id: &str) {
         if let Ok(mut inner) = self.inner.write() {
             inner.remove(id);
@@ -100,6 +113,7 @@ impl LiveRequestStore {
                 endpoint: request.meta.endpoint.clone(),
                 model: request.meta.model.clone(),
                 reasoning_effort: request.meta.reasoning_effort.clone(),
+                streaming: request.meta.streaming,
                 tail: request.tail.clone(),
                 started_at: request.started_at,
                 terminating: request.terminating,
@@ -147,6 +161,7 @@ mod tests {
             endpoint: "/responses".to_string(),
             model: Some("model-a".to_string()),
             reasoning_effort: None,
+            streaming: true,
         }
     }
 
@@ -171,6 +186,19 @@ mod tests {
         store.finish("request-a");
 
         assert!(store.snapshots().is_empty());
+    }
+
+    #[test]
+    fn set_streaming_updates_snapshot_kind() {
+        let store = LiveRequestStore::default();
+        let mut meta = request_meta();
+        meta.streaming = false;
+        store.start(meta);
+
+        assert!(!store.snapshots()[0].streaming);
+        assert!(store.set_streaming("request-a", true));
+
+        assert!(store.snapshots()[0].streaming);
     }
 
     #[test]

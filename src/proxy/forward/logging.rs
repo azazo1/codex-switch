@@ -157,25 +157,19 @@ impl StreamLogDraft {
     }
 }
 
-pub(super) struct LiveRequestGuard {
+pub(super) struct ActiveRequestGuard {
     state: AppState,
     request_id: String,
-    log: StreamLogDraft,
     active: bool,
 }
 
-impl LiveRequestGuard {
-    pub(super) fn new(state: AppState, request_id: String, log: StreamLogDraft) -> Self {
+impl ActiveRequestGuard {
+    pub(super) fn new(state: AppState, request_id: String) -> Self {
         Self {
             state,
             request_id,
-            log,
-            active: false,
+            active: true,
         }
-    }
-
-    pub(super) fn mark_active(&mut self) {
-        self.active = true;
     }
 
     pub(super) fn finish(&mut self) {
@@ -188,9 +182,29 @@ impl LiveRequestGuard {
     }
 }
 
-impl Drop for LiveRequestGuard {
+impl Drop for ActiveRequestGuard {
     fn drop(&mut self) {
         self.finish();
+    }
+}
+
+pub(super) struct LiveRequestGuard {
+    active: ActiveRequestGuard,
+    log: StreamLogDraft,
+}
+
+impl LiveRequestGuard {
+    pub(super) fn from_active(active: ActiveRequestGuard, log: StreamLogDraft) -> Self {
+        Self { active, log }
+    }
+
+    pub(super) fn finish(&mut self) {
+        self.active.finish();
+    }
+}
+
+impl Drop for LiveRequestGuard {
+    fn drop(&mut self) {
         self.log.record_on_drop();
     }
 }
