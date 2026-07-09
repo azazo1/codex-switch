@@ -2,7 +2,8 @@ use crate::app::{platform, state::AppState};
 use crate::balance;
 use crate::core::models::{
     BalanceProvider, BalanceSnapshot, DashboardStats, DatabaseInfo, ProviderStats, QuotaSnapshot,
-    RequestLog, ScheduleGroup, ScheduleGroupMember, Upstream, WireApi,
+    RequestLog, ScheduleGroup, ScheduleGroupChild, ScheduleGroupMember, ScheduleRouteRule,
+    Upstream, WireApi,
 };
 use crate::live::LiveRequestSnapshot;
 use crate::oauth;
@@ -95,6 +96,9 @@ pub struct CodexSwitchApp {
     upstreams: Vec<Upstream>,
     schedule_groups: Vec<ScheduleGroup>,
     schedule_members: BTreeMap<String, Vec<ScheduleGroupMember>>,
+    schedule_children: BTreeMap<String, Vec<ScheduleGroupChild>>,
+    schedule_route_rules: BTreeMap<String, Vec<ScheduleRouteRule>>,
+    scheduler_route_max_hops: i64,
     current_schedule_group_id: Option<String>,
     schedule_group_editor: Option<ScheduleGroupEditor>,
     new_schedule_group: ScheduleGroupEditor,
@@ -176,6 +180,9 @@ impl CodexSwitchApp {
             upstreams: Vec::new(),
             schedule_groups: Vec::new(),
             schedule_members: BTreeMap::new(),
+            schedule_children: BTreeMap::new(),
+            schedule_route_rules: BTreeMap::new(),
+            scheduler_route_max_hops: 8,
             current_schedule_group_id: None,
             schedule_group_editor: None,
             new_schedule_group: ScheduleGroupEditor::new_empty(),
@@ -432,6 +439,9 @@ impl CodexSwitchApp {
                 self.upstreams = data.upstreams;
                 self.schedule_groups = data.schedule_groups;
                 self.schedule_members = data.schedule_members;
+                self.schedule_children = data.schedule_children;
+                self.schedule_route_rules = data.schedule_route_rules;
+                self.scheduler_route_max_hops = data.scheduler_route_max_hops;
                 self.current_schedule_group_id = data.current_schedule_group_id;
                 self.sync_schedule_group_editor();
                 self.stats = data.stats;

@@ -15,6 +15,14 @@ pub fn normalize_oauth_body(body: &[u8], compact: bool) -> anyhow::Result<Vec<u8
     Ok(serde_json::to_vec(&value)?)
 }
 
+pub fn rewrite_model(body: &[u8], model: &str) -> anyhow::Result<Vec<u8>> {
+    let mut value: Value = serde_json::from_slice(body)?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("model".to_string(), Value::String(model.to_string()));
+    }
+    Ok(serde_json::to_vec(&value)?)
+}
+
 pub fn responses_subpath_from_uri(path: &str) -> String {
     for marker in ["/v1/responses", "/responses", "/backend-api/codex/responses"] {
         if let Some(rest) = path.strip_prefix(marker) {
@@ -61,5 +69,13 @@ mod tests {
         assert!(value.get("stream").is_none());
         assert!(value.get("store").is_none());
         assert!(value.get("prompt_cache_key").is_none());
+    }
+
+    #[test]
+    fn rewrites_root_model() {
+        let body = rewrite_model(br#"{"model":"client-model","input":"hello"}"#, "target-model")
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["model"], "target-model");
     }
 }

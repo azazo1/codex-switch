@@ -192,10 +192,19 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
         request.compact,
     )
     .await?;
+    for step in &plan.route_path {
+        tracing::debug!(
+            group_id = %step.group_id,
+            rule_id = %step.rule_id,
+            target_kind = %step.target_kind.as_str(),
+            target_id = %step.target_id,
+            "schedule route step"
+        );
+    }
     let candidate_count = plan.candidates.len();
     let mut last_error = None;
     for (index, upstream) in plan.candidates.iter().cloned().enumerate() {
-        match forward_with_upstream(&request, upstream.clone()).await {
+        match forward_with_upstream(&request, upstream.clone(), plan.target_model.as_deref()).await {
             Ok(result) => {
                 if let Some(failure) = result.failure_kind {
                     let count = request
@@ -309,8 +318,12 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
 async fn forward_with_upstream(
     request: &ForwardRequest<'_>,
     upstream: Upstream,
+    target_model: Option<&str>,
 ) -> anyhow::Result<ForwardResult> {
-    let mut target_body = request.body.to_vec();
+    let mut target_body = match target_model {
+        Some(model) => transform::rewrite_model(&request.body, model)?,
+        None => request.body.to_vec(),
+    };
     let target_url;
     if upstream.kind == UpstreamKind::CodexOauth {
         target_body = transform::normalize_oauth_body(&target_body, request.compact)?;

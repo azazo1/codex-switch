@@ -100,7 +100,10 @@ async fn ws_placeholder() -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::models::{BalanceProvider, Upstream, WireApi};
+    use crate::core::models::{
+        BalanceProvider, ScheduleGroup, ScheduleGroupMember, ScheduleRouteRule,
+        ScheduleMode, ScheduleRouteTargetKind, Upstream, WireApi,
+    };
     use crate::storage::{Store, credentials::CredentialStore};
     use axum::{
         body::Body,
@@ -333,6 +336,167 @@ mod tests {
         assert_eq!(logs[1].status, i64::from(StatusCode::PAYMENT_REQUIRED.as_u16()));
     }
 
+    #[tokio::test]
+    async fn model_route_can_jump_to_nested_group() {
+        let (default_base, default_hits) = spawn_mock(MockMode::ResponsesJson).await;
+        let (glm_base, glm_hits) = spawn_mock(MockMode::ResponsesJson).await;
+        let state = test_state_with_relays(vec![
+            ("default-upstream", default_base.as_str(), WireApi::Responses, 0),
+            ("glm-upstream", glm_base.as_str(), WireApi::Responses, 0),
+        ])
+        .await;
+        let default_upstream = upstream_by_name(&state, "default-upstream").await;
+        let glm_upstream = upstream_by_name(&state, "glm-upstream").await;
+        restrict_group_to_upstream(&state, "default", &default_upstream.id).await;
+        set_group_mode(&state, "default", ScheduleMode::ModelMapping).await;
+        let glm_group = save_group_with_upstream(&state, "GLM", &glm_upstream.id).await;
+        let mut rule = ScheduleRouteRule::new("default".to_string());
+        rule.name = "glm".to_string();
+        rule.pattern = "glm-*".to_string();
+        rule.target_kind = ScheduleRouteTargetKind::Group;
+        rule.target_group_id = Some(glm_group.id.clone());
+        rule.priority = 10;
+        state.store.save_schedule_route_rule(&rule).await.unwrap();
+        let proxy_base = spawn_proxy(state.clone()).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({"model":"glm-4.5","input":"hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        assert_eq!(default_hits.lock().await.len(), 0);
+        assert_eq!(glm_hits.lock().await.len(), 1);
+        let logs = state.store.recent_logs(1).await.unwrap();
+        assert_eq!(logs[0].upstream_name.as_deref(), Some("glm-upstream"));
+    }
+
+    #[tokio::test]
+    async fn model_route_can_direct_to_upstream_and_rewrite_model_template() {
+        let (image_base, image_hits) = spawn_mock(MockMode::ResponsesJson).await;
+        let state = test_state(&image_base, WireApi::Responses).await;
+        set_group_mode(&state, "default", ScheduleMode::ModelMapping).await;
+        let image_upstream = upstream_by_name(&state, "mock").await;
+        let mut rule = ScheduleRouteRule::new("default".to_string());
+        rule.name = "image".to_string();
+        rule.pattern = "glm/*".to_string();
+        rule.target_kind = ScheduleRouteTargetKind::Upstream;
+        rule.target_upstream_id = Some(image_upstream.id.clone());
+        rule.target_model = Some("*".to_string());
+        state.store.save_schedule_route_rule(&rule).await.unwrap();
+        let proxy_base = spawn_proxy(state.clone()).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({"model":"glm/glm-4.5","input":"draw"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let hits = image_hits.lock().await;
+        assert_eq!(hits[0].body["model"], "glm-4.5");
+        drop(hits);
+
+        let response = reqwest::Client::new()
+            .get(format!("{proxy_base}/v1/models"))
+            .bearer_auth("local-test")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = response.json::<Value>().await.unwrap();
+        let ids = value["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item["id"].as_str())
+            .collect::<Vec<_>>();
+        assert!(!ids.contains(&"glm/*"));
+    }
+
+    #[tokio::test]
+    async fn fixed_group_can_target_nested_schedule_group() {
+        let (default_base, default_hits) = spawn_mock(MockMode::ResponsesJson).await;
+        let (nested_base, nested_hits) = spawn_mock(MockMode::ResponsesJson).await;
+        let state = test_state_with_relays(vec![
+            ("default-upstream", default_base.as_str(), WireApi::Responses, 0),
+            ("nested-upstream", nested_base.as_str(), WireApi::Responses, 0),
+        ])
+        .await;
+        let nested_upstream = upstream_by_name(&state, "nested-upstream").await;
+        let nested_group = save_group_with_upstream(&state, "Nested", &nested_upstream.id).await;
+        let mut default_group = state
+            .store
+            .get_schedule_group("default")
+            .await
+            .unwrap()
+            .unwrap();
+        default_group.mode = ScheduleMode::Fixed;
+        default_group.fixed_target_kind = ScheduleRouteTargetKind::Group;
+        default_group.fixed_group_id = Some(nested_group.id);
+        state.store.save_schedule_group(&default_group).await.unwrap();
+        let proxy_base = spawn_proxy(state.clone()).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({"model":"gpt-test","input":"hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(default_hits.lock().await.len(), 0);
+        assert_eq!(nested_hits.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn model_route_cycle_returns_error_after_max_hops() {
+        let (mock_base, hits) = spawn_mock(MockMode::ResponsesJson).await;
+        let state = test_state(&mock_base, WireApi::Responses).await;
+        state
+            .store
+            .set_setting("scheduler_route_max_hops", "1")
+            .await
+            .unwrap();
+        set_group_mode(&state, "default", ScheduleMode::ModelMapping).await;
+        let mut loop_group = ScheduleGroup::new("Loop".to_string());
+        loop_group.mode = ScheduleMode::ModelMapping;
+        state.store.save_schedule_group(&loop_group).await.unwrap();
+        let mut first = ScheduleRouteRule::new("default".to_string());
+        first.name = "first".to_string();
+        first.pattern = "*".to_string();
+        first.target_kind = ScheduleRouteTargetKind::Group;
+        first.target_group_id = Some(loop_group.id.clone());
+        state.store.save_schedule_route_rule(&first).await.unwrap();
+        let mut second = ScheduleRouteRule::new(loop_group.id.clone());
+        second.name = "second".to_string();
+        second.pattern = "*".to_string();
+        second.target_kind = ScheduleRouteTargetKind::Group;
+        second.target_group_id = Some("default".to_string());
+        state.store.save_schedule_route_rule(&second).await.unwrap();
+        let proxy_base = spawn_proxy(state).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({"model":"anything","input":"hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let value = response.json::<Value>().await.unwrap();
+        assert_eq!(value["error"]["type"], "proxy_error");
+        assert!(value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("模型路由超过最大跳转次数"));
+        assert_eq!(hits.lock().await.len(), 0);
+    }
+
     async fn test_state(base_url: &str, wire_api: WireApi) -> AppState {
         test_state_with_relays(vec![("mock", base_url, wire_api, 0)]).await
     }
@@ -363,6 +527,60 @@ mod tests {
             scheduler: Default::default(),
             live_requests: Default::default(),
         }
+    }
+
+    async fn upstream_by_name(state: &AppState, name: &str) -> Upstream {
+        state
+            .store
+            .list_upstreams()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|upstream| upstream.name == name)
+            .unwrap()
+    }
+
+    async fn restrict_group_to_upstream(state: &AppState, group_id: &str, upstream_id: &str) {
+        let mut group = state
+            .store
+            .get_schedule_group(group_id)
+            .await
+            .unwrap()
+            .unwrap();
+        group.use_all_upstreams = false;
+        state.store.save_schedule_group(&group).await.unwrap();
+        for upstream in state.store.list_upstreams().await.unwrap() {
+            let mut member = ScheduleGroupMember::new(group_id.to_string(), upstream.id.clone());
+            member.enabled = upstream.id == upstream_id;
+            state.store.save_schedule_group_member(&member).await.unwrap();
+        }
+    }
+
+    async fn set_group_mode(state: &AppState, group_id: &str, mode: ScheduleMode) {
+        let mut group = state
+            .store
+            .get_schedule_group(group_id)
+            .await
+            .unwrap()
+            .unwrap();
+        group.mode = mode;
+        state.store.save_schedule_group(&group).await.unwrap();
+    }
+
+    async fn save_group_with_upstream(
+        state: &AppState,
+        name: &str,
+        upstream_id: &str,
+    ) -> ScheduleGroup {
+        let mut group = ScheduleGroup::new(name.to_string());
+        group.use_all_upstreams = false;
+        state.store.save_schedule_group(&group).await.unwrap();
+        for upstream in state.store.list_upstreams().await.unwrap() {
+            let mut member = ScheduleGroupMember::new(group.id.clone(), upstream.id.clone());
+            member.enabled = upstream.id == upstream_id;
+            state.store.save_schedule_group_member(&member).await.unwrap();
+        }
+        group
     }
 
     async fn spawn_proxy(state: AppState) -> String {

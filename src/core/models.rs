@@ -97,10 +97,17 @@ pub enum ScheduleMode {
     RoundRobin,
     Failover,
     Fixed,
+    ModelMapping,
 }
 
 impl ScheduleMode {
-    pub const ALL: [Self; 4] = [Self::Random, Self::RoundRobin, Self::Failover, Self::Fixed];
+    pub const ALL: [Self; 5] = [
+        Self::Random,
+        Self::RoundRobin,
+        Self::Failover,
+        Self::Fixed,
+        Self::ModelMapping,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -108,6 +115,7 @@ impl ScheduleMode {
             Self::RoundRobin => "round_robin",
             Self::Failover => "failover",
             Self::Fixed => "fixed",
+            Self::ModelMapping => "model_mapping",
         }
     }
 
@@ -116,6 +124,7 @@ impl ScheduleMode {
             "round_robin" | "polling" => Self::RoundRobin,
             "fixed" => Self::Fixed,
             "failover" => Self::Failover,
+            "model_mapping" | "model-mapping" | "mapping" => Self::ModelMapping,
             _ => Self::Random,
         }
     }
@@ -205,7 +214,9 @@ pub struct ScheduleGroup {
     pub name: String,
     pub mode: ScheduleMode,
     pub use_all_upstreams: bool,
+    pub fixed_target_kind: ScheduleRouteTargetKind,
     pub fixed_upstream_id: Option<String>,
+    pub fixed_group_id: Option<String>,
     pub failure_threshold: i64,
     pub failover_on_balance: bool,
     pub failover_on_network: bool,
@@ -223,7 +234,9 @@ impl ScheduleGroup {
             name,
             mode: ScheduleMode::Failover,
             use_all_upstreams: true,
+            fixed_target_kind: ScheduleRouteTargetKind::Upstream,
             fixed_upstream_id: None,
+            fixed_group_id: None,
             failure_threshold: 1,
             failover_on_balance: true,
             failover_on_network: true,
@@ -255,6 +268,90 @@ impl ScheduleGroupMember {
             enabled: true,
             priority: 0,
             weight: 1,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduleGroupChild {
+    pub group_id: String,
+    pub target_group_id: String,
+    pub enabled: bool,
+    pub priority: i64,
+    pub weight: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl ScheduleGroupChild {
+    pub fn new(group_id: String, target_group_id: String) -> Self {
+        let now = Utc::now();
+        Self {
+            group_id,
+            target_group_id,
+            enabled: true,
+            priority: 0,
+            weight: 1,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScheduleRouteTargetKind {
+    Group,
+    Upstream,
+}
+
+impl ScheduleRouteTargetKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Group => "group",
+            Self::Upstream => "upstream",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "upstream" => Self::Upstream,
+            _ => Self::Group,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduleRouteRule {
+    pub id: String,
+    pub group_id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub pattern: String,
+    pub target_kind: ScheduleRouteTargetKind,
+    pub target_group_id: Option<String>,
+    pub target_upstream_id: Option<String>,
+    pub target_model: Option<String>,
+    pub priority: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl ScheduleRouteRule {
+    pub fn new(group_id: String) -> Self {
+        let now = Utc::now();
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            group_id,
+            name: String::new(),
+            enabled: true,
+            pattern: String::new(),
+            target_kind: ScheduleRouteTargetKind::Group,
+            target_group_id: None,
+            target_upstream_id: None,
+            target_model: None,
+            priority: 0,
             created_at: now,
             updated_at: now,
         }

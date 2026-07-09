@@ -1,20 +1,28 @@
 use crate::app::AppState;
-use crate::core::models::{Upstream, UpstreamKind};
+use crate::core::models::{
+    ScheduleGroup, ScheduleMode, ScheduleRouteTargetKind, Upstream, UpstreamKind,
+};
 use crate::proxy::transform;
+use crate::scheduler::is_exact_pattern;
 use axum::http::HeaderMap;
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 
 use super::headers::apply_headers;
 
 pub(super) async fn query_models(state: &AppState, headers: &HeaderMap) -> anyhow::Result<Value> {
     let group = state.store.current_schedule_group().await?;
-    let upstreams = state.store.schedule_group_upstreams(&group).await?;
+    let max_hops = state.store.scheduler_route_max_hops().await?;
+    let sources = reachable_model_sources(state, group, max_hops).await?;
     let mut models = Vec::new();
     let mut seen = BTreeSet::new();
     let mut errors = Vec::new();
 
-    for upstream in upstreams {
+    for alias in sources.aliases {
+        push_models(&mut models, &mut seen, vec![alias]);
+    }
+
+    for upstream in sources.upstreams {
         match query_upstream_models(state, headers, &upstream).await {
             Ok(items) => push_models(&mut models, &mut seen, items),
             Err(err) => {
@@ -34,6 +42,84 @@ pub(super) async fn query_models(state: &AppState, headers: &HeaderMap) -> anyho
     }
 
     Ok(json!({"object":"list","data":models}))
+}
+
+struct ModelSources {
+    upstreams: Vec<Upstream>,
+    aliases: Vec<Value>,
+}
+
+async fn reachable_model_sources(
+    state: &AppState,
+    root: ScheduleGroup,
+    max_hops: i64,
+) -> anyhow::Result<ModelSources> {
+    let mut upstreams = Vec::new();
+    let mut aliases = Vec::new();
+    let mut seen_groups = BTreeSet::new();
+    let mut seen_upstreams = BTreeSet::new();
+    let mut queue = VecDeque::from([(root, 0_i64)]);
+    while let Some((group, hops)) = queue.pop_front() {
+        if !seen_groups.insert(group.id.clone()) {
+            continue;
+        }
+        if group.mode != ScheduleMode::ModelMapping {
+            for upstream in state
+                .store
+                .schedule_group_upstreams_nested(&group, max_hops)
+                .await?
+            {
+                if seen_upstreams.insert(upstream.id.clone()) {
+                    upstreams.push(upstream);
+                }
+            }
+            continue;
+        }
+        let rules = state.store.list_schedule_route_rules(&group.id).await?;
+        for rule in rules.into_iter().filter(|rule| rule.enabled) {
+            if is_exact_pattern(&rule.pattern)
+                && let Some(target_model) = rule.target_model.as_deref().map(str::trim)
+                && !target_model.is_empty()
+            {
+                aliases.push(alias_model(&rule.pattern, target_model, &group.name));
+            }
+            if hops >= max_hops.max(1) {
+                tracing::warn!(
+                    group_id = %group.id,
+                    rule_id = %rule.id,
+                    max_hops,
+                    "model source traversal skipped route beyond max hops"
+                );
+                continue;
+            }
+            match rule.target_kind {
+                ScheduleRouteTargetKind::Group => {
+                    let Some(target_group_id) =
+                        rule.target_group_id.as_deref().map(str::trim).filter(|id| !id.is_empty())
+                    else {
+                        continue;
+                    };
+                    if let Some(target_group) = state.store.get_schedule_group(target_group_id).await? {
+                        queue.push_back((target_group, hops + 1));
+                    }
+                }
+                ScheduleRouteTargetKind::Upstream => {
+                    let Some(target_upstream_id) =
+                        rule.target_upstream_id.as_deref().map(str::trim).filter(|id| !id.is_empty())
+                    else {
+                        continue;
+                    };
+                    let Some(upstream) = state.store.get_upstream(target_upstream_id).await? else {
+                        continue;
+                    };
+                    if upstream.enabled && seen_upstreams.insert(upstream.id.clone()) {
+                        upstreams.push(upstream);
+                    }
+                }
+            }
+        }
+    }
+    Ok(ModelSources { upstreams, aliases })
 }
 
 async fn query_upstream_models(
@@ -123,6 +209,16 @@ fn fallback_model(upstream: &Upstream) -> Value {
         "created": 0,
         "owned_by": "codex-switch",
         "upstream_id": upstream.id
+    })
+}
+
+fn alias_model(id: &str, target_model: &str, group_name: &str) -> Value {
+    json!({
+        "id": id,
+        "object": "model",
+        "created": 0,
+        "owned_by": group_name,
+        "target_model": target_model
     })
 }
 

@@ -1,7 +1,8 @@
 use crate::app::state::AppState;
 use crate::core::models::{
     BalanceSnapshot, DashboardStats, DatabaseInfo, ModelUsageStats, ProviderStats, QuotaSnapshot,
-    RequestLog, ScheduleGroup, ScheduleGroupMember, Upstream,
+    RequestLog, ScheduleGroup, ScheduleGroupChild, ScheduleGroupMember, ScheduleRouteRule,
+    Upstream,
 };
 use crate::pricing;
 use std::collections::BTreeMap;
@@ -10,6 +11,9 @@ pub(super) struct ViewData {
     pub upstreams: Vec<Upstream>,
     pub schedule_groups: Vec<ScheduleGroup>,
     pub schedule_members: BTreeMap<String, Vec<ScheduleGroupMember>>,
+    pub schedule_children: BTreeMap<String, Vec<ScheduleGroupChild>>,
+    pub schedule_route_rules: BTreeMap<String, Vec<ScheduleRouteRule>>,
+    pub scheduler_route_max_hops: i64,
     pub current_schedule_group_id: Option<String>,
     pub stats: DashboardStats,
     pub provider_stats: Vec<ProviderStats>,
@@ -35,12 +39,23 @@ pub(super) async fn load_view_data(
     let schedule_groups = state.store.list_schedule_groups().await?;
     let current_schedule_group_id = state.store.get_setting("current_schedule_group_id").await?;
     let mut schedule_members = BTreeMap::new();
+    let mut schedule_children = BTreeMap::new();
+    let mut schedule_route_rules = BTreeMap::new();
     for group in &schedule_groups {
         schedule_members.insert(
             group.id.clone(),
             state.store.list_schedule_group_members(&group.id).await?,
         );
+        schedule_children.insert(
+            group.id.clone(),
+            state.store.list_schedule_group_children(&group.id).await?,
+        );
+        schedule_route_rules.insert(
+            group.id.clone(),
+            state.store.list_schedule_route_rules(&group.id).await?,
+        );
     }
+    let scheduler_route_max_hops = state.store.scheduler_route_max_hops().await?;
     let stats = state.store.dashboard_stats().await?;
     let provider_stats = state.store.provider_stats().await?;
     let log_total_count = state.store.request_log_count().await?;
@@ -71,6 +86,9 @@ pub(super) async fn load_view_data(
         upstreams,
         schedule_groups,
         schedule_members,
+        schedule_children,
+        schedule_route_rules,
+        scheduler_route_max_hops,
         current_schedule_group_id,
         stats,
         provider_stats,

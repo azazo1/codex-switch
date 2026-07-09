@@ -1,4 +1,4 @@
-use crate::core::models::{ScheduleGroup, ScheduleMode, Upstream};
+use crate::core::models::{ScheduleGroup, ScheduleMode, ScheduleRouteTargetKind, Upstream};
 use axum::http::StatusCode;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -35,6 +35,24 @@ pub struct SchedulerPlan {
     pub group: ScheduleGroup,
     pub candidates: Vec<Upstream>,
     pub affinity_key: Option<String>,
+    pub target_model: Option<String>,
+    pub route_path: Vec<ScheduleRouteTraceStep>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScheduleRouteTraceStep {
+    pub group_id: String,
+    pub rule_id: String,
+    pub target_kind: ScheduleRouteTargetKind,
+    pub target_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct DirectSchedulerPlan {
+    pub group: ScheduleGroup,
+    pub upstream: Upstream,
+    pub target_model: Option<String>,
+    pub route_path: Vec<ScheduleRouteTraceStep>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +89,9 @@ impl SchedulerRuntime {
             .is_some_and(|id| upstreams.iter().any(|upstream| upstream.id == *id));
         let mut candidates = match group.mode {
             ScheduleMode::Fixed => fixed_candidates(&group, upstreams)?,
+            ScheduleMode::ModelMapping => {
+                anyhow::bail!("model mapping schedule group has no matching route");
+            }
             ScheduleMode::Random | ScheduleMode::RoundRobin
                 if has_affinity_candidate =>
             {
@@ -90,6 +111,25 @@ impl SchedulerRuntime {
             group,
             candidates,
             affinity_key,
+            target_model: None,
+            route_path: Vec::new(),
+        })
+    }
+
+    pub async fn plan_direct(
+        &self,
+        direct: DirectSchedulerPlan,
+        body: &[u8],
+        endpoint: &str,
+        model: Option<&str>,
+    ) -> anyhow::Result<SchedulerPlan> {
+        let affinity_key = affinity_key_from_body(&direct.group.id, body, endpoint, model);
+        Ok(SchedulerPlan {
+            group: direct.group,
+            candidates: vec![direct.upstream],
+            affinity_key,
+            target_model: direct.target_model,
+            route_path: direct.route_path,
         })
     }
 
@@ -313,6 +353,106 @@ fn failure_key(group_id: &str, upstream_id: &str) -> String {
     format!("{group_id}:{upstream_id}")
 }
 
+pub fn glob_captures(pattern: &str, value: &str) -> Option<Vec<String>> {
+    let pattern_items = pattern.char_indices().collect::<Vec<_>>();
+    let value_items = value.char_indices().collect::<Vec<_>>();
+    glob_captures_inner(value, &pattern_items, &value_items, 0, 0, Vec::new())
+}
+
+pub fn rewrite_model_template(template: &str, captures: &[String]) -> String {
+    let mut result = String::new();
+    let mut capture_index = 0;
+    for ch in template.chars() {
+        if matches!(ch, '*' | '?') {
+            if let Some(capture) = captures.get(capture_index) {
+                result.push_str(capture);
+                capture_index += 1;
+            } else {
+                result.push(ch);
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
+pub fn is_exact_pattern(pattern: &str) -> bool {
+    !pattern.as_bytes().iter().any(|byte| matches!(byte, b'*' | b'?'))
+}
+
+fn glob_captures_inner(
+    value: &str,
+    pattern_items: &[(usize, char)],
+    value_items: &[(usize, char)],
+    pattern_index: usize,
+    value_index: usize,
+    captures: Vec<String>,
+) -> Option<Vec<String>> {
+    if pattern_index == pattern_items.len() {
+        return (value_index == value_items.len()).then_some(captures);
+    }
+    let (_, pattern_char) = pattern_items[pattern_index];
+    match pattern_char {
+        '*' => {
+            let start = value_byte_index(value, value_items, value_index);
+            for end_index in value_index..=value_items.len() {
+                let end = value_byte_index(value, value_items, end_index);
+                let mut next_captures = captures.clone();
+                next_captures.push(value[start..end].to_string());
+                if let Some(found) = glob_captures_inner(
+                    value,
+                    pattern_items,
+                    value_items,
+                    pattern_index + 1,
+                    end_index,
+                    next_captures,
+                ) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        '?' => {
+            if value_index >= value_items.len() {
+                return None;
+            }
+            let start = value_byte_index(value, value_items, value_index);
+            let end = value_byte_index(value, value_items, value_index + 1);
+            let mut next_captures = captures;
+            next_captures.push(value[start..end].to_string());
+            glob_captures_inner(
+                value,
+                pattern_items,
+                value_items,
+                pattern_index + 1,
+                value_index + 1,
+                next_captures,
+            )
+        }
+        literal => {
+            if value_index >= value_items.len() || value_items[value_index].1 != literal {
+                return None;
+            }
+            glob_captures_inner(
+                value,
+                pattern_items,
+                value_items,
+                pattern_index + 1,
+                value_index + 1,
+                captures,
+            )
+        }
+    }
+}
+
+fn value_byte_index(value: &str, value_items: &[(usize, char)], index: usize) -> usize {
+    value_items
+        .get(index)
+        .map(|(byte_index, _)| *byte_index)
+        .unwrap_or(value.len())
+}
+
 impl SchedulerInner {
     fn purge_affinity(&mut self) {
         let now = Instant::now();
@@ -380,6 +520,29 @@ mod tests {
         );
 
         assert_eq!(failure, Some(SchedulerFailureKind::Balance));
+    }
+
+    #[test]
+    fn matches_model_globs() {
+        assert!(glob_captures("glm-*", "glm-4.5").is_some());
+        assert!(glob_captures("gpt-image-?", "gpt-image-1").is_some());
+        assert!(glob_captures("exact-model", "exact-model").is_some());
+        assert!(glob_captures("glm-*", "qwen-3").is_none());
+        assert!(glob_captures("gpt-image-?", "gpt-image-xl").is_none());
+        assert!(is_exact_pattern("exact-model"));
+        assert!(!is_exact_pattern("glm-*"));
+    }
+
+    #[test]
+    fn captures_and_rewrites_model_templates() {
+        let captures = glob_captures("glm/*", "glm/glm-4.5").unwrap();
+        assert_eq!(captures, vec!["glm-4.5"]);
+        assert_eq!(rewrite_model_template("*", &captures), "glm-4.5");
+
+        let captures = glob_captures("vendor/*/model-?", "vendor/acme/model-a").unwrap();
+        assert_eq!(captures, vec!["acme", "a"]);
+        assert_eq!(rewrite_model_template("*/?", &captures), "acme/a");
+        assert_eq!(rewrite_model_template("fixed-model", &captures), "fixed-model");
     }
 
     fn upstream(id: &str) -> Upstream {

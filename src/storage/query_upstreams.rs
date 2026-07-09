@@ -98,6 +98,10 @@ impl Store {
     }
 
     pub async fn delete_upstream(&self, id: &str) -> anyhow::Result<()> {
+        sqlx::query("DELETE FROM schedule_route_rules WHERE target_upstream_id = ?1")
+            .bind(id)
+            .execute(self.pool())
+            .await?;
         sqlx::query("DELETE FROM upstreams WHERE id = ?1")
             .bind(id)
             .execute(self.pool())

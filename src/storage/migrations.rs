@@ -57,6 +57,9 @@ impl Store {
             self.set_setting("local_access_key", &format!("cs-{}", uuid::Uuid::new_v4()))
                 .await?;
         }
+        if self.get_setting("scheduler_route_max_hops").await?.is_none() {
+            self.set_setting("scheduler_route_max_hops", "8").await?;
+        }
         self.ensure_default_schedule_group().await?;
         Ok(())
     }
@@ -258,6 +261,54 @@ fn migrations() -> &'static [Migration] {
             name: "request_log_reasoning_effort",
             statements: &["ALTER TABLE request_logs ADD COLUMN reasoning_effort TEXT"],
         },
+        Migration {
+            version: 5,
+            name: "schedule_route_rules",
+            statements: &[
+                "CREATE TABLE IF NOT EXISTS schedule_route_rules (
+                id TEXT PRIMARY KEY,
+                group_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                pattern TEXT NOT NULL,
+                target_kind TEXT NOT NULL,
+                target_group_id TEXT,
+                target_upstream_id TEXT,
+                target_model TEXT,
+                priority INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (group_id) REFERENCES schedule_groups(id) ON DELETE CASCADE,
+                FOREIGN KEY (target_group_id) REFERENCES schedule_groups(id) ON DELETE CASCADE,
+                FOREIGN KEY (target_upstream_id) REFERENCES upstreams(id) ON DELETE CASCADE
+            )",
+                "CREATE INDEX IF NOT EXISTS idx_schedule_route_rules_group ON schedule_route_rules(group_id)",
+                "CREATE INDEX IF NOT EXISTS idx_schedule_route_rules_target_group ON schedule_route_rules(target_group_id)",
+                "CREATE INDEX IF NOT EXISTS idx_schedule_route_rules_target_upstream ON schedule_route_rules(target_upstream_id)",
+            ],
+        },
+        Migration {
+            version: 6,
+            name: "nested_schedule_groups",
+            statements: &[
+                "ALTER TABLE schedule_groups ADD COLUMN fixed_target_kind TEXT NOT NULL DEFAULT 'upstream'",
+                "ALTER TABLE schedule_groups ADD COLUMN fixed_group_id TEXT",
+                "CREATE TABLE IF NOT EXISTS schedule_group_child_groups (
+                group_id TEXT NOT NULL,
+                target_group_id TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                priority INTEGER NOT NULL DEFAULT 0,
+                weight INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (group_id, target_group_id),
+                FOREIGN KEY (group_id) REFERENCES schedule_groups(id) ON DELETE CASCADE,
+                FOREIGN KEY (target_group_id) REFERENCES schedule_groups(id) ON DELETE CASCADE
+            )",
+                "CREATE INDEX IF NOT EXISTS idx_schedule_group_child_groups_group ON schedule_group_child_groups(group_id)",
+                "CREATE INDEX IF NOT EXISTS idx_schedule_group_child_groups_target ON schedule_group_child_groups(target_group_id)",
+            ],
+        },
     ]
 }
 
@@ -276,7 +327,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 4);
+        assert_eq!(rows.len(), 6);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -287,6 +338,16 @@ mod tests {
         assert_eq!(
             rows[3].get::<String, _>("name"),
             "request_log_reasoning_effort"
+        );
+        assert_eq!(rows[4].get::<i64, _>("version"), 5);
+        assert_eq!(
+            rows[4].get::<String, _>("name"),
+            "schedule_route_rules"
+        );
+        assert_eq!(rows[5].get::<i64, _>("version"), 6);
+        assert_eq!(
+            rows[5].get::<String, _>("name"),
+            "nested_schedule_groups"
         );
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
@@ -300,6 +361,14 @@ mod tests {
                 .as_deref(),
             Some("default")
         );
+        assert_eq!(
+            store
+                .get_setting("scheduler_route_max_hops")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("8")
+        );
 
         drop(store);
         let store = Store::open(&path).await.unwrap();
@@ -308,6 +377,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 4);
+        assert_eq!(count, 6);
     }
 }
