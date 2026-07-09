@@ -37,6 +37,7 @@ mod data;
 mod logs;
 mod quota;
 mod scheduler;
+mod token_amount;
 mod tokens;
 mod upstream_editor;
 mod upstreams;
@@ -179,11 +180,11 @@ impl LogFilterState {
         validate_i64_range("状态码", &self.status_custom)?;
         validate_i64_range("耗时", &self.duration_ms)?;
         validate_i64_range("首 token", &self.first_token_ms)?;
-        validate_i64_range("输入 tokens", &self.input_tokens)?;
-        validate_i64_range("输出 tokens", &self.output_tokens)?;
-        validate_i64_range("缓存输入 tokens", &self.cache_read_tokens)?;
-        validate_i64_range("写入缓存 tokens", &self.cache_creation_tokens)?;
-        validate_i64_range("总 tokens", &self.total_tokens)?;
+        validate_token_range("输入 tokens", &self.input_tokens)?;
+        validate_token_range("输出 tokens", &self.output_tokens)?;
+        validate_token_range("缓存输入 tokens", &self.cache_read_tokens)?;
+        validate_token_range("写入缓存 tokens", &self.cache_creation_tokens)?;
+        validate_token_range("总 tokens", &self.total_tokens)?;
         validate_f64_range("费用", &self.price_usd)?;
         let (status_min, status_max) = self.status_range()?;
         let started_at = self.started_at.to_utc("开始时间")?;
@@ -205,16 +206,20 @@ impl LogFilterState {
             duration_ms_max: self.duration_ms.max_value("耗时")?,
             first_token_ms_min: self.first_token_ms.min_value("首 token")?,
             first_token_ms_max: self.first_token_ms.max_value("首 token")?,
-            input_tokens_min: self.input_tokens.min_value("输入 tokens")?,
-            input_tokens_max: self.input_tokens.max_value("输入 tokens")?,
-            output_tokens_min: self.output_tokens.min_value("输出 tokens")?,
-            output_tokens_max: self.output_tokens.max_value("输出 tokens")?,
-            cache_read_tokens_min: self.cache_read_tokens.min_value("缓存输入 tokens")?,
-            cache_read_tokens_max: self.cache_read_tokens.max_value("缓存输入 tokens")?,
-            cache_creation_tokens_min: self.cache_creation_tokens.min_value("写入缓存 tokens")?,
-            cache_creation_tokens_max: self.cache_creation_tokens.max_value("写入缓存 tokens")?,
-            total_tokens_min: self.total_tokens.min_value("总 tokens")?,
-            total_tokens_max: self.total_tokens.max_value("总 tokens")?,
+            input_tokens_min: self.input_tokens.min_token_value("输入 tokens")?,
+            input_tokens_max: self.input_tokens.max_token_value("输入 tokens")?,
+            output_tokens_min: self.output_tokens.min_token_value("输出 tokens")?,
+            output_tokens_max: self.output_tokens.max_token_value("输出 tokens")?,
+            cache_read_tokens_min: self.cache_read_tokens.min_token_value("缓存输入 tokens")?,
+            cache_read_tokens_max: self.cache_read_tokens.max_token_value("缓存输入 tokens")?,
+            cache_creation_tokens_min: self
+                .cache_creation_tokens
+                .min_token_value("写入缓存 tokens")?,
+            cache_creation_tokens_max: self
+                .cache_creation_tokens
+                .max_token_value("写入缓存 tokens")?,
+            total_tokens_min: self.total_tokens.min_token_value("总 tokens")?,
+            total_tokens_max: self.total_tokens.max_token_value("总 tokens")?,
             estimated_cost_usd_min: self.price_usd.min_value("费用")?,
             estimated_cost_usd_max: self.price_usd.max_value("费用")?,
             started_at,
@@ -248,6 +253,14 @@ impl I64RangeFilter {
 
     fn max_value(&self, label: &str) -> Result<Option<i64>, String> {
         parse_optional_i64(label, &self.max)
+    }
+
+    fn min_token_value(&self, label: &str) -> Result<Option<i64>, String> {
+        token_amount::parse_optional_token_amount(label, &self.min)
+    }
+
+    fn max_token_value(&self, label: &str) -> Result<Option<i64>, String> {
+        token_amount::parse_optional_token_amount(label, &self.max)
     }
 }
 
@@ -1076,6 +1089,17 @@ fn validate_i64_range(label: &str, value: &I64RangeFilter) -> Result<(), String>
     Ok(())
 }
 
+fn validate_token_range(label: &str, value: &I64RangeFilter) -> Result<(), String> {
+    let min = value.min_token_value(label)?;
+    let max = value.max_token_value(label)?;
+    if let (Some(min), Some(max)) = (min, max)
+        && min > max
+    {
+        return Err(format!("{label} 最小值不能大于最大值"));
+    }
+    Ok(())
+}
+
 fn validate_f64_range(label: &str, value: &F64RangeFilter) -> Result<(), String> {
     let min = value.min_value(label)?;
     let max = value.max_value(label)?;
@@ -1110,4 +1134,34 @@ fn parse_optional_f64(label: &str, value: &str) -> Result<Option<f64>, String> {
         return Err(format!("{label} 需要填写有效数字"));
     }
     Ok(Some(parsed))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_filter_state_parses_token_units() {
+        let state = LogFilterState {
+            input_tokens: I64RangeFilter {
+                min: "64K".to_string(),
+                max: String::new(),
+            },
+            output_tokens: I64RangeFilter {
+                min: String::new(),
+                max: "1.5M".to_string(),
+            },
+            total_tokens: I64RangeFilter {
+                min: "2B".to_string(),
+                max: String::new(),
+            },
+            ..Default::default()
+        };
+
+        let filter = state.to_runtime_filter().unwrap();
+
+        assert_eq!(filter.input_tokens_min, Some(64_000));
+        assert_eq!(filter.output_tokens_max, Some(1_500_000));
+        assert_eq!(filter.total_tokens_min, Some(2_000_000_000));
+    }
 }

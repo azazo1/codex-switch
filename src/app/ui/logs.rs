@@ -170,27 +170,27 @@ impl CodexSwitchApp {
                             "首 token ms",
                             &mut self.log_filter_editor.first_token_ms,
                         );
-                        i64_range_filter_row(
+                        token_range_filter_row(
                             ui,
                             "输入 tokens",
                             &mut self.log_filter_editor.input_tokens,
                         );
-                        i64_range_filter_row(
+                        token_range_filter_row(
                             ui,
                             "输出 tokens",
                             &mut self.log_filter_editor.output_tokens,
                         );
-                        i64_range_filter_row(
+                        token_range_filter_row(
                             ui,
                             "缓存输入 tokens",
                             &mut self.log_filter_editor.cache_read_tokens,
                         );
-                        i64_range_filter_row(
+                        token_range_filter_row(
                             ui,
                             "写入缓存 tokens",
                             &mut self.log_filter_editor.cache_creation_tokens,
                         );
-                        i64_range_filter_row(
+                        token_range_filter_row(
                             ui,
                             "总 tokens",
                             &mut self.log_filter_editor.total_tokens,
@@ -507,6 +507,13 @@ fn i64_range_filter_row(ui: &mut egui::Ui, label: &str, value: &mut I64RangeFilt
     ui.label(label);
     i64_range_values_ui(ui, value);
     ui.label("");
+    ui.end_row();
+}
+
+fn token_range_filter_row(ui: &mut egui::Ui, label: &str, value: &mut I64RangeFilter) {
+    ui.label(label);
+    i64_range_values_ui(ui, value);
+    ui.label("支持 K, M, B");
     ui.end_row();
 }
 
