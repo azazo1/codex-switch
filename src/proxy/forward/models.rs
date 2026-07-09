@@ -150,7 +150,7 @@ async fn query_relay_models(
     upstream: &Upstream,
 ) -> anyhow::Result<Vec<Value>> {
     let target_url = transform::build_endpoint(&upstream.base_url, "/models");
-    let request = state.http.get(target_url);
+    let request = state.http_for_upstream(upstream)?.get(target_url);
     let request = apply_headers(state, upstream, request, headers).await?;
     let response = request.send().await?;
     let status = response.status();

@@ -370,9 +370,8 @@ async fn forward_with_upstream(
     }
     let keepalive_body = target_body.clone();
 
-    let mut upstream_request = request
-        .state
-        .http
+    let http = request.state.http_for_upstream(&upstream)?;
+    let mut upstream_request = http
         .request(
             reqwest::Method::from_bytes(request.method.as_str().as_bytes())?,
             &target_url,

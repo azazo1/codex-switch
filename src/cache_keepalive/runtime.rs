@@ -8,7 +8,7 @@ use super::{
     DISABLED_SESSION_RETENTION, INTERNAL_ENDPOINT, KEEPALIVE_REQUEST_TIMEOUT,
     OUTPUT_TOKENS_WARNING_THRESHOLD, SCAN_INTERVAL,
 };
-use crate::app::AppEvents;
+use crate::app::{AppEvents, http};
 use crate::balance::API_KEY_CREDENTIAL;
 use crate::core::models::{
     CacheKeepaliveMode, RequestLog, TokenUsage, UpstreamCacheKeepaliveSettings, UpstreamKind,
@@ -439,8 +439,11 @@ impl CacheKeepaliveRuntime {
             .get(&session.upstream.id, API_KEY_CREDENTIAL)
             .await?
             .ok_or_else(|| anyhow::anyhow!("missing api key"))?;
-        let response = self
-            .http
+        let http = match session.upstream.proxy_url.as_deref() {
+            Some(proxy_url) if !proxy_url.trim().is_empty() => http::build_client(Some(proxy_url))?,
+            _ => self.http.clone(),
+        };
+        let response = http
             .post(target_url)
             .bearer_auth(api_key)
             .header(reqwest::header::ACCEPT, "application/json")

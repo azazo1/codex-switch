@@ -33,9 +33,9 @@ impl Store {
         sqlx::query(
             "INSERT INTO upstreams (
                 id, kind, name, base_url, wire_api, supports_compact, enabled, priority, weight,
-                balance_provider, chatgpt_account_id, email, plan_type, token_expires_at,
+                proxy_url, balance_provider, chatgpt_account_id, email, plan_type, token_expires_at,
                 created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
              ON CONFLICT(id) DO UPDATE SET
                 kind = excluded.kind,
                 name = excluded.name,
@@ -45,6 +45,7 @@ impl Store {
                 enabled = excluded.enabled,
                 priority = excluded.priority,
                 weight = excluded.weight,
+                proxy_url = excluded.proxy_url,
                 balance_provider = excluded.balance_provider,
                 chatgpt_account_id = excluded.chatgpt_account_id,
                 email = excluded.email,
@@ -61,6 +62,7 @@ impl Store {
         .bind(i64::from(upstream.enabled))
         .bind(upstream.priority)
         .bind(upstream.weight)
+        .bind(&upstream.proxy_url)
         .bind(upstream.balance_provider.as_str())
         .bind(&upstream.chatgpt_account_id)
         .bind(&upstream.email)
@@ -162,6 +164,7 @@ pub(super) fn row_to_upstream(row: sqlx::sqlite::SqliteRow) -> anyhow::Result<Up
         enabled: row.get::<i64, _>("enabled") != 0,
         priority: row.get("priority"),
         weight: row.get("weight"),
+        proxy_url: row.get("proxy_url"),
         balance_provider: BalanceProvider::from_str(&row.get::<String, _>("balance_provider")),
         chatgpt_account_id: row.get("chatgpt_account_id"),
         email: row.get("email"),

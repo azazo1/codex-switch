@@ -1,5 +1,5 @@
 use crate::app::tray::{TrayCommand, TrayController};
-use crate::app::{platform, state::AppState};
+use crate::app::{http, platform, state::AppState};
 use crate::balance;
 use crate::cache_keepalive::CacheKeepaliveSessionSnapshot;
 use crate::core::models::{
@@ -379,6 +379,7 @@ pub struct CodexSwitchApp {
     balance_query_pending_ids: BTreeSet<String>,
     relay_name: String,
     relay_base_url: String,
+    relay_proxy_url: String,
     relay_api_key: String,
     relay_wire_api: WireApi,
     relay_supports_compact: bool,
@@ -473,6 +474,7 @@ impl CodexSwitchApp {
             balance_query_pending_ids: BTreeSet::new(),
             relay_name: String::new(),
             relay_base_url: String::new(),
+            relay_proxy_url: String::new(),
             relay_api_key: String::new(),
             relay_wire_api: WireApi::Responses,
             relay_supports_compact: true,
@@ -849,19 +851,27 @@ impl CodexSwitchApp {
     fn add_relay(&mut self) {
         let name = self.relay_name.trim().to_string();
         let base_url = self.relay_base_url.trim().to_string();
+        let proxy_url = self.relay_proxy_url.trim().to_string();
         let api_key = self.relay_api_key.trim().to_string();
         if name.is_empty() || base_url.is_empty() || api_key.is_empty() {
             self.status = "名称, Base URL 和 API Key 都不能为空".to_string();
             return;
         }
+        if let Err(err) = http::validate_proxy_url(&proxy_url) {
+            self.status = format!("代理 URL 无效: {err}");
+            return;
+        }
         let provider = balance::detect_provider(&base_url).unwrap_or(BalanceProvider::Auto);
-        let upstream = Upstream::new_relay(
+        let mut upstream = Upstream::new_relay(
             name,
             base_url,
             self.relay_wire_api,
             self.relay_supports_compact,
             provider,
         );
+        if !proxy_url.is_empty() {
+            upstream.proxy_url = Some(proxy_url);
+        }
         let result = self.runtime.block_on(async {
             self.state.store.save_upstream(&upstream).await?;
             self.state
@@ -874,6 +884,7 @@ impl CodexSwitchApp {
             Ok(()) => {
                 self.relay_name.clear();
                 self.relay_base_url.clear();
+                self.relay_proxy_url.clear();
                 self.relay_api_key.clear();
                 self.status = "已添加中转站上游".to_string();
                 self.refresh_all();

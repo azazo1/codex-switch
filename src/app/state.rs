@@ -1,4 +1,6 @@
+use crate::app::http;
 use crate::cache_keepalive::CacheKeepaliveRuntime;
+use crate::core::models::Upstream;
 use crate::live::LiveRequestStore;
 use crate::scheduler::SchedulerRuntime;
 use crate::storage::{Store, credentials::CredentialStore};
@@ -87,10 +89,7 @@ impl AppState {
         tracing::info!(path = %db_path.display(), "opening sqlite database");
         let store = Store::open(db_path).await?;
         let credentials = CredentialStore::new(store.clone()).await?;
-        let http = reqwest::Client::builder()
-            .user_agent("codex-switch/0.1.0")
-            .build()
-            .context("failed to build http client")?;
+        let http = http::build_client(None)?;
         let events = AppEvents::default();
         let cache_keepalive = CacheKeepaliveRuntime::new(
             store.clone(),
@@ -109,6 +108,13 @@ impl AppState {
         };
         state.cache_keepalive.start();
         Ok(state)
+    }
+
+    pub fn http_for_upstream(&self, upstream: &Upstream) -> anyhow::Result<reqwest::Client> {
+        match upstream.proxy_url.as_deref() {
+            Some(proxy_url) if !proxy_url.trim().is_empty() => http::build_client(Some(proxy_url)),
+            _ => Ok(self.http.clone()),
+        }
     }
 }
 

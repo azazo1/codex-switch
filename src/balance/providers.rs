@@ -130,11 +130,12 @@ pub async fn query_and_store(
         newapi_user_key,
         newapi_user_id,
     };
+    let http = state.http_for_upstream(&upstream)?;
     let snapshot = match upstream.balance_provider {
         BalanceProvider::Auto => {
             if let Some(provider) = detect_provider(&upstream.base_url) {
                 query_balance(
-                    state,
+                    &http,
                     &upstream.id,
                     provider,
                     &upstream.base_url,
@@ -143,7 +144,7 @@ pub async fn query_and_store(
                 .await?
             } else {
                 query_common_panel(
-                    state,
+                    &http,
                     &upstream.id,
                     BalanceProvider::Auto,
                     &upstream.base_url,
@@ -155,7 +156,7 @@ pub async fn query_and_store(
         BalanceProvider::Unsupported => return Err(anyhow!("unsupported balance provider")),
         provider => {
             query_balance(
-                state,
+                &http,
                 &upstream.id,
                 provider,
                 &upstream.base_url,
@@ -169,7 +170,7 @@ pub async fn query_and_store(
 }
 
 async fn query_balance(
-    state: &AppState,
+    http: &reqwest::Client,
     upstream_id: &str,
     provider: BalanceProvider,
     base_url: &str,
@@ -178,7 +179,7 @@ async fn query_balance(
     match provider {
         BalanceProvider::Sub2Api | BalanceProvider::NewApi => {
             query_common_panel(
-                state,
+                http,
                 upstream_id,
                 provider,
                 base_url,
@@ -188,7 +189,7 @@ async fn query_balance(
         }
         BalanceProvider::Auto => {
             query_common_panel(
-                state,
+                http,
                 upstream_id,
                 provider,
                 base_url,
@@ -197,12 +198,12 @@ async fn query_balance(
             .await
         }
         BalanceProvider::Unsupported => Err(anyhow!("unsupported balance provider")),
-        provider => query_provider(state, upstream_id, provider, &credentials.api_key).await,
+        provider => query_provider(http, upstream_id, provider, &credentials.api_key).await,
     }
 }
 
 async fn query_provider(
-    state: &AppState,
+    http: &reqwest::Client,
     upstream_id: &str,
     provider: BalanceProvider,
     api_key: &str,
@@ -221,8 +222,7 @@ async fn query_provider(
             return Err(anyhow!("unsupported balance provider"));
         }
     };
-    let response = state
-        .http
+    let response = http
         .get(url)
         .bearer_auth(api_key)
         .header("Accept", "application/json")
@@ -304,7 +304,7 @@ fn parse_balance(
 }
 
 async fn query_common_panel(
-    state: &AppState,
+    http: &reqwest::Client,
     upstream_id: &str,
     provider: BalanceProvider,
     base_url: &str,
@@ -316,8 +316,7 @@ async fn query_common_panel(
             last_error = Some(format!("{}: missing new-api user key or user id", item.url));
             continue;
         };
-        let mut request = state
-            .http
+        let mut request = http
             .get(&item.url)
             .bearer_auth(headers.bearer)
             .header("Accept", "application/json")

@@ -16,6 +16,13 @@ impl CodexSwitchApp {
             ui.text_edit_singleline(&mut self.relay_base_url);
         });
         ui.horizontal(|ui| {
+            ui.label("代理 URL");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.relay_proxy_url)
+                    .hint_text("留空使用系统代理"),
+            );
+        });
+        ui.horizontal(|ui| {
             ui.label("API Key");
             ui.add(egui::TextEdit::singleline(&mut self.relay_api_key).password(true));
         });
@@ -70,13 +77,14 @@ impl CodexSwitchApp {
         let mut query_balance = None;
         egui::Grid::new("upstreams_grid")
             .striped(true)
-            .num_columns(7)
+            .num_columns(8)
             .spacing([16.0, 8.0])
             .show(ui, |ui| {
                 ui.strong("启用");
                 ui.strong("名称");
                 ui.strong("类型");
                 ui.strong("Base URL");
+                ui.strong("代理");
                 ui.strong("缓存保持");
                 ui.strong("余额");
                 ui.strong("操作");
@@ -91,6 +99,13 @@ impl CodexSwitchApp {
                         .on_hover_text(format!("id: {}", upstream.id));
                     ui.label(upstream.kind.as_str());
                     ui.label(upstream.base_url.as_str());
+                    ui.label(
+                        upstream
+                            .proxy_url
+                            .as_deref()
+                            .filter(|value| !value.trim().is_empty())
+                            .unwrap_or("系统代理"),
+                    );
                     cache_keepalive_label(ui, cache_settings.get(&upstream.id));
                     if upstream.kind == UpstreamKind::RelayApiKey {
                         balance_snapshot_label(

@@ -1,4 +1,5 @@
 mod fonts;
+pub(crate) mod http;
 mod icon;
 mod platform;
 mod state;

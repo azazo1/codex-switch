@@ -1,4 +1,5 @@
 use super::{CodexSwitchApp, token_amount};
+use crate::app::http;
 use crate::balance;
 use crate::core::models::{
     BalanceProvider, CacheKeepaliveMode, Upstream, UpstreamCacheKeepaliveSettings, UpstreamKind,
@@ -106,6 +107,18 @@ impl CodexSwitchApp {
         let mut upstream = editor.upstream;
         upstream.name = upstream.name.trim().to_string();
         upstream.base_url = upstream.base_url.trim().to_string();
+        upstream.proxy_url = upstream
+            .proxy_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        if let Some(proxy_url) = upstream.proxy_url.as_deref()
+            && let Err(err) = http::validate_proxy_url(proxy_url)
+        {
+            self.status = format!("代理 URL 无效: {err}");
+            return;
+        }
         upstream.weight = upstream.weight.max(1);
         let api_key = editor.api_key.trim().to_string();
         let newapi_user_key = editor.newapi_user_key.trim().to_string();
@@ -224,6 +237,11 @@ impl UpstreamEditor {
                     .range(1..=i64::MAX)
                     .speed(1),
             );
+        });
+        ui.horizontal(|ui| {
+            ui.label("代理 URL");
+            let proxy_url = self.upstream.proxy_url.get_or_insert_with(String::new);
+            ui.add(egui::TextEdit::singleline(proxy_url).hint_text("留空使用系统代理"));
         });
         match self.upstream.kind {
             UpstreamKind::RelayApiKey => self.relay_form_ui(ui),
