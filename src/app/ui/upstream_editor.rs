@@ -151,6 +151,12 @@ impl CodexSwitchApp {
                 .store
                 .save_cache_keepalive_settings(&cache_keepalive)
                 .await?;
+            if !cache_keepalive.is_active() {
+                self.state
+                    .cache_keepalive
+                    .disable_upstream_sessions(&upstream.id, "settings disabled")
+                    .await;
+            }
             if upstream.kind == UpstreamKind::RelayApiKey && !api_key.is_empty() {
                 self.state
                     .credentials

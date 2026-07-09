@@ -268,6 +268,28 @@ impl CacheKeepaliveRuntime {
         true
     }
 
+    pub async fn disable_upstream_sessions(&self, upstream_id: &str, reason: &str) -> usize {
+        let mut inner = self.inner.lock().await;
+        let mut disabled = 0;
+        for session in inner.sessions.values_mut() {
+            if session.upstream.id != upstream_id || session.disabled_reason.is_some() {
+                continue;
+            }
+            session.disabled_reason = Some(reason.to_string());
+            disabled += 1;
+            tracing::info!(
+                upstream_id = %session.upstream.id,
+                model = %session.model,
+                reason,
+                "cache keepalive session disabled"
+            );
+        }
+        if disabled > 0 {
+            self.events.bump_cache_keepalive();
+        }
+        disabled
+    }
+
     async fn run(self) {
         let mut ticker = tokio::time::interval(SCAN_INTERVAL);
         loop {
@@ -761,6 +783,27 @@ mod tests {
             .await;
 
         assert!(runtime.snapshots().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn disable_upstream_sessions_marks_matching_sessions() {
+        let runtime = test_runtime().await;
+        let upstream = upstream("a", "upstream-a");
+        save_enabled_settings(&runtime, &upstream).await;
+        runtime
+            .register(registration(&upstream, "model-a", "session-a", 2048))
+            .await;
+
+        let disabled = runtime
+            .disable_upstream_sessions(&upstream.id, "settings disabled")
+            .await;
+        let snapshots = runtime.snapshots().await;
+
+        assert_eq!(disabled, 1);
+        assert_eq!(
+            snapshots[0].disabled_reason.as_deref(),
+            Some("settings disabled")
+        );
     }
 
     async fn test_runtime() -> CacheKeepaliveRuntime {
