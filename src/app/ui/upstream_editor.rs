@@ -327,13 +327,22 @@ fn cache_keepalive_form(
     });
     ui.horizontal(|ui| {
         ui.label("最小缓存 tokens");
-        ui.text_edit_singleline(min_cacheable_tokens_input)
-            .on_hover_text("支持 1024, 64K, 1.5M");
+        ui.add_sized(
+            [92.0, 20.0],
+            egui::TextEdit::singleline(min_cacheable_tokens_input),
+        )
+        .on_hover_text("支持 1024, 64K, 1.5M");
         ui.label("最大缓存 tokens");
-        ui.text_edit_singleline(max_cacheable_tokens_input)
-            .on_hover_text("支持 128K, 230K, 1M");
+        ui.add_sized(
+            [92.0, 20.0],
+            egui::TextEdit::singleline(max_cacheable_tokens_input),
+        )
+        .on_hover_text("支持 128K, 230K, 1M");
         ui.label("最大会话数");
-        ui.add(egui::DragValue::new(&mut settings.max_active_sessions).speed(1));
+        ui.add_sized(
+            [56.0, 20.0],
+            egui::DragValue::new(&mut settings.max_active_sessions).speed(1),
+        );
     });
 }
 
