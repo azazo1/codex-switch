@@ -141,8 +141,9 @@ async fn ws_placeholder() -> impl IntoResponse {
 mod tests {
     use super::*;
     use crate::core::models::{
-        BalanceProvider, ScheduleGroup, ScheduleGroupMember, ScheduleRouteRule,
-        ScheduleMode, ScheduleRouteTargetKind, Upstream, WireApi,
+        BalanceProvider, CacheKeepaliveMode, ScheduleGroup, ScheduleGroupMember,
+        ScheduleMode, ScheduleRouteRule, ScheduleRouteTargetKind, Upstream,
+        UpstreamCacheKeepaliveSettings, WireApi,
     };
     use crate::cache_keepalive::CacheKeepaliveRuntime;
     use crate::storage::{Store, credentials::CredentialStore};
@@ -162,6 +163,7 @@ mod tests {
         BalanceError,
         ModelsJson,
         ResponsesJson,
+        ResponsesSse,
         ChatJson,
         ChatSse,
         SlowChatSse,
@@ -376,6 +378,86 @@ mod tests {
         assert_eq!(logs[0].upstream_name.as_deref(), Some("mock"));
         assert_eq!(logs[0].endpoint, "/responses");
         assert!(logs[0].first_token_ms.is_some());
+    }
+
+    #[tokio::test]
+    async fn chat_sse_registers_cache_keepalive_before_done_can_be_dropped() {
+        let (mock_base, _hits) = spawn_mock(MockMode::ChatSse).await;
+        let state = test_state(&mock_base, WireApi::ChatCompletions).await;
+        enable_cache_keepalive(&state, "mock").await;
+        let proxy_base = spawn_proxy(state.clone()).await;
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/chat/completions"))
+            .bearer_auth("local-test")
+            .json(&json!({
+                "model":"gpt-test",
+                "messages":[{"role":"user","content":"hello"}],
+                "stream":true,
+                "prompt_cache_key":"stable"
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let mut stream = response.bytes_stream();
+        let mut saw_done = false;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.unwrap();
+            let text = String::from_utf8_lossy(&chunk);
+            if text.contains("data: [DONE]") {
+                saw_done = true;
+                break;
+            }
+        }
+        assert!(saw_done);
+        drop(stream);
+        wait_for_cache_keepalive_count(&state, 1).await;
+
+        let snapshots = state.cache_keepalive.snapshots().await;
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].cached_tokens, 2048);
+        assert_eq!(snapshots[0].endpoint, "/chat/completions");
+    }
+
+    #[tokio::test]
+    async fn responses_sse_registers_cache_keepalive_when_completed_event_is_dropped() {
+        let (mock_base, _hits) = spawn_mock(MockMode::ResponsesSse).await;
+        let state = test_state(&mock_base, WireApi::Responses).await;
+        enable_cache_keepalive(&state, "mock").await;
+        let proxy_base = spawn_proxy(state.clone()).await;
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({
+                "model":"gpt-test",
+                "input":"hello",
+                "stream":true,
+                "prompt_cache_key":"stable"
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let mut stream = response.bytes_stream();
+        let mut saw_completed = false;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.unwrap();
+            let text = String::from_utf8_lossy(&chunk);
+            if text.contains("response.completed") {
+                saw_completed = true;
+                break;
+            }
+        }
+        assert!(saw_completed);
+        drop(stream);
+        wait_for_cache_keepalive_count(&state, 1).await;
+
+        let snapshots = state.cache_keepalive.snapshots().await;
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].cached_tokens, 4096);
+        assert_eq!(snapshots[0].endpoint, "/responses");
     }
 
     #[tokio::test]
@@ -662,6 +744,18 @@ mod tests {
         group
     }
 
+    async fn enable_cache_keepalive(state: &AppState, upstream_name: &str) {
+        let upstream = upstream_by_name(state, upstream_name).await;
+        let mut settings = UpstreamCacheKeepaliveSettings::new(upstream.id);
+        settings.enabled = true;
+        settings.mode = CacheKeepaliveMode::Always;
+        state
+            .store
+            .save_cache_keepalive_settings(&settings)
+            .await
+            .unwrap();
+    }
+
     async fn spawn_proxy(state: AppState) -> String {
         spawn_server(build_router(state)).await
     }
@@ -696,6 +790,17 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
         let count = state.store.request_log_count().await.unwrap();
+        assert_eq!(count, expected);
+    }
+
+    async fn wait_for_cache_keepalive_count(state: &AppState, expected: usize) {
+        for _ in 0..20 {
+            if state.cache_keepalive.snapshots().await.len() >= expected {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        let count = state.cache_keepalive.snapshots().await.len();
         assert_eq!(count, expected);
     }
 
@@ -741,6 +846,23 @@ mod tests {
                 })),
             )
                 .into_response(),
+            MockMode::ResponsesSse => {
+                let stream = async_stream::stream! {
+                    yield Ok::<_, std::convert::Infallible>(Bytes::from_static(
+                        b"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_mock\",\"status\":\"in_progress\"}}\n\n",
+                    ));
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    yield Ok::<_, std::convert::Infallible>(Bytes::from_static(
+                        b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_mock\",\"status\":\"completed\",\"usage\":{\"input_tokens\":4096,\"output_tokens\":1,\"total_tokens\":4097,\"input_tokens_details\":{\"cached_tokens\":4096}}}}\n\n",
+                    ));
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                };
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, "text/event-stream")
+                    .body(Body::from_stream(stream))
+                    .unwrap()
+            }
             MockMode::ChatJson => (
                 StatusCode::OK,
                 axum::Json(json!({
@@ -755,7 +877,7 @@ mod tests {
                 [(header::CONTENT_TYPE, "text/event-stream")],
                 concat!(
                     "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
-                    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":3,\"total_tokens\":5}}\n\n",
+                    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":3,\"total_tokens\":5,\"prompt_tokens_details\":{\"cached_tokens\":2048}}}\n\n",
                     "data: [DONE]\n\n"
                 ),
             )

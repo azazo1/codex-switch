@@ -503,6 +503,7 @@ pub struct UpstreamCacheKeepaliveSettings {
     pub interval_seconds: i64,
     pub max_idle_seconds: i64,
     pub min_cacheable_tokens: i64,
+    pub max_cacheable_tokens: i64,
     pub max_active_sessions: i64,
     pub prefer_extended_retention: bool,
 }
@@ -516,6 +517,7 @@ impl UpstreamCacheKeepaliveSettings {
             interval_seconds: 300,
             max_idle_seconds: 3600,
             min_cacheable_tokens: 1024,
+            max_cacheable_tokens: 128000,
             max_active_sessions: 32,
             prefer_extended_retention: false,
         }

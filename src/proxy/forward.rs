@@ -570,6 +570,7 @@ fn build_live_response_stream(
         let mut sse_buffer = String::new();
         let mut upstream_stream = response.bytes_stream();
         let mut termination_closed = false;
+        let mut cache_keepalive_registered = false;
 
         if convert_chat {
             let created = format!(
@@ -639,6 +640,21 @@ fn build_live_response_stream(
                 &chunk,
             );
             log_draft.merge_usage(&usage);
+            if !cache_keepalive_registered && usage.cache_read_tokens > 0 {
+                usage.finish();
+                log_draft.merge_usage(&usage);
+                maybe_register_cache_keepalive(
+                    &state,
+                    &upstream,
+                    &endpoint,
+                    effective_model.clone(),
+                    keepalive_body.clone(),
+                    status,
+                    &usage,
+                )
+                .await;
+                cache_keepalive_registered = true;
+            }
             if convert_chat {
                 if !converted.is_empty() {
                     yield Ok(Bytes::from(converted));
@@ -663,23 +679,25 @@ fn build_live_response_stream(
                 yield Ok(Bytes::from(converted));
             }
         }
-        if convert_chat {
-            yield Ok(Bytes::from_static(b"data: [DONE]\n\n"));
-        }
         usage.finish();
         log_draft.merge_usage(&usage);
         live_guard.finish();
         log_draft.record(None).await;
-        maybe_register_cache_keepalive(
-            &state,
-            &upstream,
-            &endpoint,
-            effective_model,
-            keepalive_body,
-            status,
-            &usage,
-        )
-        .await;
+        if !cache_keepalive_registered {
+            maybe_register_cache_keepalive(
+                &state,
+                &upstream,
+                &endpoint,
+                effective_model,
+                keepalive_body,
+                status,
+                &usage,
+            )
+            .await;
+        }
+        if convert_chat {
+            yield Ok(Bytes::from_static(b"data: [DONE]\n\n"));
+        }
     }
 }
 
@@ -692,13 +710,66 @@ async fn maybe_register_cache_keepalive(
     status: StatusCode,
     usage: &TokenUsage,
 ) {
-    if upstream.kind != UpstreamKind::RelayApiKey
-        || endpoint.starts_with("/images")
-        || !status.is_success()
-        || usage.cache_read_tokens <= 0
-    {
+    let model_name = model.clone().unwrap_or_default();
+    if upstream.kind != UpstreamKind::RelayApiKey {
+        tracing::trace!(
+            upstream_id = %upstream.id,
+            upstream_name = %upstream.name,
+            upstream_kind = upstream.kind.as_str(),
+            endpoint,
+            model = %model_name,
+            "cache keepalive registration skipped: upstream is not relay api key"
+        );
         return;
     }
+    if endpoint.starts_with("/images") {
+        tracing::trace!(
+            upstream_id = %upstream.id,
+            upstream_name = %upstream.name,
+            endpoint,
+            model = %model_name,
+            "cache keepalive registration skipped: image endpoint"
+        );
+        return;
+    }
+    if !status.is_success() {
+        tracing::debug!(
+            upstream_id = %upstream.id,
+            upstream_name = %upstream.name,
+            endpoint,
+            model = %model_name,
+            status = %status.as_u16(),
+            "cache keepalive registration skipped: upstream status is not success"
+        );
+        return;
+    }
+    if usage.cache_read_tokens <= 0 {
+        tracing::trace!(
+            upstream_id = %upstream.id,
+            upstream_name = %upstream.name,
+            endpoint,
+            model = %model_name,
+            input_tokens = usage.input_tokens,
+            output_tokens = usage.output_tokens,
+            cache_read_tokens = usage.cache_read_tokens,
+            total_tokens = usage.total_tokens,
+            body_bytes = body.len(),
+            "cache keepalive registration skipped: no cached input tokens"
+        );
+        return;
+    }
+    tracing::debug!(
+        upstream_id = %upstream.id,
+        upstream_name = %upstream.name,
+        endpoint,
+        model = %model_name,
+        input_tokens = usage.input_tokens,
+        output_tokens = usage.output_tokens,
+        cache_read_tokens = usage.cache_read_tokens,
+        total_tokens = usage.total_tokens,
+        body_bytes = body.len(),
+        "cache keepalive registration candidate"
+    );
     state
         .cache_keepalive
         .register(CacheKeepaliveRegistration {
@@ -735,7 +806,7 @@ fn process_complete_sse_blocks(
 ) -> Vec<u8> {
     let mut changed = false;
     let mut converted = Vec::new();
-    while let Some(index) = buffer.find("\n\n") {
+    while let Some((index, separator_len)) = find_sse_block_separator(buffer) {
         {
             let block = &buffer[..index];
             let item = usage::extract_usage_from_sse(block);
@@ -747,12 +818,22 @@ fn process_complete_sse_blocks(
                 converted.extend_from_slice(&convert_chat_sse_block(response_id, block));
             }
         }
-        buffer.drain(..index + 2);
+        buffer.drain(..index + separator_len);
     }
     if changed {
         state.events.bump_live_streams();
     }
     converted
+}
+
+fn find_sse_block_separator(buffer: &str) -> Option<(usize, usize)> {
+    let lf = buffer.find("\n\n").map(|index| (index, 2));
+    let crlf = buffer.find("\r\n\r\n").map(|index| (index, 4));
+    match (lf, crlf) {
+        (Some(left), Some(right)) => Some(if left.0 <= right.0 { left } else { right }),
+        (Some(found), None) | (None, Some(found)) => Some(found),
+        (None, None) => None,
+    }
 }
 
 fn convert_chat_sse_block(response_id: &str, block: &str) -> Vec<u8> {

@@ -28,6 +28,7 @@ const LOG_PAGE_SIZE: usize = 20;
 const ACTIVE_TAB_COUNT_MAX: usize = 999;
 const REQUEST_LOG_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const HIDDEN_REPAINT_INTERVAL: Duration = Duration::from_secs(5);
+const CACHE_KEEPALIVE_VISIBLE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 mod dashboard;
 mod active;
@@ -323,6 +324,7 @@ pub struct CodexSwitchApp {
     last_request_log_poll_at: Instant,
     last_seen_live_stream_version: u64,
     last_seen_cache_keepalive_version: u64,
+    last_cache_keepalive_refresh_at: Instant,
     price_fetch_started: bool,
     price_fetch_pending: bool,
     status: String,
@@ -416,6 +418,7 @@ impl CodexSwitchApp {
             last_request_log_poll_at: Instant::now(),
             last_seen_live_stream_version,
             last_seen_cache_keepalive_version,
+            last_cache_keepalive_refresh_at: Instant::now(),
             price_fetch_started: false,
             price_fetch_pending: false,
             status: "就绪".to_string(),
@@ -484,6 +487,12 @@ impl CodexSwitchApp {
         let cache_keepalive_version = self.state.events.cache_keepalive_version();
         if cache_keepalive_version != self.last_seen_cache_keepalive_version {
             self.last_seen_cache_keepalive_version = cache_keepalive_version;
+            self.refresh_cache_keepalive_sessions();
+        }
+        if self.tab == Tab::CacheKeepalive
+            && self.last_cache_keepalive_refresh_at.elapsed()
+                >= CACHE_KEEPALIVE_VISIBLE_REFRESH_INTERVAL
+        {
             self.refresh_cache_keepalive_sessions();
         }
         let version = self.state.events.request_log_version();
@@ -736,6 +745,11 @@ impl CodexSwitchApp {
         self.cache_keepalive_sessions = self
             .runtime
             .block_on(self.state.cache_keepalive.snapshots());
+        tracing::debug!(
+            count = self.cache_keepalive_sessions.len(),
+            "cache keepalive sessions refreshed"
+        );
+        self.last_cache_keepalive_refresh_at = Instant::now();
         self.last_seen_cache_keepalive_version = self.state.events.cache_keepalive_version();
         if self
             .selected_cache_keepalive_key

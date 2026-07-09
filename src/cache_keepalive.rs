@@ -15,9 +15,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
-const SCAN_INTERVAL: Duration = Duration::from_secs(30);
+const SCAN_INTERVAL: Duration = Duration::from_secs(15);
+const KEEPALIVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const INTERNAL_ENDPOINT: &str = "/internal/cache_keepalive";
-const MAX_REASONABLE_OUTPUT_TOKENS: i64 = 8;
+const OUTPUT_TOKENS_WARNING_THRESHOLD: i64 = 8;
 
 #[derive(Clone)]
 pub struct CacheKeepaliveRuntime {
@@ -99,9 +100,21 @@ impl CacheKeepaliveRuntime {
 
     pub async fn register(&self, registration: CacheKeepaliveRegistration) {
         if registration.upstream.kind != UpstreamKind::RelayApiKey {
+            tracing::trace!(
+                upstream_id = %registration.upstream.id,
+                upstream_name = %registration.upstream.name,
+                endpoint = %registration.endpoint,
+                "cache keepalive session skipped: upstream is not relay api key"
+            );
             return;
         }
         let Some(model) = registration.model.as_deref().and_then(trimmed_string) else {
+            tracing::warn!(
+                upstream_id = %registration.upstream.id,
+                upstream_name = %registration.upstream.name,
+                endpoint = %registration.endpoint,
+                "cache keepalive session skipped: missing model"
+            );
             return;
         };
         let Ok(settings) = self
@@ -109,15 +122,62 @@ impl CacheKeepaliveRuntime {
             .cache_keepalive_settings(&registration.upstream.id)
             .await
         else {
-            tracing::debug!(
+            tracing::warn!(
                 upstream_id = %registration.upstream.id,
                 "failed to load cache keepalive settings"
             );
             return;
         };
-        if !settings.is_active()
-            || registration.usage.cache_read_tokens < settings.min_cacheable_tokens.max(1024)
-        {
+        tracing::debug!(
+            upstream_id = %registration.upstream.id,
+            endpoint = %registration.endpoint,
+            model = %model,
+            enabled = settings.enabled,
+            mode = settings.mode.as_str(),
+            interval_seconds = settings.interval_seconds,
+            max_idle_seconds = settings.max_idle_seconds,
+            min_cacheable_tokens = settings.min_cacheable_tokens,
+            max_cacheable_tokens = settings.max_cacheable_tokens,
+            max_active_sessions = settings.max_active_sessions,
+            prefer_extended_retention = settings.prefer_extended_retention,
+            "cache keepalive settings loaded"
+        );
+        if !settings.is_active() {
+            tracing::debug!(
+                upstream_id = %registration.upstream.id,
+                upstream_name = %registration.upstream.name,
+                endpoint = %registration.endpoint,
+                model = %model,
+                enabled = settings.enabled,
+                mode = settings.mode.as_str(),
+                "cache keepalive session skipped: settings inactive"
+            );
+            return;
+        }
+        let min_cacheable_tokens = settings.min_cacheable_tokens.max(1024);
+        if registration.usage.cache_read_tokens < min_cacheable_tokens {
+            tracing::debug!(
+                upstream_id = %registration.upstream.id,
+                upstream_name = %registration.upstream.name,
+                endpoint = %registration.endpoint,
+                model = %model,
+                cache_read_tokens = registration.usage.cache_read_tokens,
+                min_cacheable_tokens,
+                "cache keepalive session skipped: not enough cached tokens"
+            );
+            return;
+        }
+        let max_cacheable_tokens = settings.max_cacheable_tokens.max(min_cacheable_tokens);
+        if registration.usage.cache_read_tokens > max_cacheable_tokens {
+            tracing::debug!(
+                upstream_id = %registration.upstream.id,
+                upstream_name = %registration.upstream.name,
+                endpoint = %registration.endpoint,
+                model = %model,
+                cache_read_tokens = registration.usage.cache_read_tokens,
+                max_cacheable_tokens,
+                "cache keepalive session skipped: too many cached tokens"
+            );
             return;
         }
         let Some(session_key) = session_key(
@@ -126,6 +186,15 @@ impl CacheKeepaliveRuntime {
             &registration.endpoint,
             &registration.body,
         ) else {
+            tracing::warn!(
+                upstream_id = %registration.upstream.id,
+                upstream_name = %registration.upstream.name,
+                endpoint = %registration.endpoint,
+                model = %model,
+                cache_read_tokens = registration.usage.cache_read_tokens,
+                body_bytes = registration.body.len(),
+                "cache keepalive session skipped: missing session key"
+            );
             return;
         };
         let now = Instant::now();
@@ -146,6 +215,16 @@ impl CacheKeepaliveRuntime {
             disabled_reason: None,
         };
         let mut inner = self.inner.lock().await;
+        tracing::info!(
+            upstream_id = %settings.upstream_id,
+            endpoint = %session.endpoint,
+            model = %session.model,
+            session_key_prefix = %short_hash(&session.key),
+            cache_read_tokens = session.cached_tokens,
+            body_bytes = session.body.len(),
+            keepalive_interval_seconds = settings.interval_seconds.max(60),
+            "cache keepalive session registered"
+        );
         inner.sessions.insert(session_key, session);
         prune_upstream_sessions(
             &mut inner.sessions,
@@ -172,6 +251,23 @@ impl CacheKeepaliveRuntime {
         snapshots
     }
 
+    pub async fn remove_session(&self, key: &str) -> bool {
+        let mut inner = self.inner.lock().await;
+        let removed = inner.sessions.remove(key);
+        let Some(session) = removed else {
+            return false;
+        };
+        tracing::info!(
+            upstream_id = %session.upstream.id,
+            endpoint = %session.endpoint,
+            model = %session.model,
+            session_key_prefix = %short_hash(&session.key),
+            "cache keepalive session removed"
+        );
+        self.events.bump_cache_keepalive();
+        true
+    }
+
     async fn run(self) {
         let mut ticker = tokio::time::interval(SCAN_INTERVAL);
         loop {
@@ -182,9 +278,15 @@ impl CacheKeepaliveRuntime {
 
     async fn scan_once(&self) {
         let due_sessions = self.due_sessions().await;
+        if !due_sessions.is_empty() {
+            tracing::info!(
+                due_sessions = due_sessions.len(),
+                "cache keepalive scan found due sessions"
+            );
+        }
         for session in due_sessions {
             if let Err(err) = self.keepalive_once(session).await {
-                tracing::debug!(error = %err, "cache keepalive skipped");
+                tracing::warn!(error = %err, "cache keepalive skipped");
             }
         }
     }
@@ -215,6 +317,13 @@ impl CacheKeepaliveRuntime {
             self.disable_session(&session.key, "not enough cached tokens").await;
             return Ok(());
         }
+        let max_cacheable_tokens = settings
+            .max_cacheable_tokens
+            .max(settings.min_cacheable_tokens.max(1024));
+        if session.cached_tokens > max_cacheable_tokens {
+            self.disable_session(&session.key, "too many cached tokens").await;
+            return Ok(());
+        }
         let Some(price) = self.store.find_model_price(&session.model).await? else {
             if settings.mode == CacheKeepaliveMode::Smart {
                 self.disable_session(&session.key, "missing model price").await;
@@ -234,14 +343,31 @@ impl CacheKeepaliveRuntime {
             return Ok(());
         }
         let started = Instant::now();
+        tracing::debug!(
+            upstream_id = %session.upstream.id,
+            endpoint = %session.endpoint,
+            model = %session.model,
+            session_key_prefix = %short_hash(&session.key),
+            keepalive_count = session.keepalive_count,
+            cached_tokens = session.cached_tokens,
+            "cache keepalive request starting"
+        );
         let result = self.send_keepalive(&session, &settings).await;
         match result {
             Ok(usage) => {
                 let usage = normalized_keepalive_usage(usage);
-                let status = if usage.output_tokens > MAX_REASONABLE_OUTPUT_TOKENS {
-                    self.disable_session(&session.key, "unexpected output tokens").await;
-                    StatusCode::OK
-                } else if usage.cache_read_tokens < settings.min_cacheable_tokens.max(1024) {
+                if usage.output_tokens > OUTPUT_TOKENS_WARNING_THRESHOLD {
+                    tracing::warn!(
+                        upstream_id = %session.upstream.id,
+                        endpoint = %session.endpoint,
+                        model = %session.model,
+                        session_key_prefix = %short_hash(&session.key),
+                        output_tokens = usage.output_tokens,
+                        warning_threshold = OUTPUT_TOKENS_WARNING_THRESHOLD,
+                        "cache keepalive response used more output tokens than expected"
+                    );
+                }
+                let status = if usage.cache_read_tokens < settings.min_cacheable_tokens.max(1024) {
                     self.disable_session(&session.key, "cache miss").await;
                     StatusCode::OK
                 } else {
@@ -276,6 +402,15 @@ impl CacheKeepaliveRuntime {
             WireApi::Responses => transform::build_endpoint(&session.upstream.base_url, &session.endpoint),
             WireApi::ChatCompletions => transform::build_endpoint(&session.upstream.base_url, "/chat/completions"),
         };
+        tracing::debug!(
+            upstream_id = %session.upstream.id,
+            endpoint = %session.endpoint,
+            model = %session.model,
+            target_url = %target_url,
+            body_bytes = target_body.len(),
+            timeout_seconds = KEEPALIVE_REQUEST_TIMEOUT.as_secs(),
+            "cache keepalive request sending"
+        );
         let api_key = self
             .credentials
             .get(&session.upstream.id, API_KEY_CREDENTIAL)
@@ -287,6 +422,7 @@ impl CacheKeepaliveRuntime {
             .bearer_auth(api_key)
             .header(reqwest::header::ACCEPT, "application/json")
             .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .timeout(KEEPALIVE_REQUEST_TIMEOUT)
             .body(target_body)
             .send()
             .await?;
@@ -312,6 +448,16 @@ impl CacheKeepaliveRuntime {
             if let Some(cached_tokens) = cached_tokens {
                 session.cached_tokens = cached_tokens;
             }
+            tracing::info!(
+                upstream_id = %session.upstream.id,
+                endpoint = %session.endpoint,
+                model = %session.model,
+                session_key_prefix = %short_hash(&session.key),
+                keepalive_count = session.keepalive_count,
+                cached_tokens = session.cached_tokens,
+                next_keepalive_seconds = interval.as_secs(),
+                "cache keepalive next run scheduled"
+            );
             self.events.bump_cache_keepalive();
         }
     }
@@ -392,6 +538,10 @@ fn elapsed_seconds(now: Instant, then: Instant) -> i64 {
     } else {
         0
     }
+}
+
+fn short_hash(value: &str) -> String {
+    value.chars().take(12).collect()
 }
 
 fn keepalive_body(
@@ -590,6 +740,27 @@ mod tests {
         let snapshots = runtime.snapshots().await;
 
         assert_eq!(snapshots[0].disabled_reason.as_deref(), Some("cache miss"));
+    }
+
+    #[tokio::test]
+    async fn register_skips_sessions_above_max_cacheable_tokens() {
+        let runtime = test_runtime().await;
+        let upstream = upstream("a", "upstream-a");
+        runtime.store.save_upstream(&upstream).await.unwrap();
+        let mut settings = UpstreamCacheKeepaliveSettings::new(upstream.id.clone());
+        settings.enabled = true;
+        settings.max_cacheable_tokens = 4096;
+        runtime
+            .store
+            .save_cache_keepalive_settings(&settings)
+            .await
+            .unwrap();
+
+        runtime
+            .register(registration(&upstream, "model-a", "session-a", 8192))
+            .await;
+
+        assert!(runtime.snapshots().await.is_empty());
     }
 
     async fn test_runtime() -> CacheKeepaliveRuntime {

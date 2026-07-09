@@ -20,12 +20,16 @@ pub fn extract_reasoning_effort(body: &[u8]) -> Option<String> {
 }
 
 pub fn extract_usage_from_json(value: &Value) -> TokenUsage {
-    let usage = value.get("usage").or_else(|| value.pointer("/response/usage"));
+    let usage = value
+        .get("usage")
+        .or_else(|| value.pointer("/response/usage"))
+        .or_else(|| find_usage_value(value));
     usage.map(usage_from_value).unwrap_or_default()
 }
 
 pub fn extract_usage_from_sse(text: &str) -> TokenUsage {
     let mut usage = TokenUsage::default();
+    let text = text.replace("\r\n", "\n");
     for block in text.split("\n\n") {
         for line in block.lines() {
             let Some(data) = line.strip_prefix("data:") else {
@@ -44,7 +48,39 @@ pub fn extract_usage_from_sse(text: &str) -> TokenUsage {
     usage
 }
 
+fn find_usage_value(value: &Value) -> Option<&Value> {
+    match value {
+        Value::Object(map) => {
+            if let Some(usage) = map.get("usage").filter(|value| looks_like_usage(value)) {
+                return Some(usage);
+            }
+            map.values().find_map(find_usage_value)
+        }
+        Value::Array(values) => values.iter().find_map(find_usage_value),
+        _ => None,
+    }
+}
+
+fn looks_like_usage(value: &Value) -> bool {
+    let Some(map) = value.as_object() else {
+        return false;
+    };
+    [
+        "input_tokens",
+        "prompt_tokens",
+        "output_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "input_tokens_details",
+        "prompt_tokens_details",
+        "cache_read_input_tokens",
+    ]
+    .iter()
+    .any(|key| map.contains_key(*key))
+}
+
 pub fn for_each_sse_text_delta(text: &str, mut on_delta: impl FnMut(&str)) {
+    let text = text.replace("\r\n", "\n");
     for block in text.split("\n\n") {
         for line in block.lines() {
             let Some(data) = line.strip_prefix("data:") else {
@@ -244,6 +280,19 @@ mod tests {
         assert_eq!(usage.input_tokens, 10);
         assert_eq!(usage.output_tokens, 3);
         assert_eq!(usage.cache_read_tokens, 2);
+    }
+
+    #[test]
+    fn extracts_usage_from_crlf_sse_nested_usage() {
+        let usage = extract_usage_from_sse(concat!(
+            "event: response.completed\r\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":4096,\"output_tokens\":1,\"input_tokens_details\":{\"cached_tokens\":2048}}}}\r\n",
+            "\r\n"
+        ));
+
+        assert_eq!(usage.input_tokens, 4096);
+        assert_eq!(usage.output_tokens, 1);
+        assert_eq!(usage.cache_read_tokens, 2048);
     }
 
     #[test]

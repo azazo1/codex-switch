@@ -26,14 +26,16 @@ impl Store {
         sqlx::query(
             "INSERT INTO upstream_cache_keepalive_settings (
                 upstream_id, enabled, mode, interval_seconds, max_idle_seconds,
-                min_cacheable_tokens, max_active_sessions, prefer_extended_retention, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                min_cacheable_tokens, max_cacheable_tokens, max_active_sessions,
+                prefer_extended_retention, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(upstream_id) DO UPDATE SET
                 enabled = excluded.enabled,
                 mode = excluded.mode,
                 interval_seconds = excluded.interval_seconds,
                 max_idle_seconds = excluded.max_idle_seconds,
                 min_cacheable_tokens = excluded.min_cacheable_tokens,
+                max_cacheable_tokens = excluded.max_cacheable_tokens,
                 max_active_sessions = excluded.max_active_sessions,
                 prefer_extended_retention = excluded.prefer_extended_retention,
                 updated_at = excluded.updated_at",
@@ -44,6 +46,7 @@ impl Store {
         .bind(settings.interval_seconds.max(60))
         .bind(settings.max_idle_seconds.max(60))
         .bind(settings.min_cacheable_tokens.max(1024))
+        .bind(normalized_max_cacheable_tokens(settings))
         .bind(settings.max_active_sessions.max(1))
         .bind(i64::from(settings.prefer_extended_retention))
         .bind(Utc::now().to_rfc3339())
@@ -61,9 +64,16 @@ fn row_to_settings(row: sqlx::sqlite::SqliteRow) -> UpstreamCacheKeepaliveSettin
         interval_seconds: row.get("interval_seconds"),
         max_idle_seconds: row.get("max_idle_seconds"),
         min_cacheable_tokens: row.get("min_cacheable_tokens"),
+        max_cacheable_tokens: row.get("max_cacheable_tokens"),
         max_active_sessions: row.get("max_active_sessions"),
         prefer_extended_retention: row.get::<i64, _>("prefer_extended_retention") != 0,
     }
+}
+
+fn normalized_max_cacheable_tokens(settings: &UpstreamCacheKeepaliveSettings) -> i64 {
+    settings
+        .max_cacheable_tokens
+        .max(settings.min_cacheable_tokens.max(1024))
 }
 
 #[cfg(test)]
@@ -84,6 +94,7 @@ mod tests {
         let mut settings = UpstreamCacheKeepaliveSettings::new(first.id.clone());
         settings.enabled = true;
         settings.mode = CacheKeepaliveMode::Always;
+        settings.max_cacheable_tokens = 230_000;
         store.save_cache_keepalive_settings(&settings).await.unwrap();
 
         let first_settings = store.cache_keepalive_settings(&first.id).await.unwrap();
@@ -91,6 +102,7 @@ mod tests {
 
         assert!(first_settings.enabled);
         assert_eq!(first_settings.mode, CacheKeepaliveMode::Always);
+        assert_eq!(first_settings.max_cacheable_tokens, 230_000);
         assert!(!second_settings.enabled);
         assert_eq!(second_settings.mode, CacheKeepaliveMode::Smart);
     }

@@ -14,8 +14,9 @@
 6. 间隔秒建议先填 `300`.
 7. 最大空闲秒建议先填 `3600`.
 8. 最小缓存 tokens 保持默认 `1024`.
-9. 最大会话数建议先保持 `32`.
-10. 保存上游.
+9. 最大缓存 tokens 建议先填 `128K` 到 `230K`.
+10. 最大会话数建议先保持 `32`.
+11. 保存上游.
 
 保存后不需要重启服务. 之后只有这个上游会按自己的配置执行缓存保持, 其他上游不会受影响.
 
@@ -53,8 +54,11 @@ upstream_id + model + endpoint + prompt_cache_key/conversation_id/session_id + c
 | 间隔秒 | `300` | 距离上次真实请求或上次保活超过这个时间后, 才考虑发保活请求 |
 | 最大空闲秒 | `3600` | 一个会话空闲超过这个时间后停止保活 |
 | 最小缓存 tokens | `1024` | 小于该值不保活, 因为 prompt cache 本身通常从 1024 tokens 起才有意义 |
+| 最大缓存 tokens | `128K` 到 `230K` | 大于该值不保活, 用于避免每次保活请求过大 |
 | 最大会话数 | `32` | 单个上游最多同时保活多少个会话, 超出后淘汰最久未活动的会话 |
 | 优先 24h retention | 按需开启 | 对支持的 OpenAI 模型尝试注入 `prompt_cache_retention: "24h"` |
+
+`最小缓存 tokens` 和 `最大缓存 tokens` 支持普通数字和简写, 例如 `1024`, `64K`, `230K`, `1.5M`. 保存时会转换成整数 tokens.
 
 ## 模式选择
 
@@ -95,6 +99,8 @@ upstream_id + model + endpoint + prompt_cache_key/conversation_id/session_id + c
 - 响应体会被丢弃, 不返回给客户端
 - usage 会作为内部日志记录
 
+部分上游不严格遵守 `max_output_tokens=1` 或 `max_tokens=1`. 如果保活响应输出 tokens 偏多, Codex Switch 会记录告警, 但不会仅因为输出偏多停用会话. 是否继续保活主要取决于 cached input 是否仍然命中并达到阈值.
+
 内部日志的 endpoint 是:
 
 ```text
@@ -119,6 +125,10 @@ upstream_id + model + endpoint + prompt_cache_key/conversation_id/session_id + c
 
 ## 如何确认是否生效
 
+打开顶部 `缓存保持` 页面可以看到当前运行时会话. 每个会话会显示为一个 tab, tab 支持横向滚动. 详情里可以看到上游, 模型, endpoint, cached tokens, 保活次数, 最近活动时间, 下次保活时间, 停用原因和 session key 摘要.
+
+如果某个会话不想继续保持, 点击 `删除会话` 可以从内存中移除它. 删除只影响当前运行时会话, 不会删除上游配置, 请求日志, 也不会影响后续真实请求重新登记同一会话.
+
 先看普通请求日志:
 
 - `缓存输入` 有数值, 说明上游返回了 cached tokens.
@@ -133,6 +143,8 @@ upstream_id + model + endpoint + prompt_cache_key/conversation_id/session_id + c
 
 如果没有内部保活日志, 通常说明还没有满足保活条件, 或者 smart 认为不划算.
 
+后台扫描每 `15` 秒检查一次到期会话. 如果页面显示 `即将执行`, 通常表示会话已经到期, 正在等待下一轮扫描或保活请求返回. 已停用会话的下次保活会显示 `已停用`.
+
 ## 推荐配置
 
 ### 日常 Codex 使用
@@ -143,6 +155,7 @@ upstream_id + model + endpoint + prompt_cache_key/conversation_id/session_id + c
 | 间隔秒 | `300` |
 | 最大空闲秒 | `3600` |
 | 最小缓存 tokens | `1024` |
+| 最大缓存 tokens | `128K` |
 | 最大会话数 | `16` 到 `32` |
 
 适合大多数情况. 如果你的会话很多, 可以把最大会话数调大. 如果你只跑一个长期任务, `8` 也够用.
@@ -155,6 +168,7 @@ upstream_id + model + endpoint + prompt_cache_key/conversation_id/session_id + c
 | 间隔秒 | `240` 到 `300` |
 | 最大空闲秒 | `7200` |
 | 最小缓存 tokens | `2048` |
+| 最大缓存 tokens | `230K` |
 | 最大会话数 | `8` 到 `16` |
 
 提高最小缓存 tokens 可以让保活更保守, 只保真正值得保持的大上下文.
@@ -167,6 +181,7 @@ upstream_id + model + endpoint + prompt_cache_key/conversation_id/session_id + c
 | 间隔秒 | `240` 到 `300` |
 | 最大空闲秒 | `3600` |
 | 最小缓存 tokens | `4096` |
+| 最大缓存 tokens | `230K` |
 | 最大会话数 | `1` 到 `4` |
 
 只建议用于你明确知道会持续使用的少数会话.
@@ -179,6 +194,7 @@ upstream_id + model + endpoint + prompt_cache_key/conversation_id/session_id + c
 
 - 上一次请求没有返回 `cached_tokens`.
 - `cached_tokens` 小于最小缓存 tokens.
+- `cached_tokens` 大于最大缓存 tokens.
 - 请求里没有 `prompt_cache_key`, `conversation_id`, 或 `session_id`.
 - 模型价格缓存缺失, 而模式是 `smart`.
 - smart 估算后认为保活不省钱.
@@ -199,7 +215,7 @@ upstream_id + model + endpoint + prompt_cache_key/conversation_id/session_id + c
 
 ### 保活失败会一直重试吗
 
-不会. 如果保活请求失败, 缓存未命中, 或输出 tokens 异常偏高, 当前会话会停止保活. 之后只有新的真实请求重新满足条件时, 才会重新登记.
+不会. 如果保活请求失败或缓存未命中, 当前会话会停止保活. 输出 tokens 偏高只会记录告警, 不会单独停用会话. 之后只有新的真实请求重新满足条件时, 才会重新登记.
 
 ### 为什么费用没有明显下降
 

@@ -169,8 +169,11 @@ pub(super) fn cache_keepalive_label(
         settings.interval_seconds
     ))
     .on_hover_text(format!(
-        "最大空闲 {} 秒, 最小缓存 {} tokens, 最大会话 {}",
-        settings.max_idle_seconds, settings.min_cacheable_tokens, settings.max_active_sessions
+        "最大空闲 {} 秒, 最小缓存 {} tokens, 最大缓存 {} tokens, 最大会话 {}",
+        settings.max_idle_seconds,
+        settings.min_cacheable_tokens,
+        settings.max_cacheable_tokens,
+        settings.max_active_sessions
     ));
 }
 

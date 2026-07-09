@@ -10,23 +10,51 @@ impl CodexSwitchApp {
             return;
         }
         self.sync_selected_cache_keepalive_session();
-        ui.horizontal_wrapped(|ui| {
-            for session in &self.cache_keepalive_sessions {
-                let selected = self
-                    .selected_cache_keepalive_key
-                    .as_deref()
-                    .is_some_and(|key| key == session.key);
-                if ui
-                    .selectable_label(selected, session_tab_title(session))
-                    .on_hover_text(&session.key)
-                    .clicked()
-                {
-                    self.selected_cache_keepalive_key = Some(session.key.clone());
+        egui::ScrollArea::horizontal()
+            .id_salt("cache_keepalive_session_tabs")
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for session in &self.cache_keepalive_sessions {
+                        let selected = self
+                            .selected_cache_keepalive_key
+                            .as_deref()
+                            .is_some_and(|key| key == session.key);
+                        if ui
+                            .selectable_label(selected, session_tab_title(session))
+                            .on_hover_text(&session.key)
+                            .clicked()
+                        {
+                            self.selected_cache_keepalive_key = Some(session.key.clone());
+                        }
+                    }
+                });
+            });
+        let selected_session = self.selected_cache_keepalive_session().cloned();
+        let mut remove_key = None;
+        ui.horizontal(|ui| {
+            if let Some(session) = &selected_session {
+                if ui.button("删除会话").clicked() {
+                    remove_key = Some(session.key.clone());
                 }
+            } else {
+                ui.add_enabled(false, egui::Button::new("删除会话"));
             }
         });
+        if let Some(key) = remove_key {
+            self.runtime
+                .block_on(self.state.cache_keepalive.remove_session(&key));
+            self.selected_cache_keepalive_key = None;
+            self.refresh_cache_keepalive_sessions();
+            ui.separator();
+            if self.cache_keepalive_sessions.is_empty() {
+                ui.label("当前没有缓存保持会话");
+            } else {
+                ui.label("已删除缓存保持会话");
+            }
+            return;
+        }
         ui.separator();
-        let Some(session) = self.selected_cache_keepalive_session() else {
+        let Some(session) = selected_session.as_ref() else {
             ui.label("请选择缓存保持会话");
             return;
         };
@@ -90,7 +118,7 @@ fn cache_keepalive_detail_ui(ui: &mut egui::Ui, session: &CacheKeepaliveSessionS
             detail_row(
                 ui,
                 "下次保活",
-                &format_next_keepalive(session.next_keepalive_seconds),
+                &format_next_keepalive(session),
             );
             detail_row(ui, "请求体大小", &format_body_bytes(session.body_bytes));
             ui.strong("session key");
@@ -125,11 +153,13 @@ fn status_text(session: &CacheKeepaliveSessionSnapshot) -> &'static str {
     }
 }
 
-fn format_next_keepalive(seconds: i64) -> String {
-    if seconds <= 0 {
+fn format_next_keepalive(session: &CacheKeepaliveSessionSnapshot) -> String {
+    if session.disabled_reason.is_some() {
+        "已停用".to_string()
+    } else if session.next_keepalive_seconds <= 0 {
         "即将执行".to_string()
     } else {
-        format_seconds(seconds)
+        format_seconds(session.next_keepalive_seconds)
     }
 }
 
@@ -203,6 +233,7 @@ mod tests {
         session.disabled_reason = Some("cache miss".to_string());
 
         assert!(session_tab_title(&session).contains("已停用"));
+        assert_eq!(format_next_keepalive(&session), "已停用");
     }
 
     #[test]

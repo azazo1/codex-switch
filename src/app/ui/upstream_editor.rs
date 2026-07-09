@@ -23,6 +23,8 @@ const BALANCE_PROVIDERS: &[BalanceProvider] = &[
 pub(super) struct UpstreamEditor {
     upstream: Upstream,
     cache_keepalive: UpstreamCacheKeepaliveSettings,
+    min_cacheable_tokens_input: String,
+    max_cacheable_tokens_input: String,
     api_key: String,
     newapi_user_key: String,
     newapi_user_id: String,
@@ -30,9 +32,15 @@ pub(super) struct UpstreamEditor {
 
 impl UpstreamEditor {
     fn new(upstream: Upstream, cache_keepalive: UpstreamCacheKeepaliveSettings) -> Self {
+        let min_cacheable_tokens_input =
+            format_token_input(cache_keepalive.min_cacheable_tokens);
+        let max_cacheable_tokens_input =
+            format_token_input(cache_keepalive.max_cacheable_tokens);
         Self {
             upstream,
             cache_keepalive,
+            min_cacheable_tokens_input,
+            max_cacheable_tokens_input,
             api_key: String::new(),
             newapi_user_key: String::new(),
             newapi_user_id: String::new(),
@@ -107,7 +115,22 @@ impl CodexSwitchApp {
         cache_keepalive.upstream_id = upstream.id.clone();
         cache_keepalive.interval_seconds = cache_keepalive.interval_seconds.max(60);
         cache_keepalive.max_idle_seconds = cache_keepalive.max_idle_seconds.max(60);
-        cache_keepalive.min_cacheable_tokens = cache_keepalive.min_cacheable_tokens.max(1024);
+        cache_keepalive.min_cacheable_tokens =
+            match parse_token_amount(&editor.min_cacheable_tokens_input) {
+                Ok(value) => value.max(1024),
+                Err(err) => {
+                    self.status = format!("最小缓存 tokens 无效: {err}");
+                    return;
+                }
+            };
+        cache_keepalive.max_cacheable_tokens =
+            match parse_token_amount(&editor.max_cacheable_tokens_input) {
+                Ok(value) => value.max(cache_keepalive.min_cacheable_tokens),
+                Err(err) => {
+                    self.status = format!("最大缓存 tokens 无效: {err}");
+                    return;
+                }
+            };
         cache_keepalive.max_active_sessions = cache_keepalive.max_active_sessions.max(1);
         if upstream.kind != UpstreamKind::RelayApiKey {
             cache_keepalive.enabled = false;
@@ -245,7 +268,12 @@ impl UpstreamEditor {
             ui.label(format!("自动识别: {}", provider.as_str()));
         }
         ui.separator();
-        cache_keepalive_form(ui, &mut self.cache_keepalive);
+        cache_keepalive_form(
+            ui,
+            &mut self.cache_keepalive,
+            &mut self.min_cacheable_tokens_input,
+            &mut self.max_cacheable_tokens_input,
+        );
     }
 
     fn oauth_form_ui(&mut self, ui: &mut egui::Ui) {
@@ -267,7 +295,12 @@ impl UpstreamEditor {
     }
 }
 
-fn cache_keepalive_form(ui: &mut egui::Ui, settings: &mut UpstreamCacheKeepaliveSettings) {
+fn cache_keepalive_form(
+    ui: &mut egui::Ui,
+    settings: &mut UpstreamCacheKeepaliveSettings,
+    min_cacheable_tokens_input: &mut String,
+    max_cacheable_tokens_input: &mut String,
+) {
     ui.heading("缓存保持");
     ui.horizontal(|ui| {
         ui.checkbox(&mut settings.enabled, "启用");
@@ -288,10 +321,63 @@ fn cache_keepalive_form(ui: &mut egui::Ui, settings: &mut UpstreamCacheKeepalive
     });
     ui.horizontal(|ui| {
         ui.label("最小缓存 tokens");
-        ui.add(egui::DragValue::new(&mut settings.min_cacheable_tokens).speed(128));
+        ui.text_edit_singleline(min_cacheable_tokens_input)
+            .on_hover_text("支持 1024, 64K, 1.5M");
+        ui.label("最大缓存 tokens");
+        ui.text_edit_singleline(max_cacheable_tokens_input)
+            .on_hover_text("支持 128K, 230K, 1M");
         ui.label("最大会话数");
         ui.add(egui::DragValue::new(&mut settings.max_active_sessions).speed(1));
     });
+}
+
+fn parse_token_amount(input: &str) -> Result<i64, String> {
+    let value = input.trim().replace('_', "");
+    if value.is_empty() {
+        return Err("不能为空".to_string());
+    }
+    let (number, multiplier) = match value.chars().last().unwrap_or_default() {
+        'k' | 'K' => (&value[..value.len() - 1], 1_000.0),
+        'm' | 'M' => (&value[..value.len() - 1], 1_000_000.0),
+        _ => (value.as_str(), 1.0),
+    };
+    let parsed = number
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| "请输入数字, 例如 1024, 64K, 1.5M".to_string())?;
+    if !parsed.is_finite() || parsed < 0.0 {
+        return Err("必须是非负数字".to_string());
+    }
+    Ok((parsed * multiplier).round() as i64)
+}
+
+fn format_token_input(value: i64) -> String {
+    if value >= 1_000_000 && value % 1_000_000 == 0 {
+        format!("{}M", value / 1_000_000)
+    } else if value >= 1_000 && value % 1_000 == 0 {
+        format!("{}K", value / 1_000)
+    } else {
+        value.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_human_readable_token_amounts() {
+        assert_eq!(parse_token_amount("1024").unwrap(), 1024);
+        assert_eq!(parse_token_amount("230K").unwrap(), 230_000);
+        assert_eq!(parse_token_amount("1.5M").unwrap(), 1_500_000);
+    }
+
+    #[test]
+    fn formats_token_amounts_for_editor() {
+        assert_eq!(format_token_input(230_000), "230K");
+        assert_eq!(format_token_input(1_000_000), "1M");
+        assert_eq!(format_token_input(1536), "1536");
+    }
 }
 
 fn provider_combo(ui: &mut egui::Ui, provider: &mut BalanceProvider) {
