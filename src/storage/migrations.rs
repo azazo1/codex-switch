@@ -317,6 +317,24 @@ fn migrations() -> &'static [Migration] {
                 "CREATE INDEX IF NOT EXISTS idx_request_logs_estimated_cost ON request_logs(estimated_cost_usd)",
             ],
         },
+        Migration {
+            version: 8,
+            name: "upstream_cache_keepalive_settings",
+            statements: &[
+                "CREATE TABLE IF NOT EXISTS upstream_cache_keepalive_settings (
+                upstream_id TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                mode TEXT NOT NULL DEFAULT 'smart',
+                interval_seconds INTEGER NOT NULL DEFAULT 300,
+                max_idle_seconds INTEGER NOT NULL DEFAULT 3600,
+                min_cacheable_tokens INTEGER NOT NULL DEFAULT 1024,
+                max_active_sessions INTEGER NOT NULL DEFAULT 32,
+                prefer_extended_retention INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (upstream_id) REFERENCES upstreams(id) ON DELETE CASCADE
+            )",
+            ],
+        },
     ]
 }
 
@@ -335,7 +353,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 7);
+        assert_eq!(rows.len(), 8);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -361,6 +379,11 @@ mod tests {
         assert_eq!(
             rows[6].get::<String, _>("name"),
             "request_log_estimated_cost"
+        );
+        assert_eq!(rows[7].get::<i64, _>("version"), 8);
+        assert_eq!(
+            rows[7].get::<String, _>("name"),
+            "upstream_cache_keepalive_settings"
         );
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
@@ -390,6 +413,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 7);
+        assert_eq!(count, 8);
     }
 }

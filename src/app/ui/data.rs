@@ -2,7 +2,7 @@ use crate::app::state::AppState;
 use crate::core::models::{
     BalanceSnapshot, DashboardStats, DatabaseInfo, ModelUsageStats, ProviderStats, QuotaSnapshot,
     RequestLog, ScheduleGroup, ScheduleGroupChild, ScheduleGroupMember, ScheduleRouteRule,
-    Upstream,
+    Upstream, UpstreamCacheKeepaliveSettings,
 };
 use crate::pricing;
 use crate::storage::RequestLogFilter;
@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 
 pub(super) struct ViewData {
     pub upstreams: Vec<Upstream>,
+    pub cache_keepalive_settings: BTreeMap<String, UpstreamCacheKeepaliveSettings>,
     pub schedule_groups: Vec<ScheduleGroup>,
     pub schedule_members: BTreeMap<String, Vec<ScheduleGroupMember>>,
     pub schedule_children: BTreeMap<String, Vec<ScheduleGroupChild>>,
@@ -38,6 +39,13 @@ pub(super) async fn load_view_data(
     log_filter: &RequestLogFilter,
 ) -> anyhow::Result<ViewData> {
     let upstreams = state.store.list_upstreams().await?;
+    let mut cache_keepalive_settings = BTreeMap::new();
+    for upstream in &upstreams {
+        cache_keepalive_settings.insert(
+            upstream.id.clone(),
+            state.store.cache_keepalive_settings(&upstream.id).await?,
+        );
+    }
     let schedule_groups = state.store.list_schedule_groups().await?;
     let current_schedule_group_id = state.store.get_setting("current_schedule_group_id").await?;
     let mut schedule_members = BTreeMap::new();
@@ -89,6 +97,7 @@ pub(super) async fn load_view_data(
     }
     Ok(ViewData {
         upstreams,
+        cache_keepalive_settings,
         schedule_groups,
         schedule_members,
         schedule_children,

@@ -1,5 +1,6 @@
 pub mod credentials;
 mod migrations;
+mod query_cache_keepalive;
 mod query_logs;
 mod query_pricing;
 mod query_scheduler;

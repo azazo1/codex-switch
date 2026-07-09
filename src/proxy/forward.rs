@@ -1,4 +1,5 @@
 use crate::app::AppState;
+use crate::cache_keepalive::CacheKeepaliveRegistration;
 use crate::core::models::{TokenUsage, Upstream, UpstreamKind, WireApi};
 use crate::live::LiveRequestMeta;
 use crate::proxy::transform;
@@ -343,6 +344,9 @@ async fn forward_with_upstream(
         Some(model) => transform::rewrite_model(&request.body, model)?,
         None => request.body.to_vec(),
     };
+    let effective_model = target_model
+        .map(str::to_string)
+        .or_else(|| request.model.clone());
     let target_url;
     if upstream.kind == UpstreamKind::CodexOauth {
         if !request.endpoint_kind.is_responses() {
@@ -363,6 +367,7 @@ async fn forward_with_upstream(
     } else {
         target_url = transform::build_endpoint(&upstream.base_url, "/chat/completions");
     }
+    let keepalive_body = target_body.clone();
 
     let mut upstream_request = request
         .state
@@ -411,14 +416,16 @@ async fn forward_with_upstream(
             .live_requests
             .set_streaming(&request.request_id, true);
         request.state.events.bump_live_streams();
-        let stream = build_live_response_stream(
+        let stream = build_live_response_stream(LiveResponseStreamInput {
             request,
-            upstream.clone(),
+            upstream: upstream.clone(),
+            keepalive_body,
+            effective_model,
             status,
             response,
             active_guard,
             terminate_rx,
-        );
+        });
         let failure_kind = scheduler::classify_response(status, &[]);
         Ok(ForwardResult {
             upstream,
@@ -443,6 +450,16 @@ async fn forward_with_upstream(
         } else {
             bytes.to_vec()
         };
+        maybe_register_cache_keepalive(
+            request.state,
+            &upstream,
+            &request.endpoint,
+            effective_model,
+            keepalive_body,
+            status,
+            &usage,
+        )
+        .await;
         Ok(ForwardResult {
             upstream,
             status,
@@ -502,14 +519,30 @@ fn termination_requested(
     changed.is_ok() && *terminate_rx.borrow()
 }
 
-fn build_live_response_stream(
-    request: &ForwardRequest<'_>,
+struct LiveResponseStreamInput<'a> {
+    request: &'a ForwardRequest<'a>,
     upstream: Upstream,
+    keepalive_body: Vec<u8>,
+    effective_model: Option<String>,
     status: StatusCode,
     response: reqwest::Response,
     active_guard: ActiveRequestGuard,
-    mut terminate_rx: watch::Receiver<bool>,
+    terminate_rx: watch::Receiver<bool>,
+}
+
+fn build_live_response_stream(
+    input: LiveResponseStreamInput<'_>,
 ) -> impl futures_util::Stream<Item = Result<Bytes, io::Error>> + Send + 'static {
+    let LiveResponseStreamInput {
+        request,
+        upstream,
+        keepalive_body,
+        effective_model,
+        status,
+        response,
+        active_guard,
+        mut terminate_rx,
+    } = input;
     let state = request.state.clone();
     let request_id = request.request_id.clone();
     let endpoint = request.endpoint.clone();
@@ -637,7 +670,45 @@ fn build_live_response_stream(
         log_draft.merge_usage(&usage);
         live_guard.finish();
         log_draft.record(None).await;
+        maybe_register_cache_keepalive(
+            &state,
+            &upstream,
+            &endpoint,
+            effective_model,
+            keepalive_body,
+            status,
+            &usage,
+        )
+        .await;
     }
+}
+
+async fn maybe_register_cache_keepalive(
+    state: &AppState,
+    upstream: &Upstream,
+    endpoint: &str,
+    model: Option<String>,
+    body: Vec<u8>,
+    status: StatusCode,
+    usage: &TokenUsage,
+) {
+    if upstream.kind != UpstreamKind::RelayApiKey
+        || endpoint.starts_with("/images")
+        || !status.is_success()
+        || usage.cache_read_tokens <= 0
+    {
+        return;
+    }
+    state
+        .cache_keepalive
+        .register(CacheKeepaliveRegistration {
+            upstream: upstream.clone(),
+            endpoint: endpoint.to_string(),
+            model,
+            body,
+            usage: usage.clone(),
+        })
+        .await;
 }
 
 fn process_live_sse_chunk(

@@ -468,6 +468,64 @@ pub struct ModelPrice {
     pub raw_json: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CacheKeepaliveMode {
+    Off,
+    Smart,
+    Always,
+}
+
+impl CacheKeepaliveMode {
+    pub const ALL: [Self; 3] = [Self::Off, Self::Smart, Self::Always];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Smart => "smart",
+            Self::Always => "always",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "always" => Self::Always,
+            "smart" => Self::Smart,
+            _ => Self::Off,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpstreamCacheKeepaliveSettings {
+    pub upstream_id: String,
+    pub enabled: bool,
+    pub mode: CacheKeepaliveMode,
+    pub interval_seconds: i64,
+    pub max_idle_seconds: i64,
+    pub min_cacheable_tokens: i64,
+    pub max_active_sessions: i64,
+    pub prefer_extended_retention: bool,
+}
+
+impl UpstreamCacheKeepaliveSettings {
+    pub fn new(upstream_id: String) -> Self {
+        Self {
+            upstream_id,
+            enabled: false,
+            mode: CacheKeepaliveMode::Smart,
+            interval_seconds: 300,
+            max_idle_seconds: 3600,
+            min_cacheable_tokens: 1024,
+            max_active_sessions: 32,
+            prefer_extended_retention: false,
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.enabled && self.mode != CacheKeepaliveMode::Off
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct QuotaSnapshot {
     pub upstream_id: String,

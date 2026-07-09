@@ -1,5 +1,5 @@
 use super::{
-    upstreams::{balance_snapshot_for, balance_snapshot_label},
+    upstreams::{balance_snapshot_for, balance_snapshot_label, cache_keepalive_label},
     CodexSwitchApp, tokens,
 };
 use crate::app::platform;
@@ -81,7 +81,7 @@ impl CodexSwitchApp {
         let mut query_balance = None;
         egui::Grid::new("provider_stats_grid")
             .striped(true)
-            .num_columns(9)
+            .num_columns(10)
             .spacing([18.0, 8.0])
             .show(ui, |ui| {
                 ui.strong("上游");
@@ -91,6 +91,7 @@ impl CodexSwitchApp {
                 ui.strong("输出");
                 ui.strong("总计");
                 ui.strong("估算");
+                ui.strong("缓存保持");
                 ui.strong("余额");
                 ui.strong("操作");
                 ui.end_row();
@@ -111,6 +112,10 @@ impl CodexSwitchApp {
                         .map(tokens::format_usd)
                         .unwrap_or_else(|| "无价格缓存".to_string());
                     ui.label(cost);
+                    cache_keepalive_label(
+                        ui,
+                        self.cache_keepalive_settings.get(&item.upstream_id),
+                    );
                     balance_snapshot_label(
                         ui,
                         balance_snapshot_for(&self.balance_snapshots, &item.upstream_id),

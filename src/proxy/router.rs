@@ -144,6 +144,7 @@ mod tests {
         BalanceProvider, ScheduleGroup, ScheduleGroupMember, ScheduleRouteRule,
         ScheduleMode, ScheduleRouteTargetKind, Upstream, WireApi,
     };
+    use crate::cache_keepalive::CacheKeepaliveRuntime;
     use crate::storage::{Store, credentials::CredentialStore};
     use axum::{
         body::Body,
@@ -589,6 +590,8 @@ mod tests {
             store.save_upstream(&upstream).await.unwrap();
             credentials.put(&upstream.id, "api_key", "sk-test").await.unwrap();
         }
+        let cache_keepalive =
+            CacheKeepaliveRuntime::new(store.clone(), credentials.clone(), reqwest::Client::new());
         AppState {
             store,
             credentials,
@@ -596,6 +599,7 @@ mod tests {
             events: Default::default(),
             scheduler: Default::default(),
             live_requests: Default::default(),
+            cache_keepalive,
         }
     }
 

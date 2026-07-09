@@ -1,6 +1,9 @@
 use super::CodexSwitchApp;
 use crate::balance;
-use crate::core::models::{BalanceProvider, Upstream, UpstreamKind, WireApi};
+use crate::core::models::{
+    BalanceProvider, CacheKeepaliveMode, Upstream, UpstreamCacheKeepaliveSettings, UpstreamKind,
+    WireApi,
+};
 use eframe::egui;
 
 const BALANCE_PROVIDERS: &[BalanceProvider] = &[
@@ -19,15 +22,17 @@ const BALANCE_PROVIDERS: &[BalanceProvider] = &[
 #[derive(Clone)]
 pub(super) struct UpstreamEditor {
     upstream: Upstream,
+    cache_keepalive: UpstreamCacheKeepaliveSettings,
     api_key: String,
     newapi_user_key: String,
     newapi_user_id: String,
 }
 
 impl UpstreamEditor {
-    fn new(upstream: Upstream) -> Self {
+    fn new(upstream: Upstream, cache_keepalive: UpstreamCacheKeepaliveSettings) -> Self {
         Self {
             upstream,
+            cache_keepalive,
             api_key: String::new(),
             newapi_user_key: String::new(),
             newapi_user_id: String::new(),
@@ -37,7 +42,17 @@ impl UpstreamEditor {
 
 impl CodexSwitchApp {
     pub(super) fn open_upstream_editor(&mut self, upstream: Upstream) {
-        self.upstream_editor = Some(UpstreamEditor::new(upstream));
+        let settings = match self
+            .runtime
+            .block_on(self.state.store.cache_keepalive_settings(&upstream.id))
+        {
+            Ok(settings) => settings,
+            Err(err) => {
+                self.status = format!("读取缓存保持设置失败: {err}");
+                UpstreamCacheKeepaliveSettings::new(upstream.id.clone())
+            }
+        };
+        self.upstream_editor = Some(UpstreamEditor::new(upstream, settings));
     }
 
     pub(super) fn show_upstream_editor(&mut self, ctx: &egui::Context) {
@@ -88,6 +103,16 @@ impl CodexSwitchApp {
         let newapi_user_key = editor.newapi_user_key.trim().to_string();
         let newapi_user_id = editor.newapi_user_id.trim().to_string();
         let uses_newapi_balance = uses_newapi_balance(&upstream);
+        let mut cache_keepalive = editor.cache_keepalive;
+        cache_keepalive.upstream_id = upstream.id.clone();
+        cache_keepalive.interval_seconds = cache_keepalive.interval_seconds.max(60);
+        cache_keepalive.max_idle_seconds = cache_keepalive.max_idle_seconds.max(60);
+        cache_keepalive.min_cacheable_tokens = cache_keepalive.min_cacheable_tokens.max(1024);
+        cache_keepalive.max_active_sessions = cache_keepalive.max_active_sessions.max(1);
+        if upstream.kind != UpstreamKind::RelayApiKey {
+            cache_keepalive.enabled = false;
+            cache_keepalive.mode = CacheKeepaliveMode::Off;
+        }
 
         if upstream.name.is_empty() {
             self.status = "上游名称不能为空".to_string();
@@ -99,6 +124,10 @@ impl CodexSwitchApp {
         }
         let result = self.runtime.block_on(async {
             self.state.store.save_upstream(&upstream).await?;
+            self.state
+                .store
+                .save_cache_keepalive_settings(&cache_keepalive)
+                .await?;
             if upstream.kind == UpstreamKind::RelayApiKey && !api_key.is_empty() {
                 self.state
                     .credentials
@@ -215,6 +244,8 @@ impl UpstreamEditor {
         {
             ui.label(format!("自动识别: {}", provider.as_str()));
         }
+        ui.separator();
+        cache_keepalive_form(ui, &mut self.cache_keepalive);
     }
 
     fn oauth_form_ui(&mut self, ui: &mut egui::Ui) {
@@ -231,7 +262,36 @@ impl UpstreamEditor {
             ui.label("套餐");
             ui.label(self.upstream.plan_type.as_deref().unwrap_or(""));
         });
+        ui.separator();
+        ui.label("缓存保持仅支持 Relay API Key 上游");
     }
+}
+
+fn cache_keepalive_form(ui: &mut egui::Ui, settings: &mut UpstreamCacheKeepaliveSettings) {
+    ui.heading("缓存保持");
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut settings.enabled, "启用");
+        egui::ComboBox::from_label("模式")
+            .selected_text(settings.mode.as_str())
+            .show_ui(ui, |ui| {
+                for mode in CacheKeepaliveMode::ALL {
+                    ui.selectable_value(&mut settings.mode, mode, mode.as_str());
+                }
+            });
+        ui.checkbox(&mut settings.prefer_extended_retention, "优先 24h retention");
+    });
+    ui.horizontal(|ui| {
+        ui.label("间隔秒");
+        ui.add(egui::DragValue::new(&mut settings.interval_seconds).speed(10));
+        ui.label("最大空闲秒");
+        ui.add(egui::DragValue::new(&mut settings.max_idle_seconds).speed(60));
+    });
+    ui.horizontal(|ui| {
+        ui.label("最小缓存 tokens");
+        ui.add(egui::DragValue::new(&mut settings.min_cacheable_tokens).speed(128));
+        ui.label("最大会话数");
+        ui.add(egui::DragValue::new(&mut settings.max_active_sessions).speed(1));
+    });
 }
 
 fn provider_combo(ui: &mut egui::Ui, provider: &mut BalanceProvider) {

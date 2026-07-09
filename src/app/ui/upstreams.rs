@@ -1,5 +1,7 @@
 use super::CodexSwitchApp;
-use crate::core::models::{BalanceSnapshot, UpstreamKind, WireApi};
+use crate::core::models::{
+    BalanceSnapshot, CacheKeepaliveMode, UpstreamCacheKeepaliveSettings, UpstreamKind, WireApi,
+};
 use eframe::egui;
 
 impl CodexSwitchApp {
@@ -64,19 +66,21 @@ impl CodexSwitchApp {
         ui.heading("上游列表");
         let upstreams = self.upstreams.clone();
         let balance_snapshots = self.balance_snapshots.clone();
+        let cache_settings = self.cache_keepalive_settings.clone();
         let mut changed = Vec::new();
         let mut deleted = Vec::new();
         let mut edit = None;
         let mut query_balance = None;
         egui::Grid::new("upstreams_grid")
             .striped(true)
-            .num_columns(6)
+            .num_columns(7)
             .spacing([16.0, 8.0])
             .show(ui, |ui| {
                 ui.strong("启用");
                 ui.strong("名称");
                 ui.strong("类型");
                 ui.strong("Base URL");
+                ui.strong("缓存保持");
                 ui.strong("余额");
                 ui.strong("操作");
                 ui.end_row();
@@ -90,6 +94,7 @@ impl CodexSwitchApp {
                         .on_hover_text(format!("id: {}", upstream.id));
                     ui.label(upstream.kind.as_str());
                     ui.label(upstream.base_url.as_str());
+                    cache_keepalive_label(ui, cache_settings.get(&upstream.id));
                     if upstream.kind == UpstreamKind::RelayApiKey {
                         balance_snapshot_label(
                             ui,
@@ -144,6 +149,29 @@ impl CodexSwitchApp {
         }
         self.show_upstream_editor(ui.ctx());
     }
+}
+
+pub(super) fn cache_keepalive_label(
+    ui: &mut egui::Ui,
+    settings: Option<&UpstreamCacheKeepaliveSettings>,
+) {
+    let Some(settings) = settings else {
+        ui.label("关闭");
+        return;
+    };
+    if !settings.enabled || settings.mode == CacheKeepaliveMode::Off {
+        ui.label("关闭");
+        return;
+    }
+    ui.label(format!(
+        "{} / {} 秒",
+        settings.mode.as_str(),
+        settings.interval_seconds
+    ))
+    .on_hover_text(format!(
+        "最大空闲 {} 秒, 最小缓存 {} tokens, 最大会话 {}",
+        settings.max_idle_seconds, settings.min_cacheable_tokens, settings.max_active_sessions
+    ));
 }
 
 pub(super) fn balance_snapshot_for<'a>(

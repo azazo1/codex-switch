@@ -20,6 +20,12 @@ pub struct PriceFetchSummary {
     pub count: i64,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CacheKeepaliveCost {
+    pub keepalive_usd: f64,
+    pub refresh_loss_usd: f64,
+}
+
 impl UsageCost {
     pub fn total_usd(self) -> f64 {
         self.input_usd + self.cached_input_usd + self.cache_write_usd + self.output_usd
@@ -73,6 +79,29 @@ pub fn estimate_usage_cost(usage: &TokenUsage, price: &ModelPrice) -> UsageCost 
         cache_write_usd: usd_for_tokens(usage.cache_creation_tokens, cache_write_price),
         output_usd: usd_for_tokens(usage.output_tokens, output_price),
     }
+}
+
+pub fn estimate_cache_keepalive_cost(
+    cached_tokens: i64,
+    price: &ModelPrice,
+) -> Option<CacheKeepaliveCost> {
+    let input_price = price.input_usd_per_million?;
+    let cached_price = price.cached_input_usd_per_million.unwrap_or(input_price);
+    if input_price <= cached_price {
+        return None;
+    }
+    let output_price = price.output_usd_per_million.unwrap_or(0.0);
+    Some(CacheKeepaliveCost {
+        keepalive_usd: usd_for_tokens(cached_tokens, cached_price) + usd_for_tokens(1, output_price),
+        refresh_loss_usd: usd_for_tokens(cached_tokens, input_price - cached_price),
+    })
+}
+
+pub fn should_keepalive_cache(cached_tokens: i64, keepalive_count: i64, price: &ModelPrice) -> bool {
+    let Some(cost) = estimate_cache_keepalive_cost(cached_tokens, price) else {
+        return false;
+    };
+    cost.keepalive_usd * ((keepalive_count.max(0) + 1) as f64) < cost.refresh_loss_usd * 0.8
 }
 
 fn usd_for_tokens(tokens: i64, usd_per_million: f64) -> f64 {
@@ -230,5 +259,31 @@ mod tests {
             + 200.0 * 2.0 / 1_000_000.0
             + 200.0 * 10.0 / 1_000_000.0;
         assert!((cost.total_usd() - expected).abs() < 0.0000001);
+    }
+
+    #[test]
+    fn smart_keepalive_requires_positive_savings() {
+        let price = ModelPrice {
+            input_usd_per_million: Some(1.0),
+            cached_input_usd_per_million: Some(0.1),
+            output_usd_per_million: Some(10.0),
+            ..Default::default()
+        };
+
+        assert!(super::should_keepalive_cache(10_000, 0, &price));
+        assert!(!super::should_keepalive_cache(10_000, 20, &price));
+    }
+
+    #[test]
+    fn smart_keepalive_rejects_missing_or_unhelpful_price() {
+        let missing = ModelPrice::default();
+        let unhelpful = ModelPrice {
+            input_usd_per_million: Some(1.0),
+            cached_input_usd_per_million: Some(1.0),
+            ..Default::default()
+        };
+
+        assert!(!super::should_keepalive_cache(10_000, 0, &missing));
+        assert!(!super::should_keepalive_cache(10_000, 0, &unhelpful));
     }
 }

@@ -3,7 +3,7 @@ use crate::balance;
 use crate::core::models::{
     BalanceProvider, BalanceSnapshot, DashboardStats, DatabaseInfo, ProviderStats, QuotaSnapshot,
     RequestLog, ScheduleGroup, ScheduleGroupChild, ScheduleGroupMember, ScheduleRouteRule,
-    Upstream, WireApi,
+    Upstream, UpstreamCacheKeepaliveSettings, WireApi,
 };
 use crate::live::LiveRequestSnapshot;
 use crate::oauth;
@@ -323,6 +323,7 @@ pub struct CodexSwitchApp {
     price_fetch_pending: bool,
     status: String,
     upstreams: Vec<Upstream>,
+    cache_keepalive_settings: BTreeMap<String, UpstreamCacheKeepaliveSettings>,
     schedule_groups: Vec<ScheduleGroup>,
     schedule_members: BTreeMap<String, Vec<ScheduleGroupMember>>,
     schedule_children: BTreeMap<String, Vec<ScheduleGroupChild>>,
@@ -411,6 +412,7 @@ impl CodexSwitchApp {
             price_fetch_pending: false,
             status: "就绪".to_string(),
             upstreams: Vec::new(),
+            cache_keepalive_settings: BTreeMap::new(),
             schedule_groups: Vec::new(),
             schedule_members: BTreeMap::new(),
             schedule_children: BTreeMap::new(),
@@ -678,6 +680,7 @@ impl CodexSwitchApp {
         {
             Ok(data) => {
                 self.upstreams = data.upstreams;
+                self.cache_keepalive_settings = data.cache_keepalive_settings;
                 self.schedule_groups = data.schedule_groups;
                 self.schedule_members = data.schedule_members;
                 self.schedule_children = data.schedule_children;

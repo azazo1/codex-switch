@@ -1,3 +1,4 @@
+use crate::cache_keepalive::CacheKeepaliveRuntime;
 use crate::live::LiveRequestStore;
 use crate::scheduler::SchedulerRuntime;
 use crate::storage::{Store, credentials::CredentialStore};
@@ -19,6 +20,7 @@ pub struct AppState {
     pub events: AppEvents,
     pub scheduler: SchedulerRuntime,
     pub live_requests: LiveRequestStore,
+    pub cache_keepalive: CacheKeepaliveRuntime,
 }
 
 #[derive(Clone, Default)]
@@ -79,14 +81,19 @@ impl AppState {
             .user_agent("codex-switch/0.1.0")
             .build()
             .context("failed to build http client")?;
-        Ok(Self {
+        let cache_keepalive =
+            CacheKeepaliveRuntime::new(store.clone(), credentials.clone(), http.clone());
+        let state = Self {
             store,
             credentials,
             http,
             events: AppEvents::default(),
             scheduler: SchedulerRuntime::default(),
             live_requests: LiveRequestStore::default(),
-        })
+            cache_keepalive,
+        };
+        state.cache_keepalive.start();
+        Ok(state)
     }
 }
 
