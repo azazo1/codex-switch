@@ -32,6 +32,15 @@ pub fn responses_subpath_from_uri(path: &str) -> String {
     String::new()
 }
 
+pub fn images_subpath_from_uri(path: &str) -> String {
+    for marker in ["/v1/images", "/images"] {
+        if let Some(rest) = path.strip_prefix(marker) {
+            return rest.trim_end_matches('/').to_string();
+        }
+    }
+    String::new()
+}
+
 pub fn build_endpoint(base_url: &str, endpoint: &str) -> String {
     let base = base_url.trim_end_matches('/');
     let endpoint = endpoint.trim_start_matches('/');
@@ -56,6 +65,12 @@ mod tests {
             responses_subpath_from_uri("/backend-api/codex/responses/compact/detail"),
             "/compact/detail"
         );
+    }
+
+    #[test]
+    fn preserves_images_subpath() {
+        assert_eq!(images_subpath_from_uri("/v1/images/generations"), "/generations");
+        assert_eq!(images_subpath_from_uri("/images/edits"), "/edits");
     }
 
     #[test]

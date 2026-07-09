@@ -1,5 +1,5 @@
 use crate::app::AppState;
-use crate::proxy::forward;
+use crate::proxy::forward::{self, OpenAiEndpoint};
 use axum::{
     Router,
     body::Bytes,
@@ -36,6 +36,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/v1/chat/completions", post(chat_completions))
         .route("/chat/completions", post(chat_completions))
+        .route("/v1/images/*subpath", post(images))
+        .route("/images/*subpath", post(images))
         .layer(DefaultBodyLimit::disable())
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
@@ -57,7 +59,16 @@ async fn responses(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    forward::handle_openai(state.app.clone(), method, uri, headers, body, None, true).await
+    forward::handle_openai(
+        state.app.clone(),
+        method,
+        uri,
+        headers,
+        body,
+        None,
+        OpenAiEndpoint::Responses,
+    )
+    .await
 }
 
 async fn responses_subpath(
@@ -75,7 +86,7 @@ async fn responses_subpath(
         headers,
         body,
         Some(format!("/{subpath}")),
-        true,
+        OpenAiEndpoint::Responses,
     )
     .await
 }
@@ -87,7 +98,36 @@ async fn chat_completions(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    forward::handle_openai(state.app.clone(), method, uri, headers, body, None, false).await
+    forward::handle_openai(
+        state.app.clone(),
+        method,
+        uri,
+        headers,
+        body,
+        None,
+        OpenAiEndpoint::ChatCompletions,
+    )
+    .await
+}
+
+async fn images(
+    State(state): State<Arc<ProxyState>>,
+    Path(subpath): Path<String>,
+    uri: Uri,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    forward::handle_openai(
+        state.app.clone(),
+        method,
+        uri,
+        headers,
+        body,
+        Some(format!("/{subpath}")),
+        OpenAiEndpoint::Images,
+    )
+    .await
 }
 
 async fn ws_placeholder() -> impl IntoResponse {
@@ -124,6 +164,7 @@ mod tests {
         ChatJson,
         ChatSse,
         SlowChatSse,
+        ImagesJson,
     }
 
     #[derive(Clone)]
@@ -244,6 +285,35 @@ mod tests {
         let logs = state.store.recent_logs(1).await.unwrap();
         assert_eq!(logs[0].usage.total_tokens, 9);
         assert_eq!(logs[0].endpoint, "/responses");
+    }
+
+    #[tokio::test]
+    async fn images_route_forwards_generations_request() {
+        let (mock_base, hits) = spawn_mock(MockMode::ImagesJson).await;
+        let state = test_state(&mock_base, WireApi::Responses).await;
+        let proxy_base = spawn_proxy(state.clone()).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/images/generations"))
+            .bearer_auth("local-test")
+            .json(&json!({"model":"gpt-image-1","prompt":"a small test image"}))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = response.json::<Value>().await.unwrap();
+        assert_eq!(value["data"][0]["b64_json"], "mock-image");
+
+        let hits = hits.lock().await;
+        assert_eq!(hits[0].path, "/v1/images/generations");
+        assert_eq!(hits[0].authorization.as_deref(), Some("Bearer sk-test"));
+        assert_eq!(hits[0].body["model"], "gpt-image-1");
+        drop(hits);
+
+        let logs = state.store.recent_logs(1).await.unwrap();
+        assert_eq!(logs[0].endpoint, "/images/generations");
+        assert_eq!(logs[0].model.as_deref(), Some("gpt-image-1"));
     }
 
     #[tokio::test]
@@ -698,6 +768,14 @@ mod tests {
                     .body(Body::from_stream(stream))
                     .unwrap()
             }
+            MockMode::ImagesJson => (
+                StatusCode::OK,
+                axum::Json(json!({
+                    "created": 1,
+                    "data": [{"b64_json": "mock-image"}]
+                })),
+            )
+                .into_response(),
         }
     }
 }

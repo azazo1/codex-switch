@@ -29,6 +29,33 @@ mod models;
 mod response;
 mod select;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpenAiEndpoint {
+    Responses,
+    ChatCompletions,
+    Images,
+}
+
+impl OpenAiEndpoint {
+    fn endpoint(self, uri: &Uri, subpath: Option<String>) -> String {
+        match self {
+            Self::Responses => format!(
+                "/responses{}",
+                subpath.unwrap_or_else(|| transform::responses_subpath_from_uri(uri.path()))
+            ),
+            Self::ChatCompletions => "/chat/completions".to_string(),
+            Self::Images => format!(
+                "/images{}",
+                subpath.unwrap_or_else(|| transform::images_subpath_from_uri(uri.path()))
+            ),
+        }
+    }
+
+    fn is_responses(self) -> bool {
+        self == Self::Responses
+    }
+}
+
 pub async fn handle_models(state: AppState, headers: HeaderMap) -> Response {
     if let Err(response) = validate_local_access(&state, &headers).await {
         return response;
@@ -50,22 +77,13 @@ pub async fn handle_openai(
     headers: HeaderMap,
     body: Bytes,
     subpath: Option<String>,
-    responses_api: bool,
+    endpoint_kind: OpenAiEndpoint,
 ) -> Response {
     if let Err(response) = validate_local_access(&state, &headers).await {
         return response;
     }
     let started = Instant::now();
-    let endpoint = if responses_api {
-        format!(
-            "/responses{}",
-            subpath
-                .clone()
-                .unwrap_or_else(|| transform::responses_subpath_from_uri(uri.path()))
-        )
-    } else {
-        "/chat/completions".to_string()
-    };
+    let endpoint = endpoint_kind.endpoint(&uri, subpath);
     let model = usage::extract_model(&body);
     let reasoning_effort = usage::extract_reasoning_effort(&body);
     let compact = endpoint.starts_with("/responses/compact");
@@ -81,7 +99,7 @@ pub async fn handle_openai(
         request_id: uuid::Uuid::new_v4().to_string(),
         model: model.clone(),
         reasoning_effort: reasoning_effort.clone(),
-        responses_api,
+        endpoint_kind,
         compact,
     };
     let result = forward_inner(request).await;
@@ -179,7 +197,7 @@ struct ForwardRequest<'a> {
     request_id: String,
     model: Option<String>,
     reasoning_effort: Option<String>,
-    responses_api: bool,
+    endpoint_kind: OpenAiEndpoint,
     compact: bool,
 }
 
@@ -189,7 +207,7 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
         &request.body,
         &request.endpoint,
         usage::extract_model(&request.body).as_deref(),
-        request.responses_api,
+        request.endpoint_kind,
         request.compact,
     )
     .await?;
@@ -327,15 +345,20 @@ async fn forward_with_upstream(
     };
     let target_url;
     if upstream.kind == UpstreamKind::CodexOauth {
+        if !request.endpoint_kind.is_responses() {
+            anyhow::bail!("codex oauth upstream is only available for responses requests");
+        }
         target_body = transform::normalize_oauth_body(&target_body, request.compact)?;
         target_url = format!(
             "https://chatgpt.com/backend-api/codex{}",
             request.endpoint
         );
-    } else if request.responses_api && upstream.wire_api == WireApi::ChatCompletions {
+    } else if request.endpoint_kind.is_responses() && upstream.wire_api == WireApi::ChatCompletions
+    {
         target_body = usage::responses_to_chat_json(&target_body)?;
         target_url = transform::build_endpoint(&upstream.base_url, "/chat/completions");
-    } else if request.responses_api {
+    } else if request.endpoint_kind.is_responses() || request.endpoint_kind == OpenAiEndpoint::Images
+    {
         target_url = transform::build_endpoint(&upstream.base_url, &request.endpoint);
     } else {
         target_url = transform::build_endpoint(&upstream.base_url, "/chat/completions");
@@ -413,7 +436,8 @@ async fn forward_with_upstream(
         let mut usage = usage::extract_usage_from_json(&value);
         usage.finish();
         let failure_kind = scheduler::classify_response(status, &bytes);
-        let response_body = if request.responses_api && upstream.wire_api == WireApi::ChatCompletions
+        let response_body = if request.endpoint_kind.is_responses()
+            && upstream.wire_api == WireApi::ChatCompletions
         {
             serde_json::to_vec(&usage::chat_to_responses_json(&value))?
         } else {
@@ -492,7 +516,8 @@ fn build_live_response_stream(
     let model = request.model.clone();
     let reasoning_effort = request.reasoning_effort.clone();
     let started = request.started;
-    let convert_chat = request.responses_api && upstream.wire_api == WireApi::ChatCompletions;
+    let convert_chat =
+        request.endpoint_kind.is_responses() && upstream.wire_api == WireApi::ChatCompletions;
     let response_id = format!("resp_{}", uuid::Uuid::new_v4());
     let log_draft = StreamLogDraft::new(
         state.clone(),

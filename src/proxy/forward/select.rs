@@ -9,12 +9,14 @@ use crate::scheduler::{
 };
 use anyhow::Context;
 
+use super::OpenAiEndpoint;
+
 pub(super) async fn selection_plan(
     state: &AppState,
     body: &[u8],
     endpoint: &str,
     model: Option<&str>,
-    responses_api: bool,
+    endpoint_kind: OpenAiEndpoint,
     compact: bool,
 ) -> anyhow::Result<SchedulerPlan> {
     let group = state.store.current_schedule_group().await?;
@@ -25,7 +27,7 @@ pub(super) async fn selection_plan(
         .clone()
         .or_else(|| model.map(str::to_string));
     if let Some(upstream) = resolved.direct_upstream {
-        let upstream = if upstream_available(&upstream, responses_api, compact) {
+        let upstream = if upstream_available(&upstream, endpoint_kind, compact) {
             upstream
         } else {
             anyhow::bail!("routed upstream is not available for this request");
@@ -51,7 +53,7 @@ pub(super) async fn selection_plan(
         .await?;
     let upstreams = upstreams
         .into_iter()
-        .filter(|upstream| upstream_available(upstream, responses_api, compact))
+        .filter(|upstream| upstream_available(upstream, endpoint_kind, compact))
         .collect::<Vec<_>>();
     let mut plan = state
         .scheduler
@@ -216,10 +218,17 @@ fn trimmed_value(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
-fn upstream_available(upstream: &Upstream, responses_api: bool, compact: bool) -> bool {
+fn upstream_available(upstream: &Upstream, endpoint_kind: OpenAiEndpoint, compact: bool) -> bool {
     upstream.enabled
         && (!compact || upstream.supports_compact)
-        && (!responses_api || upstream.kind == UpstreamKind::CodexOauth || !upstream.base_url.is_empty())
+        && match endpoint_kind {
+            OpenAiEndpoint::Responses => {
+                upstream.kind == UpstreamKind::CodexOauth || !upstream.base_url.is_empty()
+            }
+            OpenAiEndpoint::ChatCompletions | OpenAiEndpoint::Images => {
+                upstream.kind == UpstreamKind::RelayApiKey && !upstream.base_url.is_empty()
+            }
+        }
 }
 
 fn fixed_targets_group(group: &ScheduleGroup) -> bool {
