@@ -11,6 +11,8 @@ use crate::pricing;
 use crate::proxy::{self, ServerHandle};
 use crate::quota as quota_api;
 use crate::app::tray::{TrayCommand, TrayController};
+use crate::storage::RequestLogFilter;
+use chrono::{Local, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use data::load_view_data;
 use eframe::egui;
 use std::collections::{BTreeMap, BTreeSet};
@@ -55,6 +57,129 @@ enum LogRetentionChoice {
     Failed,
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+struct LogFilterState {
+    model: String,
+    upstream: String,
+    reasoning_effort: String,
+    endpoint: String,
+    status_min: String,
+    status_max: String,
+    price_usd_min: String,
+    price_usd_max: String,
+    started_at: String,
+    ended_at: String,
+    duration_ms_min: String,
+    duration_ms_max: String,
+    first_token_ms_min: String,
+    first_token_ms_max: String,
+    input_tokens_min: String,
+    input_tokens_max: String,
+    output_tokens_min: String,
+    output_tokens_max: String,
+    cache_read_tokens_min: String,
+    cache_read_tokens_max: String,
+    cache_creation_tokens_min: String,
+    cache_creation_tokens_max: String,
+    total_tokens_min: String,
+    total_tokens_max: String,
+}
+
+impl LogFilterState {
+    fn is_active(&self) -> bool {
+        self.active_count() > 0
+    }
+
+    fn active_count(&self) -> usize {
+        [
+            &self.model,
+            &self.upstream,
+            &self.reasoning_effort,
+            &self.endpoint,
+            &self.status_min,
+            &self.status_max,
+            &self.price_usd_min,
+            &self.price_usd_max,
+            &self.started_at,
+            &self.ended_at,
+            &self.duration_ms_min,
+            &self.duration_ms_max,
+            &self.first_token_ms_min,
+            &self.first_token_ms_max,
+            &self.input_tokens_min,
+            &self.input_tokens_max,
+            &self.output_tokens_min,
+            &self.output_tokens_max,
+            &self.cache_read_tokens_min,
+            &self.cache_read_tokens_max,
+            &self.cache_creation_tokens_min,
+            &self.cache_creation_tokens_max,
+            &self.total_tokens_min,
+            &self.total_tokens_max,
+        ]
+        .into_iter()
+        .filter(|value| !value.trim().is_empty())
+        .count()
+    }
+
+    fn to_runtime_filter(&self) -> Result<RequestLogFilter, String> {
+        let (status_min, status_max) = parse_i64_range("状态码", &self.status_min, &self.status_max)?;
+        let (duration_ms_min, duration_ms_max) =
+            parse_i64_range("耗时", &self.duration_ms_min, &self.duration_ms_max)?;
+        let (first_token_ms_min, first_token_ms_max) =
+            parse_i64_range("首 token", &self.first_token_ms_min, &self.first_token_ms_max)?;
+        let (input_tokens_min, input_tokens_max) =
+            parse_i64_range("输入 tokens", &self.input_tokens_min, &self.input_tokens_max)?;
+        let (output_tokens_min, output_tokens_max) =
+            parse_i64_range("输出 tokens", &self.output_tokens_min, &self.output_tokens_max)?;
+        let (cache_read_tokens_min, cache_read_tokens_max) =
+            parse_i64_range("缓存输入 tokens", &self.cache_read_tokens_min, &self.cache_read_tokens_max)?;
+        let (cache_creation_tokens_min, cache_creation_tokens_max) = parse_i64_range(
+            "写入缓存 tokens",
+            &self.cache_creation_tokens_min,
+            &self.cache_creation_tokens_max,
+        )?;
+        let (total_tokens_min, total_tokens_max) =
+            parse_i64_range("总 tokens", &self.total_tokens_min, &self.total_tokens_max)?;
+        let (price_usd_min, price_usd_max) =
+            parse_f64_range("费用", &self.price_usd_min, &self.price_usd_max)?;
+        let started_at = parse_filter_time("开始时间", &self.started_at, false)?;
+        let ended_at = parse_filter_time("结束时间", &self.ended_at, true)?;
+        if let (Some(started_at), Some(ended_at)) = (started_at, ended_at)
+            && started_at > ended_at
+        {
+            return Err("开始时间不能晚于结束时间".to_string());
+        }
+
+        Ok(RequestLogFilter {
+            model: optional_text(&self.model),
+            upstream: optional_text(&self.upstream),
+            reasoning_effort: optional_text(&self.reasoning_effort),
+            endpoint: optional_text(&self.endpoint),
+            status_min,
+            status_max,
+            duration_ms_min,
+            duration_ms_max,
+            first_token_ms_min,
+            first_token_ms_max,
+            input_tokens_min,
+            input_tokens_max,
+            output_tokens_min,
+            output_tokens_max,
+            cache_read_tokens_min,
+            cache_read_tokens_max,
+            cache_creation_tokens_min,
+            cache_creation_tokens_max,
+            total_tokens_min,
+            total_tokens_max,
+            estimated_cost_usd_min: price_usd_min,
+            estimated_cost_usd_max: price_usd_max,
+            started_at,
+            ended_at,
+        })
+    }
+}
+
 enum UiTaskEvent {
     OAuthStarted(anyhow::Result<oauth::DeviceFlow>),
     OAuthPolled(anyhow::Result<Option<Upstream>>),
@@ -79,6 +204,7 @@ pub struct CodexSwitchApp {
     tray_init_failed: bool,
     exit_requested: bool,
     exit_confirm_open: bool,
+    log_filter_open: bool,
     log_cleanup_open: bool,
     window_hidden_to_tray: bool,
     background_reopen: platform::BackgroundReopenMonitor,
@@ -109,6 +235,9 @@ pub struct CodexSwitchApp {
     log_page: usize,
     log_page_size: usize,
     log_total_count: i64,
+    log_filter_editor: LogFilterState,
+    log_filter_applied: LogFilterState,
+    log_runtime_filter: RequestLogFilter,
     log_retention_choice: LogRetentionChoice,
     log_retention_count: i64,
     total_estimated_cost_usd: Option<f64>,
@@ -163,6 +292,7 @@ impl CodexSwitchApp {
             tray_init_failed: false,
             exit_requested: false,
             exit_confirm_open: false,
+            log_filter_open: false,
             log_cleanup_open: false,
             window_hidden_to_tray: false,
             background_reopen: platform::BackgroundReopenMonitor::default(),
@@ -193,6 +323,9 @@ impl CodexSwitchApp {
             log_page: 0,
             log_page_size: LOG_PAGE_SIZE,
             log_total_count: 0,
+            log_filter_editor: LogFilterState::default(),
+            log_filter_applied: LogFilterState::default(),
+            log_runtime_filter: RequestLogFilter::default(),
             log_retention_choice: LogRetentionChoice::OneMonth,
             log_retention_count: 1000,
             total_estimated_cost_usd: None,
@@ -433,7 +566,12 @@ impl CodexSwitchApp {
         let log_offset = (self.log_page * self.log_page_size) as i64;
         match self
             .runtime
-            .block_on(load_view_data(&self.state, log_limit, log_offset))
+            .block_on(load_view_data(
+                &self.state,
+                log_limit,
+                log_offset,
+                &self.log_runtime_filter,
+            ))
         {
             Ok(data) => {
                 self.upstreams = data.upstreams;
@@ -761,4 +899,95 @@ fn tab_button(ui: &mut egui::Ui, tab: &mut Tab, value: Tab, text: &str) {
 
 fn active_connections_tab_text(count: usize) -> String {
     format!("活跃连接({:03})", count.min(ACTIVE_TAB_COUNT_MAX))
+}
+
+fn optional_text(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn parse_i64_range(
+    label: &str,
+    min_value: &str,
+    max_value: &str,
+) -> Result<(Option<i64>, Option<i64>), String> {
+    let min_value = parse_optional_i64(label, min_value)?;
+    let max_value = parse_optional_i64(label, max_value)?;
+    if let (Some(min_value), Some(max_value)) = (min_value, max_value)
+        && min_value > max_value
+    {
+        return Err(format!("{label} 最小值不能大于最大值"));
+    }
+    Ok((min_value, max_value))
+}
+
+fn parse_optional_i64(label: &str, value: &str) -> Result<Option<i64>, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    value
+        .parse::<i64>()
+        .map(Some)
+        .map_err(|_| format!("{label} 需要填写整数"))
+}
+
+fn parse_f64_range(
+    label: &str,
+    min_value: &str,
+    max_value: &str,
+) -> Result<(Option<f64>, Option<f64>), String> {
+    let min_value = parse_optional_f64(label, min_value)?;
+    let max_value = parse_optional_f64(label, max_value)?;
+    if let (Some(min_value), Some(max_value)) = (min_value, max_value)
+        && min_value > max_value
+    {
+        return Err(format!("{label} 最小值不能大于最大值"));
+    }
+    Ok((min_value, max_value))
+}
+
+fn parse_optional_f64(label: &str, value: &str) -> Result<Option<f64>, String> {
+    let value = value.trim().trim_start_matches('$');
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let parsed = value
+        .parse::<f64>()
+        .map_err(|_| format!("{label} 需要填写数字"))?;
+    if !parsed.is_finite() {
+        return Err(format!("{label} 需要填写有效数字"));
+    }
+    Ok(Some(parsed))
+}
+
+fn parse_filter_time(
+    label: &str,
+    value: &str,
+    end_of_day: bool,
+) -> Result<Option<chrono::DateTime<Utc>>, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let local_time = if let Ok(value) = NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S") {
+        value
+    } else if let Ok(value) = NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M") {
+        value
+    } else if let Ok(value) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+        let Some(value) = value.and_hms_opt(
+            if end_of_day { 23 } else { 0 },
+            if end_of_day { 59 } else { 0 },
+            if end_of_day { 59 } else { 0 },
+        ) else {
+            return Err(format!("{label} 不是有效时间"));
+        };
+        value
+    } else {
+        return Err(format!("{label} 支持 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS"));
+    };
+    let Some(local_time) = Local.from_local_datetime(&local_time).single() else {
+        return Err(format!("{label} 不是有效本地时间"));
+    };
+    Ok(Some(local_time.with_timezone(&Utc)))
 }

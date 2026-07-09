@@ -1,9 +1,10 @@
 use crate::core::models::{
     DashboardStats, ModelUsageStats, ProviderStats, RequestLog, TokenUsage,
 };
+use crate::pricing;
 use crate::storage::Store;
 use chrono::{DateTime, Utc};
-use sqlx::Row;
+use sqlx::{QueryBuilder, Row, Sqlite};
 
 const UNASSIGNED_UPSTREAM_ID: &str = "none";
 
@@ -12,6 +13,34 @@ pub enum RequestLogRetention {
     Since(DateTime<Utc>),
     Newest(i64),
     Failed,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RequestLogFilter {
+    pub model: Option<String>,
+    pub upstream: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub endpoint: Option<String>,
+    pub status_min: Option<i64>,
+    pub status_max: Option<i64>,
+    pub duration_ms_min: Option<i64>,
+    pub duration_ms_max: Option<i64>,
+    pub first_token_ms_min: Option<i64>,
+    pub first_token_ms_max: Option<i64>,
+    pub input_tokens_min: Option<i64>,
+    pub input_tokens_max: Option<i64>,
+    pub output_tokens_min: Option<i64>,
+    pub output_tokens_max: Option<i64>,
+    pub cache_read_tokens_min: Option<i64>,
+    pub cache_read_tokens_max: Option<i64>,
+    pub cache_creation_tokens_min: Option<i64>,
+    pub cache_creation_tokens_max: Option<i64>,
+    pub total_tokens_min: Option<i64>,
+    pub total_tokens_max: Option<i64>,
+    pub estimated_cost_usd_min: Option<f64>,
+    pub estimated_cost_usd_max: Option<f64>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub ended_at: Option<DateTime<Utc>>,
 }
 
 impl Store {
@@ -26,13 +55,20 @@ impl Store {
             .upstream_name
             .clone()
             .unwrap_or_else(|| "未选择".to_string());
+        let estimated_cost_usd = match log.model.as_deref() {
+            Some(model) => self
+                .find_model_price(model)
+                .await?
+                .map(|price| pricing::estimate_usage_cost(&log.usage, &price).total_usd()),
+            None => None,
+        };
 
         sqlx::query(
             "INSERT INTO request_logs (
                 ts, upstream_id, upstream_name, endpoint, model, reasoning_effort, status, input_tokens,
                 output_tokens, cache_read_tokens, cache_creation_tokens, total_tokens,
-                duration_ms, first_token_ms, error
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                estimated_cost_usd, duration_ms, first_token_ms, error
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         )
         .bind(now.to_rfc3339())
         .bind(&log.upstream_id)
@@ -46,6 +82,7 @@ impl Store {
         .bind(log.usage.cache_read_tokens)
         .bind(log.usage.cache_creation_tokens)
         .bind(log.usage.total_tokens)
+        .bind(estimated_cost_usd)
         .bind(log.duration_ms)
         .bind(log.first_token_ms)
         .bind(&log.error)
@@ -182,23 +219,44 @@ impl Store {
         self.recent_logs_page(limit, 0).await
     }
 
+    #[cfg(test)]
     pub async fn recent_logs_page(
         &self,
         limit: i64,
         offset: i64,
     ) -> anyhow::Result<Vec<RequestLog>> {
-        let rows = sqlx::query("SELECT * FROM request_logs ORDER BY id DESC LIMIT ?1 OFFSET ?2")
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(self.pool())
-            .await?;
+        self.recent_logs_page_filtered(limit, offset, &RequestLogFilter::default())
+            .await
+    }
+
+    pub async fn recent_logs_page_filtered(
+        &self,
+        limit: i64,
+        offset: i64,
+        filter: &RequestLogFilter,
+    ) -> anyhow::Result<Vec<RequestLog>> {
+        let mut builder = QueryBuilder::<Sqlite>::new("SELECT * FROM request_logs");
+        append_request_log_filters(&mut builder, filter);
+        builder.push(" ORDER BY id DESC LIMIT ");
+        builder.push_bind(limit);
+        builder.push(" OFFSET ");
+        builder.push_bind(offset);
+        let rows = builder.build().fetch_all(self.pool()).await?;
         Ok(rows.into_iter().map(request_log_from_row).collect())
     }
 
     pub async fn request_log_count(&self) -> anyhow::Result<i64> {
-        let row = sqlx::query("SELECT COUNT(*) AS count FROM request_logs")
-            .fetch_one(self.pool())
-            .await?;
+        self.request_log_count_filtered(&RequestLogFilter::default())
+            .await
+    }
+
+    pub async fn request_log_count_filtered(
+        &self,
+        filter: &RequestLogFilter,
+    ) -> anyhow::Result<i64> {
+        let mut builder = QueryBuilder::<Sqlite>::new("SELECT COUNT(*) AS count FROM request_logs");
+        append_request_log_filters(&mut builder, filter);
+        let row = builder.build().fetch_one(self.pool()).await?;
         Ok(row.get("count"))
     }
 
@@ -235,6 +293,190 @@ impl Store {
         tx.commit().await?;
         Ok(deleted as i64)
     }
+}
+
+fn append_request_log_filters(builder: &mut QueryBuilder<'_, Sqlite>, filter: &RequestLogFilter) {
+    let mut has_where = false;
+    macro_rules! begin_clause {
+        () => {{
+            if has_where {
+                builder.push(" AND ");
+            } else {
+                builder.push(" WHERE ");
+                has_where = true;
+            }
+        }};
+    }
+
+    if let Some(value) = filter_text(filter.model.as_deref()) {
+        begin_clause!();
+        builder.push("LOWER(COALESCE(model, '')) LIKE ");
+        builder.push_bind(like_pattern(value));
+        builder.push(" ESCAPE '\\'");
+    }
+    if let Some(value) = filter_text(filter.upstream.as_deref()) {
+        begin_clause!();
+        builder.push("(LOWER(COALESCE(upstream_name, '')) LIKE ");
+        builder.push_bind(like_pattern(value));
+        builder.push(" ESCAPE '\\' OR LOWER(COALESCE(upstream_id, '')) LIKE ");
+        builder.push_bind(like_pattern(value));
+        builder.push(" ESCAPE '\\')");
+    }
+    if let Some(value) = filter_text(filter.reasoning_effort.as_deref()) {
+        begin_clause!();
+        builder.push("LOWER(COALESCE(reasoning_effort, '')) LIKE ");
+        builder.push_bind(like_pattern(value));
+        builder.push(" ESCAPE '\\'");
+    }
+    if let Some(value) = filter_text(filter.endpoint.as_deref()) {
+        begin_clause!();
+        builder.push("LOWER(endpoint) LIKE ");
+        builder.push_bind(like_pattern(value));
+        builder.push(" ESCAPE '\\'");
+    }
+    push_i64_min(builder, &mut has_where, "status", filter.status_min);
+    push_i64_max(builder, &mut has_where, "status", filter.status_max);
+    push_i64_min(builder, &mut has_where, "duration_ms", filter.duration_ms_min);
+    push_i64_max(builder, &mut has_where, "duration_ms", filter.duration_ms_max);
+    push_i64_min(builder, &mut has_where, "first_token_ms", filter.first_token_ms_min);
+    push_i64_max(builder, &mut has_where, "first_token_ms", filter.first_token_ms_max);
+    push_i64_min(builder, &mut has_where, "input_tokens", filter.input_tokens_min);
+    push_i64_max(builder, &mut has_where, "input_tokens", filter.input_tokens_max);
+    push_i64_min(builder, &mut has_where, "output_tokens", filter.output_tokens_min);
+    push_i64_max(builder, &mut has_where, "output_tokens", filter.output_tokens_max);
+    push_i64_min(
+        builder,
+        &mut has_where,
+        "cache_read_tokens",
+        filter.cache_read_tokens_min,
+    );
+    push_i64_max(
+        builder,
+        &mut has_where,
+        "cache_read_tokens",
+        filter.cache_read_tokens_max,
+    );
+    push_i64_min(
+        builder,
+        &mut has_where,
+        "cache_creation_tokens",
+        filter.cache_creation_tokens_min,
+    );
+    push_i64_max(
+        builder,
+        &mut has_where,
+        "cache_creation_tokens",
+        filter.cache_creation_tokens_max,
+    );
+    push_i64_min(builder, &mut has_where, "total_tokens", filter.total_tokens_min);
+    push_i64_max(builder, &mut has_where, "total_tokens", filter.total_tokens_max);
+    push_f64_min(
+        builder,
+        &mut has_where,
+        "estimated_cost_usd",
+        filter.estimated_cost_usd_min,
+    );
+    push_f64_max(
+        builder,
+        &mut has_where,
+        "estimated_cost_usd",
+        filter.estimated_cost_usd_max,
+    );
+    if let Some(value) = filter.started_at {
+        begin_static_clause(builder, &mut has_where);
+        builder.push("ts >= ");
+        builder.push_bind(value.to_rfc3339());
+    }
+    if let Some(value) = filter.ended_at {
+        begin_static_clause(builder, &mut has_where);
+        builder.push("ts <= ");
+        builder.push_bind(value.to_rfc3339());
+    }
+}
+
+fn push_i64_min(
+    builder: &mut QueryBuilder<'_, Sqlite>,
+    has_where: &mut bool,
+    column: &'static str,
+    value: Option<i64>,
+) {
+    if let Some(value) = value {
+        begin_static_clause(builder, has_where);
+        builder.push(column);
+        builder.push(" >= ");
+        builder.push_bind(value);
+    }
+}
+
+fn push_i64_max(
+    builder: &mut QueryBuilder<'_, Sqlite>,
+    has_where: &mut bool,
+    column: &'static str,
+    value: Option<i64>,
+) {
+    if let Some(value) = value {
+        begin_static_clause(builder, has_where);
+        builder.push(column);
+        builder.push(" <= ");
+        builder.push_bind(value);
+    }
+}
+
+fn push_f64_min(
+    builder: &mut QueryBuilder<'_, Sqlite>,
+    has_where: &mut bool,
+    column: &'static str,
+    value: Option<f64>,
+) {
+    if let Some(value) = value {
+        begin_static_clause(builder, has_where);
+        builder.push(column);
+        builder.push(" >= ");
+        builder.push_bind(value);
+    }
+}
+
+fn push_f64_max(
+    builder: &mut QueryBuilder<'_, Sqlite>,
+    has_where: &mut bool,
+    column: &'static str,
+    value: Option<f64>,
+) {
+    if let Some(value) = value {
+        begin_static_clause(builder, has_where);
+        builder.push(column);
+        builder.push(" <= ");
+        builder.push_bind(value);
+    }
+}
+
+fn begin_static_clause(builder: &mut QueryBuilder<'_, Sqlite>, has_where: &mut bool) {
+    if *has_where {
+        builder.push(" AND ");
+    } else {
+        builder.push(" WHERE ");
+        *has_where = true;
+    }
+}
+
+fn filter_text(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn like_pattern(value: &str) -> String {
+    let mut pattern = String::with_capacity(value.len() + 2);
+    pattern.push('%');
+    for ch in value.to_lowercase().chars() {
+        match ch {
+            '%' | '_' | '\\' => {
+                pattern.push('\\');
+                pattern.push(ch);
+            }
+            _ => pattern.push(ch),
+        }
+    }
+    pattern.push('%');
+    pattern
 }
 
 async fn rebuild_usage_rollups(
@@ -287,6 +529,7 @@ fn request_log_from_row(row: sqlx::sqlite::SqliteRow) -> RequestLog {
             cache_creation_tokens: row.get("cache_creation_tokens"),
             total_tokens: row.get("total_tokens"),
         },
+        estimated_cost_usd: row.get("estimated_cost_usd"),
         duration_ms: row.get("duration_ms"),
         first_token_ms: row.get("first_token_ms"),
         error: row.get("error"),
@@ -307,6 +550,7 @@ fn usage_from_rollup(row: &sqlx::sqlite::SqliteRow) -> TokenUsage {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    use crate::core::models::ModelPrice;
 
     #[tokio::test]
     async fn provider_stats_hides_unassigned_rollup() {
@@ -401,6 +645,47 @@ mod tests {
         assert_eq!(stats.total_usage.total_tokens, 5);
     }
 
+    #[tokio::test]
+    async fn request_log_filter_uses_stored_estimated_cost() {
+        let path = std::env::temp_dir()
+            .join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
+        let store = Store::open(path).await.unwrap();
+        store
+            .replace_model_prices(&[ModelPrice {
+                provider_id: "openai".to_string(),
+                provider_name: "OpenAI".to_string(),
+                model_id: "gpt-test".to_string(),
+                model_name: "GPT Test".to_string(),
+                input_usd_per_million: Some(1.0),
+                output_usd_per_million: Some(2.0),
+                currency: "USD".to_string(),
+                source: "test".to_string(),
+                official: true,
+                ..Default::default()
+            }])
+            .await
+            .unwrap();
+        store
+            .insert_request_log(test_log(Some("upstream-a"), Some("relay-a"), 100))
+            .await
+            .unwrap();
+        store
+            .insert_request_log(test_log(Some("upstream-a"), Some("relay-a"), 2_000_000))
+            .await
+            .unwrap();
+
+        let filter = RequestLogFilter {
+            estimated_cost_usd_min: Some(1.0),
+            ..Default::default()
+        };
+        let logs = store.recent_logs_page_filtered(10, 0, &filter).await.unwrap();
+
+        assert_eq!(store.request_log_count_filtered(&filter).await.unwrap(), 1);
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].usage.total_tokens, 2_000_000);
+        assert!(logs[0].estimated_cost_usd.unwrap() >= 1.0);
+    }
+
     fn test_log(
         upstream_id: Option<&str>,
         upstream_name: Option<&str>,
@@ -439,6 +724,7 @@ mod tests {
                 total_tokens,
                 ..Default::default()
             },
+            estimated_cost_usd: None,
             duration_ms: 10,
             first_token_ms: None,
             error: None,

@@ -8,5 +8,5 @@ mod query_upstreams;
 mod query_settings;
 mod store;
 
-pub use query_logs::RequestLogRetention;
+pub use query_logs::{RequestLogFilter, RequestLogRetention};
 pub use store::Store;

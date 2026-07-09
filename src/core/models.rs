@@ -410,6 +410,7 @@ pub struct RequestLog {
     pub reasoning_effort: Option<String>,
     pub status: i64,
     pub usage: TokenUsage,
+    pub estimated_cost_usd: Option<f64>,
     pub duration_ms: i64,
     pub first_token_ms: Option<i64>,
     pub error: Option<String>,

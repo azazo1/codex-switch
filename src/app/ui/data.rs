@@ -5,6 +5,7 @@ use crate::core::models::{
     Upstream,
 };
 use crate::pricing;
+use crate::storage::RequestLogFilter;
 use std::collections::BTreeMap;
 
 pub(super) struct ViewData {
@@ -34,6 +35,7 @@ pub(super) async fn load_view_data(
     state: &AppState,
     log_limit: i64,
     log_offset: i64,
+    log_filter: &RequestLogFilter,
 ) -> anyhow::Result<ViewData> {
     let upstreams = state.store.list_upstreams().await?;
     let schedule_groups = state.store.list_schedule_groups().await?;
@@ -58,15 +60,18 @@ pub(super) async fn load_view_data(
     let scheduler_route_max_hops = state.store.scheduler_route_max_hops().await?;
     let stats = state.store.dashboard_stats().await?;
     let provider_stats = state.store.provider_stats().await?;
-    let log_total_count = state.store.request_log_count().await?;
-    let logs = state.store.recent_logs_page(log_limit, log_offset).await?;
+    let log_total_count = state.store.request_log_count_filtered(log_filter).await?;
+    let logs = state
+        .store
+        .recent_logs_page_filtered(log_limit, log_offset, log_filter)
+        .await?;
+    let log_estimated_cost_usd = logs.iter().map(|log| log.estimated_cost_usd).collect();
     let total_model_usage = state.store.model_usage_stats(false).await?;
     let today_model_usage = state.store.model_usage_stats(true).await?;
     let total_estimated_cost_usd = estimate_model_usage_cost(state, &total_model_usage).await?;
     let today_estimated_cost_usd = estimate_model_usage_cost(state, &today_model_usage).await?;
     let provider_estimated_cost_usd =
         estimate_provider_costs(state, &total_model_usage, &provider_stats).await?;
-    let log_estimated_cost_usd = estimate_log_costs(state, &logs).await?;
     let price_cache_count = state.store.model_price_count().await?;
     let price_cache_age_seconds = state.store.model_price_cache_age_seconds().await?;
     let database_info = state.store.database_info().await?;
@@ -150,23 +155,4 @@ async fn estimate_provider_costs(
         .into_iter()
         .map(|(key, (value, matched))| (key, matched.then_some(value)))
         .collect())
-}
-
-async fn estimate_log_costs(
-    state: &AppState,
-    logs: &[RequestLog],
-) -> anyhow::Result<Vec<Option<f64>>> {
-    let mut result = Vec::with_capacity(logs.len());
-    for log in logs {
-        let cost = match log.model.as_deref() {
-            Some(model) => state
-                .store
-                .find_model_price(model)
-                .await?
-                .map(|price| pricing::estimate_usage_cost(&log.usage, &price).total_usd()),
-            None => None,
-        };
-        result.push(cost);
-    }
-    Ok(result)
 }

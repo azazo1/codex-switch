@@ -309,6 +309,14 @@ fn migrations() -> &'static [Migration] {
                 "CREATE INDEX IF NOT EXISTS idx_schedule_group_child_groups_target ON schedule_group_child_groups(target_group_id)",
             ],
         },
+        Migration {
+            version: 7,
+            name: "request_log_estimated_cost",
+            statements: &[
+                "ALTER TABLE request_logs ADD COLUMN estimated_cost_usd REAL",
+                "CREATE INDEX IF NOT EXISTS idx_request_logs_estimated_cost ON request_logs(estimated_cost_usd)",
+            ],
+        },
     ]
 }
 
@@ -327,7 +335,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 6);
+        assert_eq!(rows.len(), 7);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -348,6 +356,11 @@ mod tests {
         assert_eq!(
             rows[5].get::<String, _>("name"),
             "nested_schedule_groups"
+        );
+        assert_eq!(rows[6].get::<i64, _>("version"), 7);
+        assert_eq!(
+            rows[6].get::<String, _>("name"),
+            "request_log_estimated_cost"
         );
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
@@ -377,6 +390,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 6);
+        assert_eq!(count, 7);
     }
 }

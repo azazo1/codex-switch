@@ -12,8 +12,10 @@ impl CodexSwitchApp {
     pub(super) fn logs_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading("最近请求");
+            self.log_filter_button(ui);
             self.log_cleanup_button(ui);
         });
+        self.log_filter_window(ui.ctx());
         self.log_cleanup_window(ui.ctx());
         self.log_pagination_ui(ui);
         let mut token_display_mode = self.token_display_mode;
@@ -64,6 +66,183 @@ impl CodexSwitchApp {
         {
             self.log_cleanup_open = true;
         }
+    }
+
+    fn log_filter_button(&mut self, ui: &mut egui::Ui) {
+        let active_count = self.log_filter_applied.active_count();
+        let label = if active_count > 0 {
+            format!("筛选日志 ({active_count})")
+        } else {
+            "筛选日志".to_string()
+        };
+        if ui.button(label).on_hover_text("打开日志筛选选项").clicked() {
+            self.log_filter_editor = self.log_filter_applied.clone();
+            self.log_filter_open = true;
+        }
+        if ui
+            .add_enabled(self.log_filter_applied.is_active(), egui::Button::new("清空筛选"))
+            .on_hover_text("清空当前日志筛选条件")
+            .clicked()
+        {
+            self.clear_log_filter();
+        }
+    }
+
+    fn log_filter_window(&mut self, ctx: &egui::Context) {
+        if !self.log_filter_open {
+            return;
+        }
+        let mut open = self.log_filter_open;
+        let mut apply_requested = false;
+        let mut clear_requested = false;
+        let mut cancel_requested = false;
+        egui::Window::new("筛选日志")
+            .collapsible(false)
+            .resizable(true)
+            .default_width(520.0)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .open(&mut open)
+            .show(ctx, |ui| {
+                egui::Grid::new("log_filter_grid")
+                    .num_columns(3)
+                    .spacing([12.0, 8.0])
+                    .show(ui, |ui| {
+                        text_filter_row(ui, "模型", &mut self.log_filter_editor.model);
+                        text_filter_row(ui, "上游", &mut self.log_filter_editor.upstream);
+                        text_filter_row(ui, "推理强度", &mut self.log_filter_editor.reasoning_effort);
+                        text_filter_row(ui, "endpoint", &mut self.log_filter_editor.endpoint);
+                        range_filter_row(
+                            ui,
+                            "时间",
+                            &mut self.log_filter_editor.started_at,
+                            &mut self.log_filter_editor.ended_at,
+                            "起始",
+                            "结束",
+                        );
+                        range_filter_row(
+                            ui,
+                            "价格 USD",
+                            &mut self.log_filter_editor.price_usd_min,
+                            &mut self.log_filter_editor.price_usd_max,
+                            "最低",
+                            "最高",
+                        );
+                        range_filter_row(
+                            ui,
+                            "状态码",
+                            &mut self.log_filter_editor.status_min,
+                            &mut self.log_filter_editor.status_max,
+                            "最小",
+                            "最大",
+                        );
+                        range_filter_row(
+                            ui,
+                            "耗时 ms",
+                            &mut self.log_filter_editor.duration_ms_min,
+                            &mut self.log_filter_editor.duration_ms_max,
+                            "最小",
+                            "最大",
+                        );
+                        range_filter_row(
+                            ui,
+                            "首 token ms",
+                            &mut self.log_filter_editor.first_token_ms_min,
+                            &mut self.log_filter_editor.first_token_ms_max,
+                            "最小",
+                            "最大",
+                        );
+                        range_filter_row(
+                            ui,
+                            "输入 tokens",
+                            &mut self.log_filter_editor.input_tokens_min,
+                            &mut self.log_filter_editor.input_tokens_max,
+                            "最小",
+                            "最大",
+                        );
+                        range_filter_row(
+                            ui,
+                            "输出 tokens",
+                            &mut self.log_filter_editor.output_tokens_min,
+                            &mut self.log_filter_editor.output_tokens_max,
+                            "最小",
+                            "最大",
+                        );
+                        range_filter_row(
+                            ui,
+                            "缓存输入 tokens",
+                            &mut self.log_filter_editor.cache_read_tokens_min,
+                            &mut self.log_filter_editor.cache_read_tokens_max,
+                            "最小",
+                            "最大",
+                        );
+                        range_filter_row(
+                            ui,
+                            "写入缓存 tokens",
+                            &mut self.log_filter_editor.cache_creation_tokens_min,
+                            &mut self.log_filter_editor.cache_creation_tokens_max,
+                            "最小",
+                            "最大",
+                        );
+                        range_filter_row(
+                            ui,
+                            "总 tokens",
+                            &mut self.log_filter_editor.total_tokens_min,
+                            &mut self.log_filter_editor.total_tokens_max,
+                            "最小",
+                            "最大",
+                        );
+                    });
+                ui.horizontal(|ui| {
+                    if ui.button("应用").clicked() {
+                        apply_requested = true;
+                    }
+                    if ui.button("清空").clicked() {
+                        clear_requested = true;
+                    }
+                    if ui.button("取消").clicked() {
+                        cancel_requested = true;
+                    }
+                });
+            });
+        if apply_requested {
+            self.apply_log_filter();
+        } else if clear_requested {
+            self.clear_log_filter();
+        } else if cancel_requested {
+            self.log_filter_open = false;
+        } else {
+            self.log_filter_open = open;
+        }
+    }
+
+    fn apply_log_filter(&mut self) {
+        match self.log_filter_editor.to_runtime_filter() {
+            Ok(filter) => {
+                self.log_runtime_filter = filter;
+                self.log_filter_applied = self.log_filter_editor.clone();
+                self.log_filter_open = false;
+                self.log_page = 0;
+                self.status = if self.log_filter_applied.is_active() {
+                    format!("日志筛选已应用: {} 项", self.log_filter_applied.active_count())
+                } else {
+                    "日志筛选已清空".to_string()
+                };
+                self.refresh_all();
+            }
+            Err(err) => {
+                self.status = format!("日志筛选无效: {err}");
+            }
+        }
+    }
+
+    fn clear_log_filter(&mut self) {
+        self.log_filter_editor = Default::default();
+        self.log_filter_applied = Default::default();
+        self.log_runtime_filter = Default::default();
+        self.log_filter_open = false;
+        self.log_page = 0;
+        self.status = "日志筛选已清空".to_string();
+        self.refresh_all();
     }
 
     fn log_cleanup_window(&mut self, ctx: &egui::Context) {
@@ -231,6 +410,34 @@ fn retention_choice_ui(ui: &mut egui::Ui, choice: &mut LogRetentionChoice) {
                 ui.selectable_value(choice, value, log_retention_label(value));
             }
         });
+}
+
+fn text_filter_row(ui: &mut egui::Ui, label: &str, value: &mut String) {
+    ui.label(label);
+    ui.add(egui::TextEdit::singleline(value).desired_width(320.0));
+    ui.end_row();
+}
+
+fn range_filter_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    min_value: &mut String,
+    max_value: &mut String,
+    min_hint: &str,
+    max_hint: &str,
+) {
+    ui.label(label);
+    ui.add(
+        egui::TextEdit::singleline(min_value)
+            .hint_text(min_hint)
+            .desired_width(150.0),
+    );
+    ui.add(
+        egui::TextEdit::singleline(max_value)
+            .hint_text(max_hint)
+            .desired_width(150.0),
+    );
+    ui.end_row();
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
