@@ -54,7 +54,11 @@ impl CodexSwitchApp {
         ui.heading("路由设置");
         ui.horizontal(|ui| {
             ui.label("最大跳转次数");
-            ui.add(egui::DragValue::new(&mut self.scheduler_route_max_hops).speed(1));
+            ui.add(
+                egui::DragValue::new(&mut self.scheduler_route_max_hops)
+                    .range(1..=i64::MAX)
+                    .speed(1),
+            );
             if ui.button("保存").clicked() {
                 self.save_scheduler_route_max_hops();
             }
@@ -501,7 +505,11 @@ fn schedule_group_options_form(
             ui.checkbox(&mut group.use_all_upstreams, "使用全部目标");
         }
         ui.label("亲和 TTL 秒");
-        ui.add(egui::DragValue::new(&mut group.affinity_ttl_seconds).speed(60));
+        ui.add(
+            egui::DragValue::new(&mut group.affinity_ttl_seconds)
+                .range(60..=i64::MAX)
+                .speed(60),
+        );
     });
     match group.mode {
         ScheduleMode::Failover => failover_options(ui, group),
@@ -703,7 +711,11 @@ fn route_target_upstream_combo(
 fn failover_options(ui: &mut egui::Ui, group: &mut ScheduleGroup) {
     ui.horizontal(|ui| {
         ui.label("失败阈值");
-        ui.add(egui::DragValue::new(&mut group.failure_threshold).speed(1));
+        ui.add(
+            egui::DragValue::new(&mut group.failure_threshold)
+                .range(1..=i64::MAX)
+                .speed(1),
+        );
         ui.checkbox(&mut group.failover_on_balance, "余额不足切换");
         ui.checkbox(&mut group.failover_on_network, "网络失败切换");
         ui.checkbox(&mut group.failover_on_5xx, "5xx 切换");

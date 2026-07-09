@@ -217,7 +217,11 @@ impl UpstreamEditor {
             ui.label("优先级");
             ui.add(egui::DragValue::new(&mut self.upstream.priority).speed(1));
             ui.label("权重");
-            ui.add(egui::DragValue::new(&mut self.upstream.weight).speed(1));
+            ui.add(
+                egui::DragValue::new(&mut self.upstream.weight)
+                    .range(1..=i64::MAX)
+                    .speed(1),
+            );
         });
         match self.upstream.kind {
             UpstreamKind::RelayApiKey => self.relay_form_ui(ui),
@@ -322,9 +326,17 @@ fn cache_keepalive_form(
     });
     ui.horizontal(|ui| {
         ui.label("间隔秒");
-        ui.add(egui::DragValue::new(&mut settings.interval_seconds).speed(10));
+        ui.add(
+            egui::DragValue::new(&mut settings.interval_seconds)
+                .range(60..=i64::MAX)
+                .speed(10),
+        );
         ui.label("最大空闲秒");
-        ui.add(egui::DragValue::new(&mut settings.max_idle_seconds).speed(60));
+        ui.add(
+            egui::DragValue::new(&mut settings.max_idle_seconds)
+                .range(60..=i64::MAX)
+                .speed(60),
+        );
     });
     ui.horizontal(|ui| {
         ui.label("最小缓存 tokens");
@@ -344,7 +356,9 @@ fn cache_keepalive_form(
         ui.label("最大会话数");
         ui.add_sized(
             [56.0, 20.0],
-            egui::DragValue::new(&mut settings.max_active_sessions).speed(1),
+            egui::DragValue::new(&mut settings.max_active_sessions)
+                .range(1..=i64::MAX)
+                .speed(1),
         );
     });
 }
