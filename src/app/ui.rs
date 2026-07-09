@@ -745,7 +745,7 @@ impl CodexSwitchApp {
         self.cache_keepalive_sessions = self
             .runtime
             .block_on(self.state.cache_keepalive.snapshots());
-        tracing::debug!(
+        tracing::trace!(
             count = self.cache_keepalive_sessions.len(),
             "cache keepalive sessions refreshed"
         );

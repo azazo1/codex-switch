@@ -17,6 +17,7 @@ use tokio::sync::Mutex;
 
 const SCAN_INTERVAL: Duration = Duration::from_secs(15);
 const KEEPALIVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const DISABLED_SESSION_RETENTION: Duration = Duration::from_secs(5);
 const INTERNAL_ENDPOINT: &str = "/internal/cache_keepalive";
 const OUTPUT_TOKENS_WARNING_THRESHOLD: i64 = 8;
 
@@ -48,6 +49,7 @@ struct CacheKeepaliveSession {
     last_activity_at: Instant,
     next_keepalive_at: Instant,
     disabled_reason: Option<String>,
+    disabled_at: Option<Instant>,
 }
 
 pub struct CacheKeepaliveRegistration {
@@ -213,6 +215,7 @@ impl CacheKeepaliveRuntime {
             last_activity_at: now,
             next_keepalive_at: now + interval,
             disabled_reason: None,
+            disabled_at: None,
         };
         let mut inner = self.inner.lock().await;
         tracing::info!(
@@ -271,11 +274,13 @@ impl CacheKeepaliveRuntime {
     pub async fn disable_upstream_sessions(&self, upstream_id: &str, reason: &str) -> usize {
         let mut inner = self.inner.lock().await;
         let mut disabled = 0;
+        let now = Instant::now();
         for session in inner.sessions.values_mut() {
             if session.upstream.id != upstream_id || session.disabled_reason.is_some() {
                 continue;
             }
             session.disabled_reason = Some(reason.to_string());
+            session.disabled_at = Some(now);
             disabled += 1;
             tracing::info!(
                 upstream_id = %session.upstream.id,
@@ -286,8 +291,17 @@ impl CacheKeepaliveRuntime {
         }
         if disabled > 0 {
             self.events.bump_cache_keepalive();
+            self.schedule_disabled_prune();
         }
         disabled
+    }
+
+    fn schedule_disabled_prune(&self) {
+        let runtime = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(DISABLED_SESSION_RETENTION).await;
+            runtime.prune_disabled_sessions().await;
+        });
     }
 
     async fn run(self) {
@@ -299,6 +313,7 @@ impl CacheKeepaliveRuntime {
     }
 
     async fn scan_once(&self) {
+        self.prune_disabled_sessions().await;
         let due_sessions = self.due_sessions().await;
         if !due_sessions.is_empty() {
             tracing::info!(
@@ -310,6 +325,23 @@ impl CacheKeepaliveRuntime {
             if let Err(err) = self.keepalive_once(session).await {
                 tracing::warn!(error = %err, "cache keepalive skipped");
             }
+        }
+    }
+
+    async fn prune_disabled_sessions(&self) {
+        let now = Instant::now();
+        let mut inner = self.inner.lock().await;
+        let before = inner.sessions.len();
+        inner.sessions.retain(|_, session| {
+            let Some(disabled_at) = session.disabled_at else {
+                return true;
+            };
+            now.duration_since(disabled_at) < DISABLED_SESSION_RETENTION
+        });
+        let removed = before.saturating_sub(inner.sessions.len());
+        if removed > 0 {
+            tracing::debug!(removed, "cache keepalive disabled sessions pruned");
+            self.events.bump_cache_keepalive();
         }
     }
 
@@ -491,6 +523,7 @@ impl CacheKeepaliveRuntime {
                 return;
             }
             session.disabled_reason = Some(reason.to_string());
+            session.disabled_at = Some(Instant::now());
             tracing::info!(
                 upstream_id = %session.upstream.id,
                 model = %session.model,
@@ -498,6 +531,8 @@ impl CacheKeepaliveRuntime {
                 "cache keepalive session disabled"
             );
             self.events.bump_cache_keepalive();
+            drop(inner);
+            self.schedule_disabled_prune();
         }
     }
 
@@ -804,6 +839,27 @@ mod tests {
             snapshots[0].disabled_reason.as_deref(),
             Some("settings disabled")
         );
+    }
+
+    #[tokio::test]
+    async fn prune_disabled_sessions_removes_expired_sessions() {
+        let runtime = test_runtime().await;
+        let upstream = upstream("a", "upstream-a");
+        save_enabled_settings(&runtime, &upstream).await;
+        runtime
+            .register(registration(&upstream, "model-a", "session-a", 2048))
+            .await;
+        let key = runtime.snapshots().await[0].key.clone();
+        runtime.disable_session(&key, "cache miss").await;
+        {
+            let mut inner = runtime.inner.lock().await;
+            let session = inner.sessions.get_mut(&key).unwrap();
+            session.disabled_at = Some(Instant::now() - DISABLED_SESSION_RETENTION);
+        }
+
+        runtime.prune_disabled_sessions().await;
+
+        assert!(runtime.snapshots().await.is_empty());
     }
 
     async fn test_runtime() -> CacheKeepaliveRuntime {
