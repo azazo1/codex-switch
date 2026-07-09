@@ -339,6 +339,8 @@ fn cache_keepalive_form(
             egui::TextEdit::singleline(max_cacheable_tokens_input),
         )
         .on_hover_text("支持 128K, 230K, 1M");
+    });
+    ui.horizontal(|ui| {
         ui.label("最大会话数");
         ui.add_sized(
             [56.0, 20.0],
