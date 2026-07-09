@@ -380,7 +380,8 @@ pub fn rewrite_model_template(template: &str, captures: &[String]) -> String {
     result
 }
 
-pub fn is_exact_pattern(pattern: &str) -> bool {
+#[cfg(test)]
+fn is_exact_pattern(pattern: &str) -> bool {
     !pattern
         .as_bytes()
         .iter()

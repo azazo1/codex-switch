@@ -540,7 +540,7 @@ mod tests {
 
     #[tokio::test]
     async fn model_route_can_direct_to_upstream_and_rewrite_model_template() {
-        let (image_base, image_hits) = spawn_mock(MockMode::ResponsesJson).await;
+        let (image_base, image_hits) = spawn_mock(MockMode::ModelsJson).await;
         let state = test_state(&image_base, WireApi::Responses).await;
         set_group_mode(&state, "default", ScheduleMode::ModelMapping).await;
         let image_upstream = upstream_by_name(&state, "mock").await;
@@ -579,7 +579,58 @@ mod tests {
             .iter()
             .filter_map(|item| item["id"].as_str())
             .collect::<Vec<_>>();
+        assert!(ids.contains(&"glm/gpt-mock"));
+        assert!(!ids.contains(&"gpt-mock"));
         assert!(!ids.contains(&"glm/*"));
+    }
+
+    #[tokio::test]
+    async fn models_route_reverse_maps_nested_model_group() {
+        let (default_base, default_hits) = spawn_mock(MockMode::ResponsesJson).await;
+        let (glm_base, glm_hits) = spawn_mock(MockMode::ModelsJson).await;
+        let state = test_state_with_relays(vec![
+            (
+                "default-upstream",
+                default_base.as_str(),
+                WireApi::Responses,
+                0,
+            ),
+            ("glm-upstream", glm_base.as_str(), WireApi::Responses, 0),
+        ])
+        .await;
+        let default_upstream = upstream_by_name(&state, "default-upstream").await;
+        let glm_upstream = upstream_by_name(&state, "glm-upstream").await;
+        restrict_group_to_upstream(&state, "default", &default_upstream.id).await;
+        set_group_mode(&state, "default", ScheduleMode::ModelMapping).await;
+        let glm_group = save_group_with_upstream(&state, "GLM", &glm_upstream.id).await;
+        let mut rule = ScheduleRouteRule::new("default".to_string());
+        rule.name = "glm".to_string();
+        rule.pattern = "glm/*".to_string();
+        rule.target_kind = ScheduleRouteTargetKind::Group;
+        rule.target_group_id = Some(glm_group.id.clone());
+        rule.target_model = Some("*".to_string());
+        state.store.save_schedule_route_rule(&rule).await.unwrap();
+        let proxy_base = spawn_proxy(state.clone()).await;
+
+        let response = reqwest::Client::new()
+            .get(format!("{proxy_base}/v1/models"))
+            .bearer_auth("local-test")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = response.json::<Value>().await.unwrap();
+        let ids = value["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item["id"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(default_hits.lock().await.len(), 0);
+        assert_eq!(glm_hits.lock().await.len(), 1);
+        assert!(ids.contains(&"glm/gpt-mock"));
+        assert!(!ids.contains(&"gpt-mock"));
     }
 
     #[tokio::test]
@@ -674,6 +725,41 @@ mod tests {
                 .unwrap()
                 .contains("模型路由超过最大跳转次数")
         );
+        assert_eq!(hits.lock().await.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn models_route_skips_cyclic_model_groups() {
+        let (mock_base, hits) = spawn_mock(MockMode::ModelsJson).await;
+        let state = test_state(&mock_base, WireApi::Responses).await;
+        set_group_mode(&state, "default", ScheduleMode::ModelMapping).await;
+        let mut loop_group = ScheduleGroup::new("Loop".to_string());
+        loop_group.mode = ScheduleMode::ModelMapping;
+        state.store.save_schedule_group(&loop_group).await.unwrap();
+        let mut first = ScheduleRouteRule::new("default".to_string());
+        first.name = "first".to_string();
+        first.pattern = "*".to_string();
+        first.target_kind = ScheduleRouteTargetKind::Group;
+        first.target_group_id = Some(loop_group.id.clone());
+        state.store.save_schedule_route_rule(&first).await.unwrap();
+        let mut second = ScheduleRouteRule::new(loop_group.id.clone());
+        second.name = "second".to_string();
+        second.pattern = "*".to_string();
+        second.target_kind = ScheduleRouteTargetKind::Group;
+        second.target_group_id = Some("default".to_string());
+        state.store.save_schedule_route_rule(&second).await.unwrap();
+        let proxy_base = spawn_proxy(state).await;
+
+        let response = reqwest::Client::new()
+            .get(format!("{proxy_base}/v1/models"))
+            .bearer_auth("local-test")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = response.json::<Value>().await.unwrap();
+        assert!(value["data"].as_array().unwrap().is_empty());
         assert_eq!(hits.lock().await.len(), 0);
     }
 

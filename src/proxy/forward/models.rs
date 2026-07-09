@@ -1,12 +1,13 @@
 use crate::app::AppState;
 use crate::core::models::{
-    ScheduleGroup, ScheduleMode, ScheduleRouteTargetKind, Upstream, UpstreamKind,
+    ScheduleGroup, ScheduleMode, ScheduleRouteRule, ScheduleRouteTargetKind, Upstream,
+    UpstreamKind,
 };
 use crate::proxy::transform;
-use crate::scheduler::is_exact_pattern;
+use crate::scheduler::{glob_captures, rewrite_model_template};
 use axum::http::HeaderMap;
 use serde_json::{Value, json};
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use super::headers::apply_headers;
 
@@ -16,25 +17,35 @@ pub(super) async fn query_models(state: &AppState, headers: &HeaderMap) -> anyho
     let sources = reachable_model_sources(state, group, max_hops).await?;
     let mut models = Vec::new();
     let mut seen = BTreeSet::new();
+    let mut upstream_models: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     let mut errors = Vec::new();
 
-    for alias in sources.aliases {
-        push_models(&mut models, &mut seen, vec![alias]);
-    }
-
-    for upstream in sources.upstreams {
-        match query_upstream_models(state, headers, &upstream).await {
-            Ok(items) => push_models(&mut models, &mut seen, items),
-            Err(err) => {
-                tracing::warn!(
-                    upstream_id = %upstream.id,
-                    upstream_name = %upstream.name,
-                    error = %err,
-                    "failed to query upstream models"
-                );
-                errors.push(format!("{}: {err}", upstream.name));
+    for source in sources {
+        let items = if let Some(items) = upstream_models.get(&source.upstream.id) {
+            items.clone()
+        } else {
+            match query_upstream_models(state, headers, &source.upstream).await {
+                Ok(items) => {
+                    upstream_models.insert(source.upstream.id.clone(), items.clone());
+                    items
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        upstream_id = %source.upstream.id,
+                        upstream_name = %source.upstream.name,
+                        error = %err,
+                        "failed to query upstream models"
+                    );
+                    errors.push(format!("{}: {err}", source.upstream.name));
+                    continue;
+                }
             }
-        }
+        };
+        push_models(
+            &mut models,
+            &mut seen,
+            reverse_model_path(items, &source.rules),
+        );
     }
 
     if models.is_empty() && !errors.is_empty() {
@@ -47,54 +58,65 @@ pub(super) async fn query_models(state: &AppState, headers: &HeaderMap) -> anyho
     Ok(json!({"object":"list","data":models}))
 }
 
-struct ModelSources {
-    upstreams: Vec<Upstream>,
-    aliases: Vec<Value>,
+#[derive(Clone)]
+struct ModelSource {
+    upstream: Upstream,
+    rules: Vec<ScheduleRouteRule>,
 }
 
 async fn reachable_model_sources(
     state: &AppState,
     root: ScheduleGroup,
     max_hops: i64,
-) -> anyhow::Result<ModelSources> {
-    let mut upstreams = Vec::new();
-    let mut aliases = Vec::new();
-    let mut seen_groups = BTreeSet::new();
-    let mut seen_upstreams = BTreeSet::new();
-    let mut queue = VecDeque::from([(root, 0_i64)]);
-    while let Some((group, hops)) = queue.pop_front() {
-        if !seen_groups.insert(group.id.clone()) {
-            continue;
-        }
-        if group.mode != ScheduleMode::ModelMapping {
-            for upstream in state
-                .store
-                .schedule_group_upstreams_nested(&group, max_hops)
-                .await?
-            {
-                if seen_upstreams.insert(upstream.id.clone()) {
-                    upstreams.push(upstream);
-                }
-            }
-            continue;
-        }
-        let rules = state.store.list_schedule_route_rules(&group.id).await?;
-        for rule in rules.into_iter().filter(|rule| rule.enabled) {
-            if is_exact_pattern(&rule.pattern)
-                && let Some(target_model) = rule.target_model.as_deref().map(str::trim)
-                && !target_model.is_empty()
-            {
-                aliases.push(alias_model(&rule.pattern, target_model, &group.name));
-            }
-            if hops >= max_hops.max(1) {
-                tracing::warn!(
-                    group_id = %group.id,
-                    rule_id = %rule.id,
-                    max_hops,
-                    "model source traversal skipped route beyond max hops"
-                );
+) -> anyhow::Result<Vec<ModelSource>> {
+    let mut sources = Vec::new();
+    let mut seen_sources = BTreeSet::new();
+    let mut queue = VecDeque::from([ModelSourceTraversal {
+        group: root.clone(),
+        rules: Vec::new(),
+        group_path: vec![root.id.clone()],
+    }]);
+    while let Some(entry) = queue.pop_front() {
+        if fixed_targets_group(&entry.group) {
+            let Some(target_group_id) = entry
+                .group
+                .fixed_group_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+            else {
                 continue;
+            };
+            push_target_group(
+                state,
+                &mut queue,
+                entry,
+                &target_group_id,
+                max_hops,
+                "fixed",
+            )
+            .await?;
+            continue;
+        }
+
+        if entry.group.mode != ScheduleMode::ModelMapping {
+            let upstreams = if entry.group.mode == ScheduleMode::Fixed {
+                fixed_upstream(state, &entry.group).await?.into_iter().collect()
+            } else {
+                state
+                    .store
+                    .schedule_group_upstreams_nested(&entry.group, max_hops)
+                    .await?
+            };
+            for upstream in upstreams {
+                push_model_source(&mut sources, &mut seen_sources, upstream, entry.rules.clone());
             }
+            continue;
+        }
+
+        let rules = state.store.list_schedule_route_rules(&entry.group.id).await?;
+        for rule in rules.into_iter().filter(|rule| rule.enabled) {
             match rule.target_kind {
                 ScheduleRouteTargetKind::Group => {
                     let Some(target_group_id) = rule
@@ -105,11 +127,17 @@ async fn reachable_model_sources(
                     else {
                         continue;
                     };
-                    if let Some(target_group) =
-                        state.store.get_schedule_group(target_group_id).await?
-                    {
-                        queue.push_back((target_group, hops + 1));
-                    }
+                    let mut next = entry.clone();
+                    next.rules.push(rule.clone());
+                    push_target_group(
+                        state,
+                        &mut queue,
+                        next,
+                        target_group_id,
+                        max_hops,
+                        &rule.id,
+                    )
+                    .await?;
                 }
                 ScheduleRouteTargetKind::Upstream => {
                     let Some(target_upstream_id) = rule
@@ -123,14 +151,98 @@ async fn reachable_model_sources(
                     let Some(upstream) = state.store.get_upstream(target_upstream_id).await? else {
                         continue;
                     };
-                    if upstream.enabled && seen_upstreams.insert(upstream.id.clone()) {
-                        upstreams.push(upstream);
+                    if upstream.enabled {
+                        let mut rules = entry.rules.clone();
+                        rules.push(rule);
+                        push_model_source(&mut sources, &mut seen_sources, upstream, rules);
                     }
                 }
             }
         }
     }
-    Ok(ModelSources { upstreams, aliases })
+    Ok(sources)
+}
+
+#[derive(Clone)]
+struct ModelSourceTraversal {
+    group: ScheduleGroup,
+    rules: Vec<ScheduleRouteRule>,
+    group_path: Vec<String>,
+}
+
+async fn push_target_group(
+    state: &AppState,
+    queue: &mut VecDeque<ModelSourceTraversal>,
+    mut entry: ModelSourceTraversal,
+    target_group_id: &str,
+    max_hops: i64,
+    route_id: &str,
+) -> anyhow::Result<()> {
+    if entry.group_path.iter().any(|id| id == target_group_id) {
+        tracing::warn!(
+            group_id = %entry.group.id,
+            target_group_id,
+            route_id,
+            "model source traversal skipped cyclic group route"
+        );
+        return Ok(());
+    }
+    if entry.group_path.len() as i64 > max_hops.max(1) {
+        tracing::warn!(
+            group_id = %entry.group.id,
+            target_group_id,
+            route_id,
+            max_hops,
+            "model source traversal skipped route beyond max hops"
+        );
+        return Ok(());
+    }
+    if let Some(target_group) = state.store.get_schedule_group(target_group_id).await? {
+        entry.group_path.push(target_group.id.clone());
+        entry.group = target_group;
+        queue.push_back(entry);
+    }
+    Ok(())
+}
+
+async fn fixed_upstream(
+    state: &AppState,
+    group: &ScheduleGroup,
+) -> anyhow::Result<Option<Upstream>> {
+    let Some(upstream_id) = group
+        .fixed_upstream_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    else {
+        return Ok(None);
+    };
+    Ok(state
+        .store
+        .get_upstream(upstream_id)
+        .await?
+        .filter(|upstream| upstream.enabled))
+}
+
+fn push_model_source(
+    sources: &mut Vec<ModelSource>,
+    seen: &mut BTreeSet<String>,
+    upstream: Upstream,
+    rules: Vec<ScheduleRouteRule>,
+) {
+    let route_key = rules
+        .iter()
+        .map(|rule| rule.id.as_str())
+        .collect::<Vec<_>>()
+        .join("/");
+    let key = format!("{}:{route_key}", upstream.id);
+    if seen.insert(key) {
+        sources.push(ModelSource { upstream, rules });
+    }
+}
+
+fn fixed_targets_group(group: &ScheduleGroup) -> bool {
+    group.mode == ScheduleMode::Fixed && group.fixed_target_kind == ScheduleRouteTargetKind::Group
 }
 
 async fn query_upstream_models(
@@ -178,6 +290,55 @@ fn push_models(models: &mut Vec<Value>, seen: &mut BTreeSet<String>, items: Vec<
     }
 }
 
+fn reverse_model_path(items: Vec<Value>, rules: &[ScheduleRouteRule]) -> Vec<Value> {
+    let mut items = items;
+    for rule in rules.iter().rev() {
+        items = reverse_route_rule_models(items, rule);
+        if items.is_empty() {
+            break;
+        }
+    }
+    items
+}
+
+fn reverse_route_rule_models(items: Vec<Value>, rule: &ScheduleRouteRule) -> Vec<Value> {
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let downstream_model = item.get("id").and_then(Value::as_str)?.to_string();
+            let visible_model = reverse_route_rule_model(rule, &downstream_model)?;
+            Some(remap_model_item(item, &visible_model, &downstream_model))
+        })
+        .collect()
+}
+
+fn reverse_route_rule_model(rule: &ScheduleRouteRule, downstream_model: &str) -> Option<String> {
+    let pattern = rule.pattern.trim();
+    if pattern.is_empty() {
+        return None;
+    }
+    if let Some(target_model) = rule
+        .target_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        let captures = glob_captures(target_model, downstream_model)?;
+        let visible_model = rewrite_model_template(pattern, &captures);
+        return glob_captures(pattern, &visible_model).map(|_| visible_model);
+    }
+    glob_captures(pattern, downstream_model).map(|_| downstream_model.to_string())
+}
+
+fn remap_model_item(item: Value, visible_model: &str, downstream_model: &str) -> Value {
+    let mut model = item.as_object().cloned().unwrap_or_default();
+    model.insert("id".to_string(), json!(visible_model));
+    if visible_model != downstream_model {
+        model.insert("target_model".to_string(), json!(downstream_model));
+    }
+    Value::Object(model)
+}
+
 fn normalize_models_response(value: &Value, upstream: &Upstream) -> Vec<Value> {
     if let Some(items) = value.get("data").and_then(Value::as_array) {
         return items
@@ -223,16 +384,6 @@ fn fallback_model(upstream: &Upstream) -> Value {
     })
 }
 
-fn alias_model(id: &str, target_model: &str, group_name: &str) -> Value {
-    json!({
-        "id": id,
-        "object": "model",
-        "created": 0,
-        "owned_by": group_name,
-        "target_model": target_model
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,5 +407,36 @@ mod tests {
         assert_eq!(items[0]["object"], "model");
         assert_eq!(items[1]["id"], "named-model");
         assert_eq!(items[1]["owned_by"], "mock");
+    }
+
+    #[test]
+    fn reverse_maps_wildcard_route_models() {
+        let mut rule = ScheduleRouteRule::new("group".to_string());
+        rule.pattern = "glm/*".to_string();
+        rule.target_model = Some("*".to_string());
+        let items = reverse_route_rule_models(
+            vec![json!({"id":"glm-4.5","object":"model","owned_by":"mock"})],
+            &rule,
+        );
+
+        assert_eq!(items[0]["id"], "glm/glm-4.5");
+        assert_eq!(items[0]["target_model"], "glm-4.5");
+        assert_eq!(items[0]["owned_by"], "mock");
+    }
+
+    #[test]
+    fn reverse_route_without_rewrite_filters_unmatched_models() {
+        let mut rule = ScheduleRouteRule::new("group".to_string());
+        rule.pattern = "glm-*".to_string();
+        let items = reverse_route_rule_models(
+            vec![
+                json!({"id":"glm-4.5","object":"model"}),
+                json!({"id":"gpt-mock","object":"model"}),
+            ],
+            &rule,
+        );
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["id"], "glm-4.5");
     }
 }
