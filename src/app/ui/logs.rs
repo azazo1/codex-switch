@@ -1,8 +1,12 @@
-use super::{CodexSwitchApp, LogRetentionChoice, tokens};
-use crate::core::models::RequestLog;
+use super::{
+    CodexSwitchApp, F64RangeFilter, I64RangeFilter, LogDateTimeFilter, LogRetentionChoice,
+    LogStatusFilter, tokens,
+};
+use crate::core::models::{RequestLog, Upstream};
 use crate::storage::RequestLogRetention;
 use chrono::{Duration, Local, Utc};
 use eframe::egui;
+use std::collections::BTreeSet;
 
 const LOG_RANGE_LABEL_WIDTH: f32 = 220.0;
 const LOG_PAGE_BUTTON_WIDTH: f32 = 32.0;
@@ -96,10 +100,14 @@ impl CodexSwitchApp {
         let mut apply_requested = false;
         let mut clear_requested = false;
         let mut cancel_requested = false;
+        let model_options = log_model_options(&self.logs);
+        let upstream_options = log_upstream_options(&self.logs, &self.upstreams);
+        let reasoning_effort_options = log_reasoning_effort_options(&self.logs);
+        let endpoint_options = log_endpoint_options(&self.logs);
         egui::Window::new("筛选日志")
             .collapsible(false)
             .resizable(true)
-            .default_width(520.0)
+            .default_width(720.0)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .open(&mut open)
             .show(ctx, |ui| {
@@ -107,89 +115,80 @@ impl CodexSwitchApp {
                     .num_columns(3)
                     .spacing([12.0, 8.0])
                     .show(ui, |ui| {
-                        text_filter_row(ui, "模型", &mut self.log_filter_editor.model);
-                        text_filter_row(ui, "上游", &mut self.log_filter_editor.upstream);
-                        text_filter_row(ui, "推理强度", &mut self.log_filter_editor.reasoning_effort);
-                        text_filter_row(ui, "endpoint", &mut self.log_filter_editor.endpoint);
-                        range_filter_row(
+                        option_filter_row(
                             ui,
-                            "时间",
+                            "模型",
+                            &mut self.log_filter_editor.model,
+                            &model_options,
+                            "全部模型",
+                        );
+                        option_filter_row(
+                            ui,
+                            "上游",
+                            &mut self.log_filter_editor.upstream,
+                            &upstream_options,
+                            "全部上游",
+                        );
+                        option_filter_row(
+                            ui,
+                            "推理强度",
+                            &mut self.log_filter_editor.reasoning_effort,
+                            &reasoning_effort_options,
+                            "全部强度",
+                        );
+                        option_filter_row(
+                            ui,
+                            "endpoint",
+                            &mut self.log_filter_editor.endpoint,
+                            &endpoint_options,
+                            "全部 endpoint",
+                        );
+                        status_filter_row(ui, &mut self.log_filter_editor.status, &mut self.log_filter_editor.status_custom);
+                        date_time_filter_row(
+                            ui,
+                            "开始时间",
                             &mut self.log_filter_editor.started_at,
+                        );
+                        date_time_filter_row(
+                            ui,
+                            "结束时间",
                             &mut self.log_filter_editor.ended_at,
-                            "起始",
-                            "结束",
                         );
-                        range_filter_row(
-                            ui,
-                            "价格 USD",
-                            &mut self.log_filter_editor.price_usd_min,
-                            &mut self.log_filter_editor.price_usd_max,
-                            "最低",
-                            "最高",
-                        );
-                        range_filter_row(
-                            ui,
-                            "状态码",
-                            &mut self.log_filter_editor.status_min,
-                            &mut self.log_filter_editor.status_max,
-                            "最小",
-                            "最大",
-                        );
-                        range_filter_row(
+                        f64_range_filter_row(ui, "价格 USD", &mut self.log_filter_editor.price_usd);
+                        i64_range_filter_row(
                             ui,
                             "耗时 ms",
-                            &mut self.log_filter_editor.duration_ms_min,
-                            &mut self.log_filter_editor.duration_ms_max,
-                            "最小",
-                            "最大",
+                            &mut self.log_filter_editor.duration_ms,
                         );
-                        range_filter_row(
+                        i64_range_filter_row(
                             ui,
                             "首 token ms",
-                            &mut self.log_filter_editor.first_token_ms_min,
-                            &mut self.log_filter_editor.first_token_ms_max,
-                            "最小",
-                            "最大",
+                            &mut self.log_filter_editor.first_token_ms,
                         );
-                        range_filter_row(
+                        i64_range_filter_row(
                             ui,
                             "输入 tokens",
-                            &mut self.log_filter_editor.input_tokens_min,
-                            &mut self.log_filter_editor.input_tokens_max,
-                            "最小",
-                            "最大",
+                            &mut self.log_filter_editor.input_tokens,
                         );
-                        range_filter_row(
+                        i64_range_filter_row(
                             ui,
                             "输出 tokens",
-                            &mut self.log_filter_editor.output_tokens_min,
-                            &mut self.log_filter_editor.output_tokens_max,
-                            "最小",
-                            "最大",
+                            &mut self.log_filter_editor.output_tokens,
                         );
-                        range_filter_row(
+                        i64_range_filter_row(
                             ui,
                             "缓存输入 tokens",
-                            &mut self.log_filter_editor.cache_read_tokens_min,
-                            &mut self.log_filter_editor.cache_read_tokens_max,
-                            "最小",
-                            "最大",
+                            &mut self.log_filter_editor.cache_read_tokens,
                         );
-                        range_filter_row(
+                        i64_range_filter_row(
                             ui,
                             "写入缓存 tokens",
-                            &mut self.log_filter_editor.cache_creation_tokens_min,
-                            &mut self.log_filter_editor.cache_creation_tokens_max,
-                            "最小",
-                            "最大",
+                            &mut self.log_filter_editor.cache_creation_tokens,
                         );
-                        range_filter_row(
+                        i64_range_filter_row(
                             ui,
                             "总 tokens",
-                            &mut self.log_filter_editor.total_tokens_min,
-                            &mut self.log_filter_editor.total_tokens_max,
-                            "最小",
-                            "最大",
+                            &mut self.log_filter_editor.total_tokens,
                         );
                     });
                 ui.horizontal(|ui| {
@@ -412,32 +411,175 @@ fn retention_choice_ui(ui: &mut egui::Ui, choice: &mut LogRetentionChoice) {
         });
 }
 
-fn text_filter_row(ui: &mut egui::Ui, label: &str, value: &mut String) {
+fn option_filter_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut Option<String>,
+    options: &[String],
+    all_label: &str,
+) {
     ui.label(label);
-    ui.add(egui::TextEdit::singleline(value).desired_width(320.0));
+    let selected = value.as_deref().unwrap_or(all_label);
+    egui::ComboBox::from_id_salt(format!("log_filter_{label}"))
+        .selected_text(selected)
+        .width(240.0)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(value, None, all_label);
+            for option in options {
+                ui.selectable_value(value, Some(option.clone()), option);
+            }
+        });
+    ui.label("");
     ui.end_row();
 }
 
-fn range_filter_row(
+fn status_filter_row(
     ui: &mut egui::Ui,
-    label: &str,
-    min_value: &mut String,
-    max_value: &mut String,
-    min_hint: &str,
-    max_hint: &str,
+    value: &mut LogStatusFilter,
+    custom_range: &mut I64RangeFilter,
 ) {
-    ui.label(label);
-    ui.add(
-        egui::TextEdit::singleline(min_value)
-            .hint_text(min_hint)
-            .desired_width(150.0),
-    );
-    ui.add(
-        egui::TextEdit::singleline(max_value)
-            .hint_text(max_hint)
-            .desired_width(150.0),
-    );
+    ui.label("状态码");
+    egui::ComboBox::from_id_salt("log_filter_status")
+        .selected_text(status_filter_label(*value))
+        .width(160.0)
+        .show_ui(ui, |ui| {
+            for option in [
+                LogStatusFilter::All,
+                LogStatusFilter::Success,
+                LogStatusFilter::Error,
+                LogStatusFilter::ClientError,
+                LogStatusFilter::ServerError,
+                LogStatusFilter::Custom,
+            ] {
+                ui.selectable_value(value, option, status_filter_label(option));
+            }
+        });
+    if *value == LogStatusFilter::Custom {
+        custom_range.enabled = true;
+        i64_range_values_ui(ui, custom_range);
+    } else {
+        ui.label("");
+    }
     ui.end_row();
+}
+
+fn i64_range_filter_row(ui: &mut egui::Ui, label: &str, value: &mut I64RangeFilter) {
+    ui.checkbox(&mut value.enabled, label);
+    i64_range_values_ui(ui, value);
+    ui.label("");
+    ui.end_row();
+}
+
+fn i64_range_values_ui(ui: &mut egui::Ui, value: &mut I64RangeFilter) {
+    ui.add_enabled_ui(value.enabled, |ui| {
+        ui.horizontal(|ui| {
+            ui.add(egui::DragValue::new(&mut value.min).range(0..=i64::MAX).speed(1));
+            ui.label("至");
+            ui.add(egui::DragValue::new(&mut value.max).range(0..=i64::MAX).speed(1));
+        });
+    });
+}
+
+fn f64_range_filter_row(ui: &mut egui::Ui, label: &str, value: &mut F64RangeFilter) {
+    ui.checkbox(&mut value.enabled, label);
+    ui.add_enabled_ui(value.enabled, |ui| {
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::DragValue::new(&mut value.min)
+                    .range(0.0..=f64::MAX)
+                    .speed(0.0001)
+                    .prefix("$"),
+            );
+            ui.label("至");
+            ui.add(
+                egui::DragValue::new(&mut value.max)
+                    .range(0.0..=f64::MAX)
+                    .speed(0.0001)
+                    .prefix("$"),
+            );
+        });
+    });
+    ui.label("");
+    ui.end_row();
+}
+
+fn date_time_filter_row(ui: &mut egui::Ui, label: &str, value: &mut LogDateTimeFilter) {
+    ui.checkbox(&mut value.enabled, label);
+    ui.add_enabled_ui(value.enabled, |ui| {
+        ui.horizontal(|ui| {
+            ui.add(egui::DragValue::new(&mut value.value.year).range(1970..=9999));
+            ui.label("-");
+            ui.add(egui::DragValue::new(&mut value.value.month).range(1..=12));
+            ui.label("-");
+            ui.add(egui::DragValue::new(&mut value.value.day).range(1..=31));
+            ui.separator();
+            ui.add(egui::DragValue::new(&mut value.value.hour).range(0..=23));
+            ui.label(":");
+            ui.add(egui::DragValue::new(&mut value.value.minute).range(0..=59));
+            ui.label(":");
+            ui.add(egui::DragValue::new(&mut value.value.second).range(0..=59));
+        });
+    });
+    ui.label("");
+    ui.end_row();
+}
+
+fn status_filter_label(value: LogStatusFilter) -> &'static str {
+    match value {
+        LogStatusFilter::All => "全部状态",
+        LogStatusFilter::Success => "成功",
+        LogStatusFilter::Error => "错误",
+        LogStatusFilter::ClientError => "4xx",
+        LogStatusFilter::ServerError => "5xx",
+        LogStatusFilter::Custom => "自定义",
+    }
+}
+
+fn log_model_options(logs: &[RequestLog]) -> Vec<String> {
+    logs.iter()
+        .filter_map(|log| log.model.as_deref())
+        .filter(|value| !value.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
+fn log_upstream_options(logs: &[RequestLog], upstreams: &[Upstream]) -> Vec<String> {
+    let mut values = BTreeSet::new();
+    for upstream in upstreams {
+        if !upstream.name.is_empty() {
+            values.insert(upstream.name.as_str());
+        }
+    }
+    for log in logs {
+        if let Some(value) = log.upstream_name.as_deref()
+            && !value.is_empty()
+        {
+            values.insert(value);
+        }
+    }
+    values.into_iter().map(str::to_string).collect()
+}
+
+fn log_reasoning_effort_options(logs: &[RequestLog]) -> Vec<String> {
+    logs.iter()
+        .filter_map(|log| log.reasoning_effort.as_deref())
+        .filter(|value| !value.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
+fn log_endpoint_options(logs: &[RequestLog]) -> Vec<String> {
+    logs.iter()
+        .map(|log| log.endpoint.as_str())
+        .filter(|value| !value.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(str::to_string)
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

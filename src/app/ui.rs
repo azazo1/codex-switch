@@ -12,7 +12,7 @@ use crate::proxy::{self, ServerHandle};
 use crate::quota as quota_api;
 use crate::app::tray::{TrayCommand, TrayController};
 use crate::storage::RequestLogFilter;
-use chrono::{Local, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use chrono::{Datelike, Local, TimeZone, Timelike, Utc};
 use data::load_view_data;
 use eframe::egui;
 use std::collections::{BTreeMap, BTreeSet};
@@ -59,30 +59,106 @@ enum LogRetentionChoice {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 struct LogFilterState {
-    model: String,
-    upstream: String,
-    reasoning_effort: String,
-    endpoint: String,
-    status_min: String,
-    status_max: String,
-    price_usd_min: String,
-    price_usd_max: String,
-    started_at: String,
-    ended_at: String,
-    duration_ms_min: String,
-    duration_ms_max: String,
-    first_token_ms_min: String,
-    first_token_ms_max: String,
-    input_tokens_min: String,
-    input_tokens_max: String,
-    output_tokens_min: String,
-    output_tokens_max: String,
-    cache_read_tokens_min: String,
-    cache_read_tokens_max: String,
-    cache_creation_tokens_min: String,
-    cache_creation_tokens_max: String,
-    total_tokens_min: String,
-    total_tokens_max: String,
+    model: Option<String>,
+    upstream: Option<String>,
+    reasoning_effort: Option<String>,
+    endpoint: Option<String>,
+    status: LogStatusFilter,
+    status_custom: I64RangeFilter,
+    price_usd: F64RangeFilter,
+    started_at: LogDateTimeFilter,
+    ended_at: LogDateTimeFilter,
+    duration_ms: I64RangeFilter,
+    first_token_ms: I64RangeFilter,
+    input_tokens: I64RangeFilter,
+    output_tokens: I64RangeFilter,
+    cache_read_tokens: I64RangeFilter,
+    cache_creation_tokens: I64RangeFilter,
+    total_tokens: I64RangeFilter,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum LogStatusFilter {
+    #[default]
+    All,
+    Success,
+    Error,
+    ClientError,
+    ServerError,
+    Custom,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct I64RangeFilter {
+    enabled: bool,
+    min: i64,
+    max: i64,
+}
+
+impl Default for I64RangeFilter {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            min: 0,
+            max: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct F64RangeFilter {
+    enabled: bool,
+    min: f64,
+    max: f64,
+}
+
+impl Default for F64RangeFilter {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            min: 0.0,
+            max: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LogDateTimeFilter {
+    enabled: bool,
+    value: LogDateTimeValue,
+}
+
+impl Default for LogDateTimeFilter {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            value: LogDateTimeValue::now(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LogDateTimeValue {
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+}
+
+impl LogDateTimeValue {
+    fn now() -> Self {
+        let now = Local::now();
+        Self {
+            year: now.year(),
+            month: now.month(),
+            day: now.day(),
+            hour: now.hour(),
+            minute: now.minute(),
+            second: now.second(),
+        }
+    }
 }
 
 impl LogFilterState {
@@ -91,60 +167,45 @@ impl LogFilterState {
     }
 
     fn active_count(&self) -> usize {
-        [
-            &self.model,
-            &self.upstream,
-            &self.reasoning_effort,
-            &self.endpoint,
-            &self.status_min,
-            &self.status_max,
-            &self.price_usd_min,
-            &self.price_usd_max,
-            &self.started_at,
-            &self.ended_at,
-            &self.duration_ms_min,
-            &self.duration_ms_max,
-            &self.first_token_ms_min,
-            &self.first_token_ms_max,
-            &self.input_tokens_min,
-            &self.input_tokens_max,
-            &self.output_tokens_min,
-            &self.output_tokens_max,
-            &self.cache_read_tokens_min,
-            &self.cache_read_tokens_max,
-            &self.cache_creation_tokens_min,
-            &self.cache_creation_tokens_max,
-            &self.total_tokens_min,
-            &self.total_tokens_max,
+        let mut count = [
+            self.model.is_some(),
+            self.upstream.is_some(),
+            self.reasoning_effort.is_some(),
+            self.endpoint.is_some(),
+            self.status != LogStatusFilter::All,
+            self.price_usd.enabled,
+            self.started_at.enabled,
+            self.ended_at.enabled,
+            self.duration_ms.enabled,
+            self.first_token_ms.enabled,
+            self.input_tokens.enabled,
+            self.output_tokens.enabled,
+            self.cache_read_tokens.enabled,
+            self.cache_creation_tokens.enabled,
+            self.total_tokens.enabled,
         ]
         .into_iter()
-        .filter(|value| !value.trim().is_empty())
-        .count()
+        .filter(|active| *active)
+        .count();
+        if self.status == LogStatusFilter::Custom && !self.status_custom.enabled {
+            count += 1;
+        }
+        count
     }
 
     fn to_runtime_filter(&self) -> Result<RequestLogFilter, String> {
-        let (status_min, status_max) = parse_i64_range("状态码", &self.status_min, &self.status_max)?;
-        let (duration_ms_min, duration_ms_max) =
-            parse_i64_range("耗时", &self.duration_ms_min, &self.duration_ms_max)?;
-        let (first_token_ms_min, first_token_ms_max) =
-            parse_i64_range("首 token", &self.first_token_ms_min, &self.first_token_ms_max)?;
-        let (input_tokens_min, input_tokens_max) =
-            parse_i64_range("输入 tokens", &self.input_tokens_min, &self.input_tokens_max)?;
-        let (output_tokens_min, output_tokens_max) =
-            parse_i64_range("输出 tokens", &self.output_tokens_min, &self.output_tokens_max)?;
-        let (cache_read_tokens_min, cache_read_tokens_max) =
-            parse_i64_range("缓存输入 tokens", &self.cache_read_tokens_min, &self.cache_read_tokens_max)?;
-        let (cache_creation_tokens_min, cache_creation_tokens_max) = parse_i64_range(
-            "写入缓存 tokens",
-            &self.cache_creation_tokens_min,
-            &self.cache_creation_tokens_max,
-        )?;
-        let (total_tokens_min, total_tokens_max) =
-            parse_i64_range("总 tokens", &self.total_tokens_min, &self.total_tokens_max)?;
-        let (price_usd_min, price_usd_max) =
-            parse_f64_range("费用", &self.price_usd_min, &self.price_usd_max)?;
-        let started_at = parse_filter_time("开始时间", &self.started_at, false)?;
-        let ended_at = parse_filter_time("结束时间", &self.ended_at, true)?;
+        validate_i64_range("状态码", self.status_custom)?;
+        validate_i64_range("耗时", self.duration_ms)?;
+        validate_i64_range("首 token", self.first_token_ms)?;
+        validate_i64_range("输入 tokens", self.input_tokens)?;
+        validate_i64_range("输出 tokens", self.output_tokens)?;
+        validate_i64_range("缓存输入 tokens", self.cache_read_tokens)?;
+        validate_i64_range("写入缓存 tokens", self.cache_creation_tokens)?;
+        validate_i64_range("总 tokens", self.total_tokens)?;
+        validate_f64_range("费用", self.price_usd)?;
+        let (status_min, status_max) = self.status_range();
+        let started_at = self.started_at.to_utc("开始时间")?;
+        let ended_at = self.ended_at.to_utc("结束时间")?;
         if let (Some(started_at), Some(ended_at)) = (started_at, ended_at)
             && started_at > ended_at
         {
@@ -152,31 +213,86 @@ impl LogFilterState {
         }
 
         Ok(RequestLogFilter {
-            model: optional_text(&self.model),
-            upstream: optional_text(&self.upstream),
-            reasoning_effort: optional_text(&self.reasoning_effort),
-            endpoint: optional_text(&self.endpoint),
+            model: self.model.clone(),
+            upstream: self.upstream.clone(),
+            reasoning_effort: self.reasoning_effort.clone(),
+            endpoint: self.endpoint.clone(),
             status_min,
             status_max,
-            duration_ms_min,
-            duration_ms_max,
-            first_token_ms_min,
-            first_token_ms_max,
-            input_tokens_min,
-            input_tokens_max,
-            output_tokens_min,
-            output_tokens_max,
-            cache_read_tokens_min,
-            cache_read_tokens_max,
-            cache_creation_tokens_min,
-            cache_creation_tokens_max,
-            total_tokens_min,
-            total_tokens_max,
-            estimated_cost_usd_min: price_usd_min,
-            estimated_cost_usd_max: price_usd_max,
+            duration_ms_min: self.duration_ms.min_value(),
+            duration_ms_max: self.duration_ms.max_value(),
+            first_token_ms_min: self.first_token_ms.min_value(),
+            first_token_ms_max: self.first_token_ms.max_value(),
+            input_tokens_min: self.input_tokens.min_value(),
+            input_tokens_max: self.input_tokens.max_value(),
+            output_tokens_min: self.output_tokens.min_value(),
+            output_tokens_max: self.output_tokens.max_value(),
+            cache_read_tokens_min: self.cache_read_tokens.min_value(),
+            cache_read_tokens_max: self.cache_read_tokens.max_value(),
+            cache_creation_tokens_min: self.cache_creation_tokens.min_value(),
+            cache_creation_tokens_max: self.cache_creation_tokens.max_value(),
+            total_tokens_min: self.total_tokens.min_value(),
+            total_tokens_max: self.total_tokens.max_value(),
+            estimated_cost_usd_min: self.price_usd.min_value(),
+            estimated_cost_usd_max: self.price_usd.max_value(),
             started_at,
             ended_at,
         })
+    }
+
+    fn status_range(&self) -> (Option<i64>, Option<i64>) {
+        match self.status {
+            LogStatusFilter::All => (None, None),
+            LogStatusFilter::Success => (Some(200), Some(399)),
+            LogStatusFilter::Error => (Some(400), None),
+            LogStatusFilter::ClientError => (Some(400), Some(499)),
+            LogStatusFilter::ServerError => (Some(500), Some(599)),
+            LogStatusFilter::Custom => {
+                (self.status_custom.min_value(), self.status_custom.max_value())
+            }
+        }
+    }
+}
+
+impl I64RangeFilter {
+    fn min_value(self) -> Option<i64> {
+        self.enabled.then_some(self.min)
+    }
+
+    fn max_value(self) -> Option<i64> {
+        self.enabled.then_some(self.max)
+    }
+}
+
+impl F64RangeFilter {
+    fn min_value(self) -> Option<f64> {
+        self.enabled.then_some(self.min)
+    }
+
+    fn max_value(self) -> Option<f64> {
+        self.enabled.then_some(self.max)
+    }
+}
+
+impl LogDateTimeFilter {
+    fn to_utc(self, label: &str) -> Result<Option<chrono::DateTime<Utc>>, String> {
+        if !self.enabled {
+            return Ok(None);
+        }
+        let Some(local_time) = Local
+            .with_ymd_and_hms(
+                self.value.year,
+                self.value.month,
+                self.value.day,
+                self.value.hour,
+                self.value.minute,
+                self.value.second,
+            )
+            .single()
+        else {
+            return Err(format!("{label} 不是有效本地时间"));
+        };
+        Ok(Some(local_time.with_timezone(&Utc)))
     }
 }
 
@@ -901,93 +1017,19 @@ fn active_connections_tab_text(count: usize) -> String {
     format!("活跃连接({:03})", count.min(ACTIVE_TAB_COUNT_MAX))
 }
 
-fn optional_text(value: &str) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty()).then(|| value.to_string())
-}
-
-fn parse_i64_range(
-    label: &str,
-    min_value: &str,
-    max_value: &str,
-) -> Result<(Option<i64>, Option<i64>), String> {
-    let min_value = parse_optional_i64(label, min_value)?;
-    let max_value = parse_optional_i64(label, max_value)?;
-    if let (Some(min_value), Some(max_value)) = (min_value, max_value)
-        && min_value > max_value
-    {
+fn validate_i64_range(label: &str, value: I64RangeFilter) -> Result<(), String> {
+    if value.enabled && value.min > value.max {
         return Err(format!("{label} 最小值不能大于最大值"));
     }
-    Ok((min_value, max_value))
+    Ok(())
 }
 
-fn parse_optional_i64(label: &str, value: &str) -> Result<Option<i64>, String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return Ok(None);
-    }
-    value
-        .parse::<i64>()
-        .map(Some)
-        .map_err(|_| format!("{label} 需要填写整数"))
-}
-
-fn parse_f64_range(
-    label: &str,
-    min_value: &str,
-    max_value: &str,
-) -> Result<(Option<f64>, Option<f64>), String> {
-    let min_value = parse_optional_f64(label, min_value)?;
-    let max_value = parse_optional_f64(label, max_value)?;
-    if let (Some(min_value), Some(max_value)) = (min_value, max_value)
-        && min_value > max_value
-    {
+fn validate_f64_range(label: &str, value: F64RangeFilter) -> Result<(), String> {
+    if value.enabled && value.min > value.max {
         return Err(format!("{label} 最小值不能大于最大值"));
     }
-    Ok((min_value, max_value))
-}
-
-fn parse_optional_f64(label: &str, value: &str) -> Result<Option<f64>, String> {
-    let value = value.trim().trim_start_matches('$');
-    if value.is_empty() {
-        return Ok(None);
-    }
-    let parsed = value
-        .parse::<f64>()
-        .map_err(|_| format!("{label} 需要填写数字"))?;
-    if !parsed.is_finite() {
+    if value.enabled && (!value.min.is_finite() || !value.max.is_finite()) {
         return Err(format!("{label} 需要填写有效数字"));
     }
-    Ok(Some(parsed))
-}
-
-fn parse_filter_time(
-    label: &str,
-    value: &str,
-    end_of_day: bool,
-) -> Result<Option<chrono::DateTime<Utc>>, String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return Ok(None);
-    }
-    let local_time = if let Ok(value) = NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S") {
-        value
-    } else if let Ok(value) = NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M") {
-        value
-    } else if let Ok(value) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
-        let Some(value) = value.and_hms_opt(
-            if end_of_day { 23 } else { 0 },
-            if end_of_day { 59 } else { 0 },
-            if end_of_day { 59 } else { 0 },
-        ) else {
-            return Err(format!("{label} 不是有效时间"));
-        };
-        value
-    } else {
-        return Err(format!("{label} 支持 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS"));
-    };
-    let Some(local_time) = Local.from_local_datetime(&local_time).single() else {
-        return Err(format!("{label} 不是有效本地时间"));
-    };
-    Ok(Some(local_time.with_timezone(&Utc)))
+    Ok(())
 }
