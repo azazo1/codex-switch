@@ -590,13 +590,18 @@ mod tests {
             store.save_upstream(&upstream).await.unwrap();
             credentials.put(&upstream.id, "api_key", "sk-test").await.unwrap();
         }
-        let cache_keepalive =
-            CacheKeepaliveRuntime::new(store.clone(), credentials.clone(), reqwest::Client::new());
+        let events: crate::app::AppEvents = Default::default();
+        let cache_keepalive = CacheKeepaliveRuntime::new(
+            store.clone(),
+            credentials.clone(),
+            reqwest::Client::new(),
+            events.clone(),
+        );
         AppState {
             store,
             credentials,
             http: reqwest::Client::new(),
-            events: Default::default(),
+            events,
             scheduler: Default::default(),
             live_requests: Default::default(),
             cache_keepalive,

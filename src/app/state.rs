@@ -27,6 +27,7 @@ pub struct AppState {
 pub struct AppEvents {
     request_log_version: Arc<AtomicU64>,
     live_stream_version: Arc<AtomicU64>,
+    cache_keepalive_version: Arc<AtomicU64>,
     repaint_requester: Arc<Mutex<Option<RepaintRequester>>>,
 }
 
@@ -47,6 +48,16 @@ impl AppEvents {
 
     pub fn live_stream_version(&self) -> u64 {
         self.live_stream_version.load(Ordering::Relaxed)
+    }
+
+    pub fn bump_cache_keepalive(&self) {
+        self.cache_keepalive_version
+            .fetch_add(1, Ordering::Relaxed);
+        self.request_repaint();
+    }
+
+    pub fn cache_keepalive_version(&self) -> u64 {
+        self.cache_keepalive_version.load(Ordering::Relaxed)
     }
 
     pub fn set_repaint_requester<F>(&self, repaint: F)
@@ -81,13 +92,14 @@ impl AppState {
             .user_agent("codex-switch/0.1.0")
             .build()
             .context("failed to build http client")?;
+        let events = AppEvents::default();
         let cache_keepalive =
-            CacheKeepaliveRuntime::new(store.clone(), credentials.clone(), http.clone());
+            CacheKeepaliveRuntime::new(store.clone(), credentials.clone(), http.clone(), events.clone());
         let state = Self {
             store,
             credentials,
             http,
-            events: AppEvents::default(),
+            events,
             scheduler: SchedulerRuntime::default(),
             live_requests: LiveRequestStore::default(),
             cache_keepalive,

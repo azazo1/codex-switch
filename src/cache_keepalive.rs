@@ -1,3 +1,4 @@
+use crate::app::AppEvents;
 use crate::balance::API_KEY_CREDENTIAL;
 use crate::core::models::{
     CacheKeepaliveMode, RequestLog, TokenUsage, Upstream, UpstreamCacheKeepaliveSettings,
@@ -24,6 +25,7 @@ pub struct CacheKeepaliveRuntime {
     store: Store,
     credentials: CredentialStore,
     http: reqwest::Client,
+    events: AppEvents,
 }
 
 #[derive(Default)]
@@ -55,13 +57,36 @@ pub struct CacheKeepaliveRegistration {
     pub usage: TokenUsage,
 }
 
+#[derive(Debug, Clone)]
+pub struct CacheKeepaliveSessionSnapshot {
+    pub key: String,
+    pub upstream_id: String,
+    pub upstream_name: String,
+    pub endpoint: String,
+    pub model: String,
+    pub wire_api: WireApi,
+    pub cached_tokens: i64,
+    pub keepalive_count: i64,
+    pub last_user_request_elapsed_seconds: i64,
+    pub last_activity_elapsed_seconds: i64,
+    pub next_keepalive_seconds: i64,
+    pub disabled_reason: Option<String>,
+    pub body_bytes: usize,
+}
+
 impl CacheKeepaliveRuntime {
-    pub fn new(store: Store, credentials: CredentialStore, http: reqwest::Client) -> Self {
+    pub fn new(
+        store: Store,
+        credentials: CredentialStore,
+        http: reqwest::Client,
+        events: AppEvents,
+    ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(CacheKeepaliveInner::default())),
             store,
             credentials,
             http,
+            events,
         }
     }
 
@@ -122,7 +147,29 @@ impl CacheKeepaliveRuntime {
         };
         let mut inner = self.inner.lock().await;
         inner.sessions.insert(session_key, session);
-        prune_upstream_sessions(&mut inner.sessions, &settings.upstream_id, settings.max_active_sessions);
+        prune_upstream_sessions(
+            &mut inner.sessions,
+            &settings.upstream_id,
+            settings.max_active_sessions,
+        );
+        self.events.bump_cache_keepalive();
+    }
+
+    pub async fn snapshots(&self) -> Vec<CacheKeepaliveSessionSnapshot> {
+        let now = Instant::now();
+        let inner = self.inner.lock().await;
+        let mut snapshots = inner
+            .sessions
+            .values()
+            .map(|session| session.snapshot(now))
+            .collect::<Vec<_>>();
+        snapshots.sort_by(|left, right| {
+            left.upstream_name
+                .cmp(&right.upstream_name)
+                .then_with(|| left.model.cmp(&right.model))
+                .then_with(|| left.key.cmp(&right.key))
+        });
+        snapshots
     }
 
     async fn run(self) {
@@ -265,12 +312,16 @@ impl CacheKeepaliveRuntime {
             if let Some(cached_tokens) = cached_tokens {
                 session.cached_tokens = cached_tokens;
             }
+            self.events.bump_cache_keepalive();
         }
     }
 
     async fn disable_session(&self, key: &str, reason: &str) {
         let mut inner = self.inner.lock().await;
         if let Some(session) = inner.sessions.get_mut(key) {
+            if session.disabled_reason.is_some() {
+                return;
+            }
             session.disabled_reason = Some(reason.to_string());
             tracing::info!(
                 upstream_id = %session.upstream.id,
@@ -278,6 +329,7 @@ impl CacheKeepaliveRuntime {
                 reason,
                 "cache keepalive session disabled"
             );
+            self.events.bump_cache_keepalive();
         }
     }
 
@@ -303,9 +355,42 @@ impl CacheKeepaliveRuntime {
             first_token_ms: None,
             error,
         };
-        if let Err(err) = self.store.insert_request_log(log).await {
-            tracing::warn!(error = %err, "failed to record cache keepalive log");
+        match self.store.insert_request_log(log).await {
+            Ok(()) => self.events.bump_request_logs(),
+            Err(err) => tracing::warn!(error = %err, "failed to record cache keepalive log"),
         }
+    }
+}
+
+impl CacheKeepaliveSession {
+    fn snapshot(&self, now: Instant) -> CacheKeepaliveSessionSnapshot {
+        CacheKeepaliveSessionSnapshot {
+            key: self.key.clone(),
+            upstream_id: self.upstream.id.clone(),
+            upstream_name: self.upstream.name.clone(),
+            endpoint: self.endpoint.clone(),
+            model: self.model.clone(),
+            wire_api: self.wire_api,
+            cached_tokens: self.cached_tokens,
+            keepalive_count: self.keepalive_count,
+            last_user_request_elapsed_seconds: elapsed_seconds(now, self.last_user_request_at),
+            last_activity_elapsed_seconds: elapsed_seconds(now, self.last_activity_at),
+            next_keepalive_seconds: if self.next_keepalive_at > now {
+                (self.next_keepalive_at - now).as_secs() as i64
+            } else {
+                0
+            },
+            disabled_reason: self.disabled_reason.clone(),
+            body_bytes: self.body.len(),
+        }
+    }
+}
+
+fn elapsed_seconds(now: Instant, then: Instant) -> i64 {
+    if now >= then {
+        (now - then).as_secs() as i64
+    } else {
+        0
     }
 }
 
@@ -434,6 +519,8 @@ fn model_supports_extended_retention(model: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::models::BalanceProvider;
+    use crate::storage::credentials::CredentialStore;
 
     #[test]
     fn keepalive_body_limits_responses_output() {
@@ -462,5 +549,111 @@ mod tests {
         let second = session_key("b", "gpt-test", "/responses", body).unwrap();
 
         assert_ne!(first, second);
+    }
+
+    #[tokio::test]
+    async fn snapshots_are_sorted_and_include_runtime_fields() {
+        let runtime = test_runtime().await;
+        let upstream_b = upstream("b", "upstream-b");
+        let upstream_a = upstream("a", "upstream-a");
+        save_enabled_settings(&runtime, &upstream_b).await;
+        save_enabled_settings(&runtime, &upstream_a).await;
+
+        runtime
+            .register(registration(&upstream_b, "model-b", "session-b", 4096))
+            .await;
+        runtime
+            .register(registration(&upstream_a, "model-a", "session-a", 2048))
+            .await;
+
+        let snapshots = runtime.snapshots().await;
+
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].upstream_name, "upstream-a");
+        assert_eq!(snapshots[0].model, "model-a");
+        assert_eq!(snapshots[0].cached_tokens, 2048);
+        assert_eq!(snapshots[0].body_bytes, registration_body("model-a", "session-a").len());
+        assert!(snapshots[0].next_keepalive_seconds > 0);
+    }
+
+    #[tokio::test]
+    async fn disabled_snapshot_keeps_reason() {
+        let runtime = test_runtime().await;
+        let upstream = upstream("a", "upstream-a");
+        save_enabled_settings(&runtime, &upstream).await;
+        runtime
+            .register(registration(&upstream, "model-a", "session-a", 2048))
+            .await;
+        let key = runtime.snapshots().await[0].key.clone();
+
+        runtime.disable_session(&key, "cache miss").await;
+        let snapshots = runtime.snapshots().await;
+
+        assert_eq!(snapshots[0].disabled_reason.as_deref(), Some("cache miss"));
+    }
+
+    async fn test_runtime() -> CacheKeepaliveRuntime {
+        let path = std::env::temp_dir()
+            .join(format!("codex-switch-cache-runtime-{}.sqlite", uuid::Uuid::new_v4()));
+        let store = Store::open(path).await.unwrap();
+        let credentials = CredentialStore::new_for_tests(store.clone());
+        CacheKeepaliveRuntime::new(
+            store,
+            credentials,
+            reqwest::Client::new(),
+            AppEvents::default(),
+        )
+    }
+
+    async fn save_enabled_settings(runtime: &CacheKeepaliveRuntime, upstream: &Upstream) {
+        runtime.store.save_upstream(upstream).await.unwrap();
+        let mut settings = UpstreamCacheKeepaliveSettings::new(upstream.id.clone());
+        settings.enabled = true;
+        runtime
+            .store
+            .save_cache_keepalive_settings(&settings)
+            .await
+            .unwrap();
+    }
+
+    fn registration(
+        upstream: &Upstream,
+        model: &str,
+        session_id: &str,
+        cached_tokens: i64,
+    ) -> CacheKeepaliveRegistration {
+        CacheKeepaliveRegistration {
+            upstream: upstream.clone(),
+            endpoint: "/responses".to_string(),
+            model: Some(model.to_string()),
+            body: registration_body(model, session_id),
+            usage: TokenUsage {
+                input_tokens: cached_tokens,
+                cache_read_tokens: cached_tokens,
+                total_tokens: cached_tokens,
+                ..Default::default()
+            },
+        }
+    }
+
+    fn registration_body(model: &str, session_id: &str) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "model": model,
+            "prompt_cache_key": session_id,
+            "input": "hello"
+        }))
+        .unwrap()
+    }
+
+    fn upstream(id: &str, name: &str) -> Upstream {
+        let mut upstream = Upstream::new_relay(
+            name.to_string(),
+            "http://127.0.0.1".to_string(),
+            WireApi::Responses,
+            true,
+            BalanceProvider::Unsupported,
+        );
+        upstream.id = id.to_string();
+        upstream
     }
 }

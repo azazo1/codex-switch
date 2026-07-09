@@ -1,5 +1,6 @@
 use crate::app::{platform, state::AppState};
 use crate::balance;
+use crate::cache_keepalive::CacheKeepaliveSessionSnapshot;
 use crate::core::models::{
     BalanceProvider, BalanceSnapshot, DashboardStats, DatabaseInfo, ProviderStats, QuotaSnapshot,
     RequestLog, ScheduleGroup, ScheduleGroupChild, ScheduleGroupMember, ScheduleRouteRule,
@@ -30,6 +31,7 @@ const HIDDEN_REPAINT_INTERVAL: Duration = Duration::from_secs(5);
 
 mod dashboard;
 mod active;
+mod cache_keepalive;
 mod data;
 mod logs;
 mod quota;
@@ -43,6 +45,7 @@ enum Tab {
     Dashboard,
     Upstreams,
     Scheduler,
+    CacheKeepalive,
     ActiveConnections,
     Logs,
 }
@@ -319,6 +322,7 @@ pub struct CodexSwitchApp {
     last_seen_request_log_version: u64,
     last_request_log_poll_at: Instant,
     last_seen_live_stream_version: u64,
+    last_seen_cache_keepalive_version: u64,
     price_fetch_started: bool,
     price_fetch_pending: bool,
     status: String,
@@ -336,6 +340,8 @@ pub struct CodexSwitchApp {
     provider_stats: Vec<ProviderStats>,
     logs: Vec<RequestLog>,
     live_connections: Vec<LiveRequestSnapshot>,
+    cache_keepalive_sessions: Vec<CacheKeepaliveSessionSnapshot>,
+    selected_cache_keepalive_key: Option<String>,
     log_page: usize,
     log_page_size: usize,
     log_total_count: i64,
@@ -385,6 +391,7 @@ impl CodexSwitchApp {
             .unwrap_or_default();
         let last_seen_request_log_version = state.events.request_log_version();
         let last_seen_live_stream_version = state.events.live_stream_version();
+        let last_seen_cache_keepalive_version = state.events.cache_keepalive_version();
         let mut app = Self {
             runtime,
             state,
@@ -408,6 +415,7 @@ impl CodexSwitchApp {
             last_seen_request_log_version,
             last_request_log_poll_at: Instant::now(),
             last_seen_live_stream_version,
+            last_seen_cache_keepalive_version,
             price_fetch_started: false,
             price_fetch_pending: false,
             status: "就绪".to_string(),
@@ -425,6 +433,8 @@ impl CodexSwitchApp {
             provider_stats: Vec::new(),
             logs: Vec::new(),
             live_connections: Vec::new(),
+            cache_keepalive_sessions: Vec::new(),
+            selected_cache_keepalive_key: None,
             log_page: 0,
             log_page_size: LOG_PAGE_SIZE,
             log_total_count: 0,
@@ -470,6 +480,11 @@ impl CodexSwitchApp {
         if live_version != self.last_seen_live_stream_version {
             self.last_seen_live_stream_version = live_version;
             self.live_connections = self.state.live_requests.snapshots();
+        }
+        let cache_keepalive_version = self.state.events.cache_keepalive_version();
+        if cache_keepalive_version != self.last_seen_cache_keepalive_version {
+            self.last_seen_cache_keepalive_version = cache_keepalive_version;
+            self.refresh_cache_keepalive_sessions();
         }
         let version = self.state.events.request_log_version();
         if version != self.last_seen_request_log_version {
@@ -691,6 +706,7 @@ impl CodexSwitchApp {
                 self.stats = data.stats;
                 self.provider_stats = data.provider_stats;
                 self.logs = data.logs;
+                self.refresh_cache_keepalive_sessions();
                 self.log_total_count = data.log_total_count;
                 self.last_seen_request_log_version = self.state.events.request_log_version();
                 self.total_estimated_cost_usd = data.total_estimated_cost_usd;
@@ -714,6 +730,28 @@ impl CodexSwitchApp {
             return;
         }
         self.refresh_all();
+    }
+
+    fn refresh_cache_keepalive_sessions(&mut self) {
+        self.cache_keepalive_sessions = self
+            .runtime
+            .block_on(self.state.cache_keepalive.snapshots());
+        self.last_seen_cache_keepalive_version = self.state.events.cache_keepalive_version();
+        if self
+            .selected_cache_keepalive_key
+            .as_ref()
+            .is_some_and(|key| {
+                self.cache_keepalive_sessions
+                    .iter()
+                    .any(|session| &session.key == key)
+            })
+        {
+            return;
+        }
+        self.selected_cache_keepalive_key = self
+            .cache_keepalive_sessions
+            .first()
+            .map(|session| session.key.clone());
     }
 
     fn sync_schedule_group_editor(&mut self) {
@@ -936,6 +974,12 @@ impl eframe::App for CodexSwitchApp {
                 tab_button(
                     ui,
                     &mut self.tab,
+                    Tab::CacheKeepalive,
+                    &cache_keepalive_tab_text(self.cache_keepalive_sessions.len()),
+                );
+                tab_button(
+                    ui,
+                    &mut self.tab,
                     Tab::ActiveConnections,
                     &active_connections_tab_text(self.live_connections.len()),
                 );
@@ -963,6 +1007,7 @@ impl eframe::App for CodexSwitchApp {
                 Tab::Dashboard => self.dashboard_ui(ui),
                 Tab::Upstreams => self.upstreams_ui(ui),
                 Tab::Scheduler => self.scheduler_ui(ui),
+                Tab::CacheKeepalive => self.cache_keepalive_ui(ui),
                 Tab::ActiveConnections => self.active_connections_ui(ui),
                 Tab::Logs => self.logs_ui(ui),
             }
@@ -1005,6 +1050,10 @@ fn tab_button(ui: &mut egui::Ui, tab: &mut Tab, value: Tab, text: &str) {
 
 fn active_connections_tab_text(count: usize) -> String {
     format!("活跃连接({:03})", count.min(ACTIVE_TAB_COUNT_MAX))
+}
+
+fn cache_keepalive_tab_text(count: usize) -> String {
+    format!("缓存保持({:03})", count.min(ACTIVE_TAB_COUNT_MAX))
 }
 
 fn validate_i64_range(label: &str, value: &I64RangeFilter) -> Result<(), String> {
