@@ -311,7 +311,7 @@ fn append_request_log_filters(builder: &mut QueryBuilder<'_, Sqlite>, filter: &R
     if let Some(value) = filter_text(filter.model.as_deref()) {
         begin_clause!();
         builder.push("LOWER(COALESCE(model, '')) LIKE ");
-        builder.push_bind(like_pattern(value));
+        builder.push_bind(wildcard_like_pattern(value));
         builder.push(" ESCAPE '\\'");
     }
     if let Some(value) = filter_text(filter.upstream.as_deref()) {
@@ -476,6 +476,22 @@ fn like_pattern(value: &str) -> String {
         }
     }
     pattern.push('%');
+    pattern
+}
+
+fn wildcard_like_pattern(value: &str) -> String {
+    let mut pattern = String::with_capacity(value.len());
+    for ch in value.to_lowercase().chars() {
+        match ch {
+            '*' => pattern.push('%'),
+            '?' => pattern.push('_'),
+            '%' | '_' | '\\' => {
+                pattern.push('\\');
+                pattern.push(ch);
+            }
+            _ => pattern.push(ch),
+        }
+    }
     pattern
 }
 
@@ -684,6 +700,28 @@ mod tests {
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].usage.total_tokens, 2_000_000);
         assert!(logs[0].estimated_cost_usd.unwrap() >= 1.0);
+    }
+
+    #[tokio::test]
+    async fn request_log_model_filter_supports_wildcards() {
+        let path = std::env::temp_dir()
+            .join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
+        let store = Store::open(path).await.unwrap();
+        let mut gpt_log = test_log(Some("upstream-a"), Some("relay-a"), 5);
+        gpt_log.model = Some("gpt-5-codex".to_string());
+        let mut claude_log = test_log(Some("upstream-a"), Some("relay-a"), 7);
+        claude_log.model = Some("claude-sonnet".to_string());
+        store.insert_request_log(gpt_log).await.unwrap();
+        store.insert_request_log(claude_log).await.unwrap();
+
+        let filter = RequestLogFilter {
+            model: Some("gpt-*".to_string()),
+            ..Default::default()
+        };
+        let logs = store.recent_logs_page_filtered(10, 0, &filter).await.unwrap();
+
+        assert_eq!(store.request_log_count_filtered(&filter).await.unwrap(), 1);
+        assert_eq!(logs[0].model.as_deref(), Some("gpt-5-codex"));
     }
 
     fn test_log(

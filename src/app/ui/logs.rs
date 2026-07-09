@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 const LOG_RANGE_LABEL_WIDTH: f32 = 220.0;
 const LOG_PAGE_BUTTON_WIDTH: f32 = 32.0;
 const LOG_PAGE_SLOT_COUNT: usize = 7;
+const DEFAULT_REASONING_EFFORT_OPTIONS: [&str; 5] = ["Minimal", "Low", "Medium", "High", "XHigh"];
 
 impl CodexSwitchApp {
     pub(super) fn logs_ui(&mut self, ui: &mut egui::Ui) {
@@ -115,12 +116,13 @@ impl CodexSwitchApp {
                     .num_columns(3)
                     .spacing([12.0, 8.0])
                     .show(ui, |ui| {
-                        option_filter_row(
+                        editable_option_filter_row(
                             ui,
                             "模型",
                             &mut self.log_filter_editor.model,
                             &model_options,
                             "全部模型",
+                            "模型通配符, 如 gpt-*",
                         );
                         option_filter_row(
                             ui,
@@ -433,6 +435,42 @@ fn option_filter_row(
     ui.end_row();
 }
 
+fn editable_option_filter_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut Option<String>,
+    options: &[String],
+    all_label: &str,
+    hint: &str,
+) {
+    ui.label(label);
+    ui.horizontal(|ui| {
+        let mut text = value.clone().unwrap_or_default();
+        if ui
+            .add(
+                egui::TextEdit::singleline(&mut text)
+                    .hint_text(hint)
+                    .desired_width(300.0),
+            )
+            .changed()
+        {
+            let text = text.trim().to_string();
+            *value = (!text.is_empty()).then_some(text);
+        }
+        egui::ComboBox::from_id_salt(format!("log_filter_{label}_select"))
+            .selected_text("v")
+            .width(28.0)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(value, None, all_label);
+                for option in options {
+                    ui.selectable_value(value, Some(option.clone()), option);
+                }
+            });
+    });
+    ui.label("");
+    ui.end_row();
+}
+
 fn status_filter_row(
     ui: &mut egui::Ui,
     value: &mut LogStatusFilter,
@@ -455,7 +493,6 @@ fn status_filter_row(
             }
         });
     if *value == LogStatusFilter::Custom {
-        custom_range.enabled = true;
         i64_range_values_ui(ui, custom_range);
     } else {
         ui.label("");
@@ -464,40 +501,42 @@ fn status_filter_row(
 }
 
 fn i64_range_filter_row(ui: &mut egui::Ui, label: &str, value: &mut I64RangeFilter) {
-    ui.checkbox(&mut value.enabled, label);
+    ui.label(label);
     i64_range_values_ui(ui, value);
     ui.label("");
     ui.end_row();
 }
 
 fn i64_range_values_ui(ui: &mut egui::Ui, value: &mut I64RangeFilter) {
-    ui.add_enabled_ui(value.enabled, |ui| {
-        ui.horizontal(|ui| {
-            ui.add(egui::DragValue::new(&mut value.min).range(0..=i64::MAX).speed(1));
-            ui.label("至");
-            ui.add(egui::DragValue::new(&mut value.max).range(0..=i64::MAX).speed(1));
-        });
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut value.min)
+                .hint_text("下限")
+                .desired_width(100.0),
+        );
+        ui.separator();
+        ui.add(
+            egui::TextEdit::singleline(&mut value.max)
+                .hint_text("上限")
+                .desired_width(100.0),
+        );
     });
 }
 
 fn f64_range_filter_row(ui: &mut egui::Ui, label: &str, value: &mut F64RangeFilter) {
-    ui.checkbox(&mut value.enabled, label);
-    ui.add_enabled_ui(value.enabled, |ui| {
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::DragValue::new(&mut value.min)
-                    .range(0.0..=f64::MAX)
-                    .speed(0.0001)
-                    .prefix("$"),
-            );
-            ui.label("至");
-            ui.add(
-                egui::DragValue::new(&mut value.max)
-                    .range(0.0..=f64::MAX)
-                    .speed(0.0001)
-                    .prefix("$"),
-            );
-        });
+    ui.label(label);
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut value.min)
+                .hint_text("下限")
+                .desired_width(100.0),
+        );
+        ui.separator();
+        ui.add(
+            egui::TextEdit::singleline(&mut value.max)
+                .hint_text("上限")
+                .desired_width(100.0),
+        );
     });
     ui.label("");
     ui.end_row();
@@ -563,13 +602,18 @@ fn log_upstream_options(logs: &[RequestLog], upstreams: &[Upstream]) -> Vec<Stri
 }
 
 fn log_reasoning_effort_options(logs: &[RequestLog]) -> Vec<String> {
-    logs.iter()
-        .filter_map(|log| log.reasoning_effort.as_deref())
-        .filter(|value| !value.is_empty())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .map(str::to_string)
-        .collect()
+    let mut values = BTreeSet::new();
+    for value in DEFAULT_REASONING_EFFORT_OPTIONS {
+        values.insert(value);
+    }
+    for log in logs {
+        if let Some(value) = log.reasoning_effort.as_deref()
+            && !value.is_empty()
+        {
+            values.insert(value);
+        }
+    }
+    values.into_iter().map(str::to_string).collect()
 }
 
 fn log_endpoint_options(logs: &[RequestLog]) -> Vec<String> {
