@@ -1,9 +1,11 @@
 mod app;
 mod balance;
+mod balance_alert;
 mod cache_keepalive;
 mod core;
 mod live;
 mod oauth;
+mod notification;
 mod pricing;
 mod proxy;
 mod quota;

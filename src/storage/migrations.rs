@@ -352,6 +352,22 @@ fn migrations() -> &'static [Migration] {
             name: "upstream_proxy_url",
             statements: &["ALTER TABLE upstreams ADD COLUMN proxy_url TEXT"],
         },
+        Migration {
+            version: 11,
+            name: "upstream_balance_alert_settings",
+            statements: &[
+                "CREATE TABLE IF NOT EXISTS upstream_balance_alert_settings (
+                upstream_id TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                threshold REAL NOT NULL DEFAULT 5.0,
+                interval_seconds INTEGER NOT NULL DEFAULT 1800,
+                last_checked_at INTEGER,
+                alert_active INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (upstream_id) REFERENCES upstreams(id) ON DELETE CASCADE
+            )",
+            ],
+        },
     ]
 }
 
@@ -372,7 +388,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 10);
+        assert_eq!(rows.len(), 11);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -405,6 +421,11 @@ mod tests {
         );
         assert_eq!(rows[9].get::<i64, _>("version"), 10);
         assert_eq!(rows[9].get::<String, _>("name"), "upstream_proxy_url");
+        assert_eq!(rows[10].get::<i64, _>("version"), 11);
+        assert_eq!(
+            rows[10].get::<String, _>("name"),
+            "upstream_balance_alert_settings"
+        );
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
             Some("127.0.0.1:15721")
@@ -433,6 +454,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 10);
+        assert_eq!(count, 11);
     }
 }

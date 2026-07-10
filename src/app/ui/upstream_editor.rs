@@ -3,7 +3,7 @@ use crate::app::http;
 use crate::balance;
 use crate::core::models::{
     BalanceProvider, CacheKeepaliveMode, Upstream, UpstreamCacheKeepaliveSettings, UpstreamKind,
-    WireApi,
+    UpstreamBalanceAlertSettings, WireApi,
 };
 use eframe::egui;
 
@@ -24,6 +24,7 @@ const BALANCE_PROVIDERS: &[BalanceProvider] = &[
 pub(super) struct UpstreamEditor {
     upstream: Upstream,
     cache_keepalive: UpstreamCacheKeepaliveSettings,
+    balance_alert: UpstreamBalanceAlertSettings,
     min_cacheable_tokens_input: String,
     max_cacheable_tokens_input: String,
     api_key: String,
@@ -32,7 +33,11 @@ pub(super) struct UpstreamEditor {
 }
 
 impl UpstreamEditor {
-    fn new(upstream: Upstream, cache_keepalive: UpstreamCacheKeepaliveSettings) -> Self {
+    fn new(
+        upstream: Upstream,
+        cache_keepalive: UpstreamCacheKeepaliveSettings,
+        balance_alert: UpstreamBalanceAlertSettings,
+    ) -> Self {
         let min_cacheable_tokens_input =
             token_amount::format_token_input(cache_keepalive.min_cacheable_tokens);
         let max_cacheable_tokens_input =
@@ -40,6 +45,7 @@ impl UpstreamEditor {
         Self {
             upstream,
             cache_keepalive,
+            balance_alert,
             min_cacheable_tokens_input,
             max_cacheable_tokens_input,
             api_key: String::new(),
@@ -51,7 +57,7 @@ impl UpstreamEditor {
 
 impl CodexSwitchApp {
     pub(super) fn open_upstream_editor(&mut self, upstream: Upstream) {
-        let settings = match self
+        let cache_keepalive = match self
             .runtime
             .block_on(self.state.store.cache_keepalive_settings(&upstream.id))
         {
@@ -61,7 +67,21 @@ impl CodexSwitchApp {
                 UpstreamCacheKeepaliveSettings::new(upstream.id.clone())
             }
         };
-        self.upstream_editor = Some(UpstreamEditor::new(upstream, settings));
+        let balance_alert = match self
+            .runtime
+            .block_on(self.state.store.balance_alert_settings(&upstream.id))
+        {
+            Ok(settings) => settings,
+            Err(err) => {
+                self.status = format!("读取余额提醒设置失败: {err}");
+                UpstreamBalanceAlertSettings::new(upstream.id.clone())
+            }
+        };
+        self.upstream_editor = Some(UpstreamEditor::new(
+            upstream,
+            cache_keepalive,
+            balance_alert,
+        ));
     }
 
     pub(super) fn show_upstream_editor(&mut self, ctx: &egui::Context) {
@@ -124,6 +144,13 @@ impl CodexSwitchApp {
         let newapi_user_key = editor.newapi_user_key.trim().to_string();
         let newapi_user_id = editor.newapi_user_id.trim().to_string();
         let uses_newapi_balance = uses_newapi_balance(&upstream);
+        let mut balance_alert = editor.balance_alert;
+        balance_alert.upstream_id = upstream.id.clone();
+        balance_alert.interval_seconds = balance_alert.interval_seconds.max(60);
+        if !balance_alert.threshold.is_finite() || balance_alert.threshold < 0.0 {
+            self.status = "余额提醒阈值必须是大于等于 0 的数字".to_string();
+            return;
+        }
         let mut cache_keepalive = editor.cache_keepalive;
         cache_keepalive.upstream_id = upstream.id.clone();
         cache_keepalive.interval_seconds = cache_keepalive.interval_seconds.max(60);
@@ -148,6 +175,7 @@ impl CodexSwitchApp {
         if upstream.kind != UpstreamKind::RelayApiKey {
             cache_keepalive.enabled = false;
             cache_keepalive.mode = CacheKeepaliveMode::Off;
+            balance_alert.enabled = false;
         }
 
         if upstream.name.is_empty() {
@@ -163,6 +191,10 @@ impl CodexSwitchApp {
             self.state
                 .store
                 .save_cache_keepalive_settings(&cache_keepalive)
+                .await?;
+            self.state
+                .store
+                .save_balance_alert_settings(&balance_alert)
                 .await?;
             if !cache_keepalive.is_active() {
                 self.state
@@ -295,6 +327,7 @@ impl UpstreamEditor {
         {
             ui.label(format!("自动识别: {}", provider.as_str()));
         }
+        balance_alert_form(ui, &mut self.balance_alert);
         ui.separator();
         cache_keepalive_form(
             ui,
@@ -321,6 +354,27 @@ impl UpstreamEditor {
         ui.separator();
         ui.label("缓存保持仅支持 Relay API Key 上游");
     }
+}
+
+fn balance_alert_form(ui: &mut egui::Ui, settings: &mut UpstreamBalanceAlertSettings) {
+    ui.separator();
+    ui.heading("余额不足提醒");
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut settings.enabled, "启用系统提醒");
+        ui.label("余额阈值");
+        ui.add(
+            egui::DragValue::new(&mut settings.threshold)
+                .range(0.0..=f64::MAX)
+                .speed(0.5)
+                .max_decimals(4),
+        );
+        ui.label("检查间隔秒");
+        ui.add(
+            egui::DragValue::new(&mut settings.interval_seconds)
+                .range(60..=i64::MAX)
+                .speed(60),
+        );
+    });
 }
 
 fn cache_keepalive_form(

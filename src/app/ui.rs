@@ -5,7 +5,7 @@ use crate::cache_keepalive::CacheKeepaliveSessionSnapshot;
 use crate::core::models::{
     BalanceProvider, BalanceSnapshot, DashboardStats, DatabaseInfo, ProviderStats, QuotaSnapshot,
     RequestLog, ScheduleGroup, ScheduleGroupChild, ScheduleGroupMember, ScheduleRouteRule,
-    Upstream, UpstreamCacheKeepaliveSettings, WireApi,
+    Upstream, UpstreamBalanceAlertSettings, UpstreamCacheKeepaliveSettings, WireApi,
 };
 use crate::live::LiveRequestSnapshot;
 use crate::oauth;
@@ -337,12 +337,14 @@ pub struct CodexSwitchApp {
     last_request_log_poll_at: Instant,
     last_seen_live_stream_version: u64,
     last_seen_cache_keepalive_version: u64,
+    last_seen_balance_snapshot_version: u64,
     last_cache_keepalive_refresh_at: Instant,
     price_fetch_started: bool,
     price_fetch_pending: bool,
     status: String,
     upstreams: Vec<Upstream>,
     cache_keepalive_settings: BTreeMap<String, UpstreamCacheKeepaliveSettings>,
+    balance_alert_settings: BTreeMap<String, UpstreamBalanceAlertSettings>,
     schedule_groups: Vec<ScheduleGroup>,
     schedule_members: BTreeMap<String, Vec<ScheduleGroupMember>>,
     schedule_children: BTreeMap<String, Vec<ScheduleGroupChild>>,
@@ -408,6 +410,7 @@ impl CodexSwitchApp {
         let last_seen_request_log_version = state.events.request_log_version();
         let last_seen_live_stream_version = state.events.live_stream_version();
         let last_seen_cache_keepalive_version = state.events.cache_keepalive_version();
+        let last_seen_balance_snapshot_version = state.events.balance_snapshot_version();
         let mut app = Self {
             runtime,
             state,
@@ -432,12 +435,14 @@ impl CodexSwitchApp {
             last_request_log_poll_at: Instant::now(),
             last_seen_live_stream_version,
             last_seen_cache_keepalive_version,
+            last_seen_balance_snapshot_version,
             last_cache_keepalive_refresh_at: Instant::now(),
             price_fetch_started: false,
             price_fetch_pending: false,
             status: "就绪".to_string(),
             upstreams: Vec::new(),
             cache_keepalive_settings: BTreeMap::new(),
+            balance_alert_settings: BTreeMap::new(),
             schedule_groups: Vec::new(),
             schedule_members: BTreeMap::new(),
             schedule_children: BTreeMap::new(),
@@ -503,6 +508,12 @@ impl CodexSwitchApp {
         if cache_keepalive_version != self.last_seen_cache_keepalive_version {
             self.last_seen_cache_keepalive_version = cache_keepalive_version;
             self.refresh_cache_keepalive_sessions();
+        }
+        let balance_snapshot_version = self.state.events.balance_snapshot_version();
+        if balance_snapshot_version != self.last_seen_balance_snapshot_version {
+            self.last_seen_balance_snapshot_version = balance_snapshot_version;
+            self.refresh_all();
+            return;
         }
         if self.tab == Tab::CacheKeepalive
             && self.last_cache_keepalive_refresh_at.elapsed()
@@ -717,6 +728,7 @@ impl CodexSwitchApp {
             Ok(data) => {
                 self.upstreams = data.upstreams;
                 self.cache_keepalive_settings = data.cache_keepalive_settings;
+                self.balance_alert_settings = data.balance_alert_settings;
                 self.schedule_groups = data.schedule_groups;
                 self.schedule_members = data.schedule_members;
                 self.schedule_children = data.schedule_children;
@@ -739,6 +751,8 @@ impl CodexSwitchApp {
                 self.database_info = data.database_info;
                 self.quota_snapshots = data.quota_snapshots;
                 self.balance_snapshots = data.balance_snapshots;
+                self.last_seen_balance_snapshot_version =
+                    self.state.events.balance_snapshot_version();
             }
             Err(err) => {
                 self.status = format!("刷新失败: {err}");

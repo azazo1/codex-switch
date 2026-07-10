@@ -1,6 +1,7 @@
 use super::CodexSwitchApp;
 use crate::core::models::{
     BalanceSnapshot, CacheKeepaliveMode, UpstreamCacheKeepaliveSettings, UpstreamKind, WireApi,
+    UpstreamBalanceAlertSettings,
 };
 use eframe::egui;
 
@@ -71,13 +72,14 @@ impl CodexSwitchApp {
         let upstreams = self.upstreams.clone();
         let balance_snapshots = self.balance_snapshots.clone();
         let cache_settings = self.cache_keepalive_settings.clone();
+        let balance_alert_settings = self.balance_alert_settings.clone();
         let mut changed = Vec::new();
         let mut deleted = Vec::new();
         let mut edit = None;
         let mut query_balance = None;
         egui::Grid::new("upstreams_grid")
             .striped(true)
-            .num_columns(8)
+            .num_columns(9)
             .spacing([16.0, 8.0])
             .show(ui, |ui| {
                 ui.strong("启用");
@@ -87,6 +89,7 @@ impl CodexSwitchApp {
                 ui.strong("代理");
                 ui.strong("缓存保持");
                 ui.strong("余额");
+                ui.strong("余额提醒");
                 ui.strong("操作");
                 ui.end_row();
 
@@ -112,6 +115,11 @@ impl CodexSwitchApp {
                             ui,
                             balance_snapshot_for(&balance_snapshots, &upstream.id),
                         );
+                    } else {
+                        ui.label("-");
+                    }
+                    if upstream.kind == UpstreamKind::RelayApiKey {
+                        balance_alert_label(ui, balance_alert_settings.get(&upstream.id));
                     } else {
                         ui.label("-");
                     }
@@ -161,6 +169,26 @@ impl CodexSwitchApp {
         }
         self.show_upstream_editor(ui.ctx());
     }
+}
+
+fn balance_alert_label(
+    ui: &mut egui::Ui,
+    settings: Option<&UpstreamBalanceAlertSettings>,
+) {
+    let Some(settings) = settings else {
+        ui.label("关闭");
+        return;
+    };
+    if !settings.enabled {
+        ui.label("关闭");
+        return;
+    }
+    let response = if settings.alert_active {
+        ui.colored_label(egui::Color32::RED, format!("不足 <= {:.4}", settings.threshold))
+    } else {
+        ui.label(format!("<= {:.4}", settings.threshold))
+    };
+    response.on_hover_text(format!("每 {} 秒检查一次", settings.interval_seconds));
 }
 
 pub(super) fn cache_keepalive_label(

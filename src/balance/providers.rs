@@ -166,6 +166,7 @@ pub async fn query_and_store(
         }
     };
     state.store.save_balance_snapshot(&snapshot).await?;
+    state.events.bump_balance_snapshots();
     Ok(snapshot)
 }
 

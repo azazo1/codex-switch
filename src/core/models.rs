@@ -555,3 +555,26 @@ pub struct BalanceSnapshot {
     pub message: Option<String>,
     pub fetched_at: i64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpstreamBalanceAlertSettings {
+    pub upstream_id: String,
+    pub enabled: bool,
+    pub threshold: f64,
+    pub interval_seconds: i64,
+    pub last_checked_at: Option<i64>,
+    pub alert_active: bool,
+}
+
+impl UpstreamBalanceAlertSettings {
+    pub fn new(upstream_id: String) -> Self {
+        Self {
+            upstream_id,
+            enabled: false,
+            threshold: 5.0,
+            interval_seconds: 1800,
+            last_checked_at: None,
+            alert_active: false,
+        }
+    }
+}

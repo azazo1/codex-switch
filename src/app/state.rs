@@ -30,6 +30,7 @@ pub struct AppEvents {
     request_log_version: Arc<AtomicU64>,
     live_stream_version: Arc<AtomicU64>,
     cache_keepalive_version: Arc<AtomicU64>,
+    balance_snapshot_version: Arc<AtomicU64>,
     repaint_requester: Arc<Mutex<Option<RepaintRequester>>>,
 }
 
@@ -59,6 +60,16 @@ impl AppEvents {
 
     pub fn cache_keepalive_version(&self) -> u64 {
         self.cache_keepalive_version.load(Ordering::Relaxed)
+    }
+
+    pub fn bump_balance_snapshots(&self) {
+        self.balance_snapshot_version
+            .fetch_add(1, Ordering::Relaxed);
+        self.request_repaint();
+    }
+
+    pub fn balance_snapshot_version(&self) -> u64 {
+        self.balance_snapshot_version.load(Ordering::Relaxed)
     }
 
     pub fn set_repaint_requester<F>(&self, repaint: F)
@@ -107,6 +118,7 @@ impl AppState {
             cache_keepalive,
         };
         state.cache_keepalive.start();
+        crate::balance_alert::start(state.clone());
         Ok(state)
     }
 
