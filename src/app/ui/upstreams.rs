@@ -79,12 +79,11 @@ impl CodexSwitchApp {
         let mut query_balance = None;
         egui::Grid::new("upstreams_grid")
             .striped(true)
-            .num_columns(9)
+            .num_columns(8)
             .spacing([16.0, 8.0])
             .show(ui, |ui| {
                 ui.strong("启用");
                 ui.strong("名称");
-                ui.strong("类型");
                 ui.strong("Base URL");
                 ui.strong("代理");
                 ui.strong("缓存保持");
@@ -100,7 +99,6 @@ impl CodexSwitchApp {
                     }
                     ui.label(&upstream.name)
                         .on_hover_text(format!("id: {}", upstream.id));
-                    ui.label(upstream.kind.as_str());
                     ui.label(upstream.base_url.as_str());
                     ui.label(
                         upstream
