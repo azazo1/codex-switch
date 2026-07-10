@@ -52,6 +52,29 @@ enum Tab {
     Logs,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum ScheduleRuleOwner {
+    NewGroup,
+    GroupEditor,
+}
+
+#[derive(Debug, Clone)]
+enum DeleteAction {
+    Upstream(String),
+    ScheduleGroup(String),
+    ScheduleRouteRule {
+        owner: ScheduleRuleOwner,
+        id: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct DeleteConfirmation {
+    title: String,
+    message: String,
+    action: DeleteAction,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LogRetentionChoice {
     OneDay,
@@ -324,6 +347,7 @@ pub struct CodexSwitchApp {
     tray_init_failed: bool,
     exit_requested: bool,
     exit_confirm_open: bool,
+    delete_confirmation: Option<DeleteConfirmation>,
     log_filter_open: bool,
     log_cleanup_open: bool,
     window_hidden_to_tray: bool,
@@ -422,6 +446,7 @@ impl CodexSwitchApp {
             tray_init_failed: false,
             exit_requested: false,
             exit_confirm_open: false,
+            delete_confirmation: None,
             log_filter_open: false,
             log_cleanup_open: false,
             window_hidden_to_tray: false,
@@ -1059,10 +1084,73 @@ impl eframe::App for CodexSwitchApp {
             Tab::ActiveConnections => self.active_connections_ui(ui),
             Tab::Logs => self.logs_ui(ui),
         });
+        self.delete_confirmation_window(ctx);
     }
 }
 
 impl CodexSwitchApp {
+    fn request_delete(
+        &mut self,
+        action: DeleteAction,
+        title: impl Into<String>,
+        message: impl Into<String>,
+    ) {
+        self.delete_confirmation = Some(DeleteConfirmation {
+            title: title.into(),
+            message: message.into(),
+            action,
+        });
+    }
+
+    fn delete_confirmation_window(&mut self, ctx: &egui::Context) {
+        let Some(confirmation) = self.delete_confirmation.clone() else {
+            return;
+        };
+        let mut open = true;
+        let mut confirmed = false;
+        let mut cancelled = false;
+        egui::Window::new(&confirmation.title)
+            .id(egui::Id::new("delete_confirmation"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(&confirmation.message);
+                ui.horizontal(|ui| {
+                    if ui.button("确认删除").clicked() {
+                        confirmed = true;
+                    }
+                    if ui.button("取消").clicked() {
+                        cancelled = true;
+                    }
+                });
+            });
+        if confirmed {
+            self.delete_confirmation = None;
+            self.execute_delete(confirmation.action);
+        } else if cancelled || !open {
+            self.delete_confirmation = None;
+        }
+    }
+
+    fn execute_delete(&mut self, action: DeleteAction) {
+        match action {
+            DeleteAction::Upstream(id) => self.delete_upstream(&id),
+            DeleteAction::ScheduleGroup(id) => self.delete_schedule_group(&id),
+            DeleteAction::ScheduleRouteRule { owner, id } => {
+                let editor = match owner {
+                    ScheduleRuleOwner::NewGroup => Some(&mut self.new_schedule_group),
+                    ScheduleRuleOwner::GroupEditor => self.schedule_group_editor.as_mut(),
+                };
+                if let Some(editor) = editor {
+                    editor.route_rules.retain(|rule| rule.id != id);
+                    self.status = "调度规则已从编辑内容中删除".to_string();
+                }
+            }
+        }
+    }
+
     fn exit_confirm_window(&mut self, ctx: &egui::Context) {
         if !self.exit_confirm_open {
             return;

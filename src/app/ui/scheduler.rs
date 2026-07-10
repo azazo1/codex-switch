@@ -1,4 +1,6 @@
-use super::CodexSwitchApp;
+use super::{
+    CodexSwitchApp, DeleteAction, DeleteConfirmation, ScheduleRuleOwner,
+};
 use crate::core::models::{
     ScheduleGroup, ScheduleGroupChild, ScheduleGroupMember, ScheduleMode, ScheduleRouteRule,
     ScheduleRouteTargetKind, Upstream,
@@ -93,6 +95,8 @@ impl CodexSwitchApp {
             &mut self.new_schedule_group,
             &schedule_groups,
             &upstreams,
+            &mut self.delete_confirmation,
+            ScheduleRuleOwner::NewGroup,
         );
         if add {
             self.add_schedule_group();
@@ -102,7 +106,7 @@ impl CodexSwitchApp {
         ui.heading("调度组列表");
         let mut current = None;
         let mut edit = None;
-        let mut deleted = Vec::new();
+        let mut delete_requested = None;
         for group in &self.schedule_groups {
             ui.horizontal(|ui| {
                 let selected = self.current_schedule_group_id.as_deref() == Some(&group.id);
@@ -128,7 +132,7 @@ impl CodexSwitchApp {
                     .add_enabled(group.id != "default", egui::Button::new("删除"))
                     .clicked()
                 {
-                    deleted.push(group.id.clone());
+                    delete_requested = Some(group.clone());
                 }
             });
         }
@@ -139,8 +143,12 @@ impl CodexSwitchApp {
         if let Some(group) = edit {
             self.open_schedule_group_editor(group);
         }
-        for group_id in deleted {
-            self.delete_schedule_group(&group_id);
+        if let Some(group) = delete_requested {
+            self.request_delete(
+                DeleteAction::ScheduleGroup(group.id),
+                "删除调度组",
+                format!("确认删除调度组 \"{}\"? 此操作无法撤销.", group.name),
+            );
         }
         self.show_schedule_group_editor(ui.ctx());
     }
@@ -238,6 +246,7 @@ impl CodexSwitchApp {
         };
         let upstreams = self.upstreams.clone();
         let schedule_groups = self.schedule_groups.clone();
+        let delete_confirmation = &mut self.delete_confirmation;
         let mut open = true;
         let mut action = EditorAction::None;
         egui::Window::new("编辑调度组")
@@ -247,7 +256,14 @@ impl CodexSwitchApp {
             .show(ctx, |ui| {
                 schedule_group_form(ui, &mut editor.group, &upstreams, &schedule_groups);
                 schedule_members_form(ui, editor, &upstreams, &schedule_groups);
-                schedule_route_section_form(ui, editor, &schedule_groups, &upstreams);
+                schedule_route_section_form(
+                    ui,
+                    editor,
+                    &schedule_groups,
+                    &upstreams,
+                    delete_confirmation,
+                    ScheduleRuleOwner::GroupEditor,
+                );
                 ui.separator();
                 ui.horizontal(|ui| {
                     if ui.button("保存").clicked() {
@@ -347,7 +363,7 @@ impl CodexSwitchApp {
         }
     }
 
-    fn delete_schedule_group(&mut self, group_id: &str) {
+    pub(super) fn delete_schedule_group(&mut self, group_id: &str) {
         match self
             .runtime
             .block_on(self.state.store.delete_schedule_group(group_id))
@@ -566,11 +582,20 @@ fn schedule_route_section_form(
     editor: &mut ScheduleGroupEditor,
     groups: &[ScheduleGroup],
     upstreams: &[Upstream],
+    delete_confirmation: &mut Option<DeleteConfirmation>,
+    owner: ScheduleRuleOwner,
 ) {
     if editor.group.mode != ScheduleMode::ModelMapping {
         return;
     }
-    schedule_route_rules_form(ui, editor, groups, upstreams);
+    schedule_route_rules_form(
+        ui,
+        editor,
+        groups,
+        upstreams,
+        delete_confirmation,
+        owner,
+    );
 }
 
 fn schedule_route_rules_form(
@@ -578,6 +603,8 @@ fn schedule_route_rules_form(
     editor: &mut ScheduleGroupEditor,
     groups: &[ScheduleGroup],
     upstreams: &[Upstream],
+    delete_confirmation: &mut Option<DeleteConfirmation>,
+    owner: ScheduleRuleOwner,
 ) {
     ui.separator();
     ui.horizontal(|ui| {
@@ -598,7 +625,6 @@ fn schedule_route_rules_form(
         ui.label("当前调度组没有模型路由规则");
         return;
     }
-    let mut deleted = BTreeSet::new();
     egui::Grid::new(format!("route_rules_{}", editor.group.id))
         .striped(true)
         .num_columns(8)
@@ -629,14 +655,23 @@ fn schedule_route_rules_form(
                 ui.text_edit_singleline(target_model);
                 ui.add(egui::DragValue::new(&mut rule.priority).speed(1));
                 if ui.button("删除").clicked() {
-                    deleted.insert(rule.id.clone());
+                    let name = if rule.name.trim().is_empty() {
+                        rule.pattern.as_str()
+                    } else {
+                        rule.name.as_str()
+                    };
+                    *delete_confirmation = Some(DeleteConfirmation {
+                        title: "删除调度规则".to_string(),
+                        message: format!("确认删除调度规则 \"{name}\"? 此操作无法撤销."),
+                        action: DeleteAction::ScheduleRouteRule {
+                            owner,
+                            id: rule.id.clone(),
+                        },
+                    });
                 }
                 ui.end_row();
             }
         });
-    editor
-        .route_rules
-        .retain(|rule| !deleted.contains(&rule.id));
 }
 
 fn route_target_kind_combo(ui: &mut egui::Ui, rule: &mut ScheduleRouteRule) {

@@ -1,4 +1,4 @@
-use super::CodexSwitchApp;
+use super::{CodexSwitchApp, DeleteAction};
 use crate::core::models::{
     BalanceSnapshot, CacheKeepaliveMode, UpstreamCacheKeepaliveSettings, UpstreamKind, WireApi,
     UpstreamBalanceAlertSettings,
@@ -74,7 +74,7 @@ impl CodexSwitchApp {
         let cache_settings = self.cache_keepalive_settings.clone();
         let balance_alert_settings = self.balance_alert_settings.clone();
         let mut changed = Vec::new();
-        let mut deleted = Vec::new();
+        let mut delete_requested = None;
         let mut edit = None;
         let mut query_balance = None;
         egui::Grid::new("upstreams_grid")
@@ -136,7 +136,7 @@ impl CodexSwitchApp {
                             edit = Some(upstream.clone());
                         }
                         if ui.button("删除").clicked() {
-                            deleted.push(upstream.id.clone());
+                            delete_requested = Some(upstream.clone());
                         }
                     });
                     ui.end_row();
@@ -148,7 +148,14 @@ impl CodexSwitchApp {
         if let Some(id) = query_balance {
             self.query_selected_balance(&id);
         }
-        let should_refresh = !deleted.is_empty() || !changed.is_empty();
+        if let Some(upstream) = delete_requested {
+            self.request_delete(
+                DeleteAction::Upstream(upstream.id),
+                "删除上游",
+                format!("确认删除上游 \"{}\"? 此操作无法撤销.", upstream.name),
+            );
+        }
+        let should_refresh = !changed.is_empty();
         for (id, enabled) in changed {
             if let Err(err) = self
                 .runtime
@@ -157,15 +164,20 @@ impl CodexSwitchApp {
                 self.status = format!("更新启用状态失败: {err}");
             }
         }
-        for id in deleted {
-            if let Err(err) = self.runtime.block_on(self.state.store.delete_upstream(&id)) {
-                self.status = format!("删除失败: {err}");
-            }
-        }
         if should_refresh {
             self.refresh_all();
         }
         self.show_upstream_editor(ui.ctx());
+    }
+
+    pub(super) fn delete_upstream(&mut self, id: &str) {
+        match self.runtime.block_on(self.state.store.delete_upstream(id)) {
+            Ok(()) => {
+                self.status = "上游已删除".to_string();
+                self.refresh_all();
+            }
+            Err(err) => self.status = format!("删除上游失败: {err}"),
+        }
     }
 }
 
