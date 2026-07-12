@@ -104,7 +104,9 @@ mod macos {
     use std::{path::Path, process::Command};
 
     #[derive(Debug, Default)]
-    pub struct BackgroundReopenMonitor;
+    pub struct BackgroundReopenMonitor {
+        _private: (),
+    }
 
     impl BackgroundReopenMonitor {
         pub fn mark_hidden(&mut self) {}
@@ -119,10 +121,6 @@ mod macos {
     pub fn hide_from_dock() {}
 
     pub fn show_in_dock() {}
-
-    pub fn app_is_active() -> bool {
-        false
-    }
 
     pub fn open_file_location(path: impl AsRef<Path>) -> anyhow::Result<()> {
         let path = path.as_ref();

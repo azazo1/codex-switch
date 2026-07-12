@@ -36,7 +36,7 @@ pub fn install_fonts(ctx: &Context) {
 }
 
 fn scale_text_styles(ctx: &Context) {
-    ctx.style_mut(|style| {
+    ctx.all_styles_mut(|style| {
         for font_id in style.text_styles.values_mut() {
             font_id.size *= UI_FONT_SCALE;
         }

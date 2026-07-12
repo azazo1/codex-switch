@@ -130,7 +130,7 @@ impl AppState {
     }
 }
 
-fn data_dir() -> anyhow::Result<PathBuf> {
+pub(crate) fn data_dir() -> anyhow::Result<PathBuf> {
     let dirs = ProjectDirs::from("", "", "codex-switch")
         .context("failed to resolve system data directory")?;
     Ok(dirs.data_dir().to_path_buf())

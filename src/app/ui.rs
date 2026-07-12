@@ -1033,14 +1033,18 @@ impl CodexSwitchApp {
 }
 
 impl eframe::App for CodexSwitchApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    // Tray 命令必须在 logic 中处理, 因为隐藏窗口不会调用 ui.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.ensure_tray(ctx);
         self.handle_close_request(ctx);
         self.handle_dock_reopen(ctx);
         self.maybe_auto_refresh(ctx);
         self.drain_task_events(ctx);
+    }
 
-        egui::TopBottomPanel::top("top").show(ctx, |ui| {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        egui::Panel::top("top").show(ui, |ui| {
             ui.horizontal(|ui| {
                 tab_button(ui, &mut self.tab, Tab::Dashboard, "仪表盘");
                 tab_button(ui, &mut self.tab, Tab::Upstreams, "上游");
@@ -1068,15 +1072,15 @@ impl eframe::App for CodexSwitchApp {
                 });
             });
         });
-        self.exit_confirm_window(ctx);
+        self.exit_confirm_window(&ctx);
 
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+        egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label(&self.status);
             });
         });
 
-        egui::CentralPanel::default().show(ctx, |ui| match self.tab {
+        egui::CentralPanel::default().show(ui, |ui| match self.tab {
             Tab::Dashboard => self.dashboard_ui(ui),
             Tab::Upstreams => self.upstreams_ui(ui),
             Tab::Scheduler => self.scheduler_ui(ui),
@@ -1084,7 +1088,7 @@ impl eframe::App for CodexSwitchApp {
             Tab::ActiveConnections => self.active_connections_ui(ui),
             Tab::Logs => self.logs_ui(ui),
         });
-        self.delete_confirmation_window(ctx);
+        self.delete_confirmation_window(&ctx);
     }
 }
 
