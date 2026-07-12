@@ -25,11 +25,15 @@
 缓存保持只会在这些条件都满足时生效:
 
 - 上游类型是 `Relay API Key`.
+- endpoint 不是 Images.
 - 请求成功返回.
+- 请求中存在模型名.
 - 返回 usage 中存在 `cached_tokens`.
 - `cached_tokens` 大于等于该上游的 `最小缓存 tokens`.
+- `cached_tokens` 小于等于该上游的 `最大缓存 tokens`.
 - 请求体中能找到 `prompt_cache_key`, `conversation_id`, 或 `session_id`.
 - 上游配置里已经启用缓存保持.
+- 模型价格缓存里能找到该模型. 当前 `smart` 和 `always` 都有这个限制.
 
 当前不支持 `Codex OAuth` 上游. 这是有意限制, 因为该上游对 cache key 和保活请求字段的兼容性不可稳定证明.
 
@@ -81,6 +85,8 @@ upstream_id + model + endpoint + prompt_cache_key/conversation_id/session_id + c
 
 只要满足基本条件, 就按间隔尝试保活. 它适合你已经知道某个上游的缓存命中非常划算, 并且希望优先降低下一次真实请求延迟的场景.
 
+当前实现会在判断模式前读取模型价格, 所以 `always` 也需要价格缓存. 缺少价格时不会发送保活请求, 只会延后到下一个间隔再次判断. 这是当前实现限制, 不是 `always` 的理想语义.
+
 不建议一开始就用 `always`, 因为短上下文或低价模型可能会反向增加费用.
 
 ### off
@@ -111,7 +117,7 @@ upstream_id + model + endpoint + prompt_cache_key/conversation_id/session_id + c
 
 ## 24h retention
 
-`优先 24h retention` 会在支持的 OpenAI 模型上尝试添加:
+`优先 24h retention` 只会在内部 Responses 保活请求中, 对支持的 OpenAI 模型尝试添加:
 
 ```json
 {
@@ -119,13 +125,15 @@ upstream_id + model + endpoint + prompt_cache_key/conversation_id/session_id + c
 }
 ```
 
-这通常比频繁保活更自然. 但并不是所有 OpenAI 兼容中转都接受这个字段. 如果某个上游因为未知字段报错, 关闭该选项即可.
+这个选项不会修改普通用户请求, 也不会注入 Chat Completions 保活请求. 并不是所有 OpenAI 兼容中转都接受这个字段. 如果内部保活因为未知字段报错, 关闭该选项即可.
 
 当前只对看起来支持 extended retention 的 OpenAI 模型启用, 例如 `gpt-5*` 和 `gpt-4.1`.
 
 ## 如何确认是否生效
 
 打开顶部 `缓存保持` 页面可以看到当前运行时会话. 每个会话会显示为一个 tab, tab 支持横向滚动. 详情里可以看到上游, 模型, endpoint, cached tokens, 保活次数, 最近活动时间, 下次保活时间, 停用原因和 session key 摘要.
+
+停用会话只会在页面中短暂保留约 `5` 秒, 随后自动移除. 如果需要诊断停用原因, 同时查看请求日志和 tracing 日志.
 
 如果某个会话不想继续保持, 点击 `删除会话` 可以从内存中移除它. 删除只影响当前运行时会话, 不会删除上游配置, 请求日志, 也不会影响后续真实请求重新登记同一会话.
 
@@ -144,6 +152,15 @@ upstream_id + model + endpoint + prompt_cache_key/conversation_id/session_id + c
 如果没有内部保活日志, 通常说明还没有满足保活条件, 或者 smart 认为不划算.
 
 后台扫描每 `15` 秒检查一次到期会话. 如果页面显示 `即将执行`, 通常表示会话已经到期, 正在等待下一轮扫描或保活请求返回. 已停用会话的下次保活会显示 `已停用`.
+
+## 会话生命周期
+
+- 同一个 session key 的新真实请求再次满足全部登记条件时, 会更新保存的请求体和计时, 并把保活次数归零.
+- 超过单个上游的最大会话数时, 会移除最久未活动的会话.
+- 保活间隔从最近真实请求或最近成功保活重新计算.
+- 最大空闲时间只按最近一次满足登记条件的真实请求计算, 成功保活不会无限延长会话寿命.
+- 关闭启用开关或把模式改为 `off` 后, 该上游现有会话会被停用.
+- 应用重启会清空全部运行时会话.
 
 ## 推荐配置
 
@@ -196,10 +213,11 @@ upstream_id + model + endpoint + prompt_cache_key/conversation_id/session_id + c
 - `cached_tokens` 小于最小缓存 tokens.
 - `cached_tokens` 大于最大缓存 tokens.
 - 请求里没有 `prompt_cache_key`, `conversation_id`, 或 `session_id`.
-- 模型价格缓存缺失, 而模式是 `smart`.
+- 请求是 Images endpoint, 或请求中没有模型名.
+- 模型价格缓存缺失. 当前 `smart` 和 `always` 都需要价格.
 - smart 估算后认为保活不省钱.
 - 请求不是 `Relay API Key` 上游.
-- 上游返回过错误, 该会话被自动停用.
+- 内部保活请求失败或返回错误, 该会话被自动停用.
 
 ### 为什么短请求不保活
 
@@ -207,7 +225,9 @@ upstream_id + model + endpoint + prompt_cache_key/conversation_id/session_id + c
 
 ### 会不会跨用户共用缓存
 
-不会. 会话 key 包含上游, 模型, endpoint, 会话标识和可缓存前缀指纹. 不同上游和不同会话会分开处理.
+不会自动按用户身份隔离. 会话 key 包含上游, 模型, endpoint, 调用方提供的会话标识和可缓存前缀指纹, 但不包含登录用户身份.
+
+如果两个用户复用相同会话标识且可缓存前缀相同, 它们可能落入同一个运行时会话. 调用方必须保证 `prompt_cache_key`, `conversation_id` 或 `session_id` 按用户和会话唯一.
 
 ### 会不会把 prompt 保存到数据库
 
