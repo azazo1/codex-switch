@@ -51,70 +51,67 @@ impl CodexSwitchApp {
         let mut delete_requested = None;
         let mut edit = None;
         let mut query_balance = None;
-        egui::Grid::new("upstreams_grid")
-            .striped(true)
-            .num_columns(8)
-            .spacing([16.0, 8.0])
+        egui::ScrollArea::vertical()
+            .id_salt("upstreams_list")
+            .max_height(ui.available_height())
             .show(ui, |ui| {
-                ui.strong("启用");
-                ui.strong("名称");
-                ui.strong("Base URL");
-                ui.strong("代理");
-                ui.strong("缓存保持");
-                ui.strong("余额");
-                ui.strong("余额提醒");
-                ui.strong("操作");
-                ui.end_row();
+                egui::Grid::new("upstreams_grid")
+                    .striped(true)
+                    .num_columns(7)
+                    .spacing([16.0, 8.0])
+                    .show(ui, |ui| {
+                        ui.strong("启用");
+                        ui.strong("名称");
+                        ui.strong("Base URL");
+                        ui.strong("缓存保持");
+                        ui.strong("余额");
+                        ui.strong("余额提醒");
+                        ui.strong("操作");
+                        ui.end_row();
 
-                for upstream in &upstreams {
-                    let mut enabled = upstream.enabled;
-                    if ui.checkbox(&mut enabled, "").changed() {
-                        changed.push((upstream.id.clone(), enabled));
-                    }
-                    ui.label(&upstream.name)
-                        .on_hover_text(format!("id: {}", upstream.id));
-                    ui.label(upstream.base_url.as_str());
-                    ui.label(
-                        upstream
-                            .proxy_url
-                            .as_deref()
-                            .filter(|value| !value.trim().is_empty())
-                            .unwrap_or("系统代理"),
-                    );
-                    cache_keepalive_label(ui, cache_settings.get(&upstream.id));
-                    if upstream.kind == UpstreamKind::RelayApiKey {
-                        balance_snapshot_label(
-                            ui,
-                            balance_snapshot_for(&balance_snapshots, &upstream.id),
-                        );
-                    } else {
-                        ui.label("-");
-                    }
-                    if upstream.kind == UpstreamKind::RelayApiKey {
-                        balance_alert_label(ui, balance_alert_settings.get(&upstream.id));
-                    } else {
-                        ui.label("-");
-                    }
-                    ui.horizontal(|ui| {
-                        if upstream.kind == UpstreamKind::RelayApiKey
-                            && ui
-                                .add_enabled(
-                                    !self.balance_query_pending_ids.contains(&upstream.id),
-                                    egui::Button::new("查余额"),
-                                )
-                                .clicked()
-                        {
-                            query_balance = Some(upstream.id.clone());
-                        }
-                        if ui.button("编辑").clicked() {
-                            edit = Some(upstream.clone());
-                        }
-                        if ui.button("删除").clicked() {
-                            delete_requested = Some(upstream.clone());
+                        for upstream in &upstreams {
+                            let mut enabled = upstream.enabled;
+                            if ui.checkbox(&mut enabled, "").changed() {
+                                changed.push((upstream.id.clone(), enabled));
+                            }
+                            ui.label(&upstream.name)
+                                .on_hover_text(format!("id: {}", upstream.id));
+                            ui.label(upstream.base_url.as_str());
+                            cache_keepalive_label(ui, cache_settings.get(&upstream.id));
+                            if upstream.kind == UpstreamKind::RelayApiKey {
+                                balance_snapshot_label(
+                                    ui,
+                                    balance_snapshot_for(&balance_snapshots, &upstream.id),
+                                );
+                            } else {
+                                ui.label("-");
+                            }
+                            if upstream.kind == UpstreamKind::RelayApiKey {
+                                balance_alert_label(ui, balance_alert_settings.get(&upstream.id));
+                            } else {
+                                ui.label("-");
+                            }
+                            ui.horizontal(|ui| {
+                                if upstream.kind == UpstreamKind::RelayApiKey
+                                    && ui
+                                        .add_enabled(
+                                            !self.balance_query_pending_ids.contains(&upstream.id),
+                                            egui::Button::new("查余额"),
+                                        )
+                                        .clicked()
+                                {
+                                    query_balance = Some(upstream.id.clone());
+                                }
+                                if ui.button("编辑").clicked() {
+                                    edit = Some(upstream.clone());
+                                }
+                                if ui.button("删除").clicked() {
+                                    delete_requested = Some(upstream.clone());
+                                }
+                            });
+                            ui.end_row();
                         }
                     });
-                    ui.end_row();
-                }
             });
         if let Some(upstream) = edit {
             self.open_upstream_editor(upstream);

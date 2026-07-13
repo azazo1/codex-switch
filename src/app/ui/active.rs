@@ -20,6 +20,8 @@ impl CodexSwitchApp {
         let tail_width = live_tail_width(ui.available_width());
         let mut terminate_request_id = None;
         egui::ScrollArea::vertical()
+            .id_salt("active_connections")
+            .max_height(ui.available_height())
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 egui::Grid::new("active_connections_grid")

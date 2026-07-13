@@ -11,6 +11,13 @@ const COPY_FEEDBACK_DURATION: Duration = Duration::from_secs(2);
 
 impl CodexSwitchApp {
     pub(super) fn dashboard_ui(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::vertical()
+            .id_salt("dashboard")
+            .max_height(ui.available_height())
+            .show(ui, |ui| self.dashboard_content_ui(ui));
+    }
+
+    fn dashboard_content_ui(&mut self, ui: &mut egui::Ui) {
         ui.heading("Codex Switch");
         ui.horizontal(|ui| {
             ui.label("监听地址");
