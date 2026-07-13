@@ -34,7 +34,7 @@ pub(super) async fn apply_headers(
                 )
                 .header("openai-beta", "codex-1")
                 .header("originator", "Codex Desktop")
-                .header("Version", "0.125.0")
+                .header("Version", "0.144.2")
                 .header("Session_Id", uuid::Uuid::new_v4().to_string())
                 .header("Accept", "application/json");
         }
