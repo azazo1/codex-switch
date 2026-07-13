@@ -4,6 +4,11 @@ use anyhow::Context;
 use chrono::{DateTime, Utc};
 use sqlx::Row;
 
+pub(crate) struct SavedOAuthAccount {
+    pub upstream: Upstream,
+    pub created: bool,
+}
+
 impl Store {
     pub async fn list_upstreams(&self) -> anyhow::Result<Vec<Upstream>> {
         let rows = sqlx::query("SELECT * FROM upstreams ORDER BY priority DESC, created_at ASC")
@@ -73,6 +78,76 @@ impl Store {
         .execute(self.pool())
         .await?;
         Ok(())
+    }
+
+    pub(crate) async fn save_oauth_account(
+        &self,
+        candidate: &Upstream,
+        access_token: &str,
+        refresh_token: &str,
+        id_token: Option<&str>,
+    ) -> anyhow::Result<SavedOAuthAccount> {
+        let account_id = candidate
+            .chatgpt_account_id
+            .as_deref()
+            .context("oauth upstream is missing chatgpt_account_id")?;
+        let mut tx = self.pool().begin().await?;
+        let existing = sqlx::query(
+            "SELECT * FROM upstreams
+             WHERE kind = 'codex_oauth' AND chatgpt_account_id = ?1
+             ORDER BY created_at ASC, id ASC
+             LIMIT 1",
+        )
+        .bind(account_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .map(row_to_upstream)
+        .transpose()?;
+        let created = existing.is_none();
+        let mut upstream = existing.unwrap_or_else(|| candidate.clone());
+        if !created {
+            if candidate.email.is_some() {
+                upstream.email.clone_from(&candidate.email);
+            }
+            if candidate.plan_type.is_some() {
+                upstream.plan_type.clone_from(&candidate.plan_type);
+            }
+            upstream.token_expires_at = candidate.token_expires_at;
+            upstream.updated_at = Utc::now();
+        }
+
+        if created {
+            insert_upstream(&mut tx, &upstream).await?;
+        } else {
+            sqlx::query(
+                "UPDATE upstreams SET
+                    email = ?2,
+                    plan_type = ?3,
+                    token_expires_at = ?4,
+                    updated_at = ?5
+                 WHERE id = ?1",
+            )
+            .bind(&upstream.id)
+            .bind(&upstream.email)
+            .bind(&upstream.plan_type)
+            .bind(upstream.token_expires_at)
+            .bind(upstream.updated_at.to_rfc3339())
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        save_credential_in_tx(&mut tx, &upstream.id, "access_token", access_token).await?;
+        save_credential_in_tx(&mut tx, &upstream.id, "refresh_token", refresh_token).await?;
+        if let Some(id_token) = id_token {
+            save_credential_in_tx(&mut tx, &upstream.id, "id_token", id_token).await?;
+        } else {
+            sqlx::query("DELETE FROM credentials WHERE upstream_id = ?1 AND name = 'id_token'")
+                .bind(&upstream.id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(SavedOAuthAccount { upstream, created })
     }
 
     pub async fn set_upstream_enabled(&self, id: &str, enabled: bool) -> anyhow::Result<()> {
@@ -149,6 +224,61 @@ impl Store {
             .await?;
         Ok(row.map(|r| r.get::<String, _>("value")))
     }
+}
+
+async fn insert_upstream(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    upstream: &Upstream,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO upstreams (
+            id, kind, name, base_url, wire_api, supports_compact, enabled, priority, weight,
+            proxy_url, balance_provider, chatgpt_account_id, email, plan_type, token_expires_at,
+            created_at, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+    )
+    .bind(&upstream.id)
+    .bind(upstream.kind.as_str())
+    .bind(&upstream.name)
+    .bind(&upstream.base_url)
+    .bind(upstream.wire_api.as_str())
+    .bind(i64::from(upstream.supports_compact))
+    .bind(i64::from(upstream.enabled))
+    .bind(upstream.priority)
+    .bind(upstream.weight)
+    .bind(&upstream.proxy_url)
+    .bind(upstream.balance_provider.as_str())
+    .bind(&upstream.chatgpt_account_id)
+    .bind(&upstream.email)
+    .bind(&upstream.plan_type)
+    .bind(upstream.token_expires_at)
+    .bind(upstream.created_at.to_rfc3339())
+    .bind(upstream.updated_at.to_rfc3339())
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn save_credential_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    upstream_id: &str,
+    name: &str,
+    value: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO credentials (upstream_id, name, value, updated_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(upstream_id, name) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at",
+    )
+    .bind(upstream_id)
+    .bind(name)
+    .bind(value)
+    .bind(Utc::now().to_rfc3339())
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 pub(super) fn row_to_upstream(row: sqlx::sqlite::SqliteRow) -> anyhow::Result<Upstream> {

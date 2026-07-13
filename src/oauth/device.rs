@@ -1,6 +1,4 @@
-use crate::app::AppState;
-use crate::core::models::Upstream;
-use crate::oauth::token::{OAuthTokenResponse, exchange_code, parse_identity};
+use crate::oauth::token::{OAuthTokenResponse, exchange_code};
 use anyhow::{Context, anyhow};
 use serde::Deserialize;
 
@@ -19,6 +17,14 @@ pub struct DeviceFlow {
     pub expires_in: u64,
 }
 
+#[derive(Debug, Clone)]
+pub enum DevicePollOutcome {
+    Pending,
+    Authorized(OAuthTokenResponse),
+    Expired,
+    RetryableError(String),
+}
+
 #[derive(Debug, Deserialize)]
 struct DeviceCodeResponse {
     device_auth_id: String,
@@ -34,9 +40,16 @@ struct DevicePollSuccess {
 }
 
 pub async fn start_device_flow(http: &reqwest::Client) -> anyhow::Result<DeviceFlow> {
+    start_device_flow_at(http, DEVICE_AUTH_USERCODE_URL).await
+}
+
+async fn start_device_flow_at(
+    http: &reqwest::Client,
+    user_code_url: &str,
+) -> anyhow::Result<DeviceFlow> {
     tracing::info!("starting codex oauth device flow");
     let response = http
-        .post(DEVICE_AUTH_USERCODE_URL)
+        .post(user_code_url)
         .header("Content-Type", "application/json")
         .header("User-Agent", CODEX_USER_AGENT)
         .json(&serde_json::json!({ "client_id": CODEX_CLIENT_ID }))
@@ -59,12 +72,19 @@ pub async fn start_device_flow(http: &reqwest::Client) -> anyhow::Result<DeviceF
 }
 
 pub async fn poll_device_flow(
-    state: &AppState,
+    http: &reqwest::Client,
     flow: &DeviceFlow,
-) -> anyhow::Result<Option<Upstream>> {
-    let response = state
-        .http
-        .post(DEVICE_AUTH_TOKEN_URL)
+) -> anyhow::Result<DevicePollOutcome> {
+    poll_device_flow_at(http, flow, DEVICE_AUTH_TOKEN_URL).await
+}
+
+async fn poll_device_flow_at(
+    http: &reqwest::Client,
+    flow: &DeviceFlow,
+    token_url: &str,
+) -> anyhow::Result<DevicePollOutcome> {
+    let response = match http
+        .post(token_url)
         .header("Content-Type", "application/json")
         .header("User-Agent", CODEX_USER_AGENT)
         .json(&serde_json::json!({
@@ -73,13 +93,25 @@ pub async fn poll_device_flow(
         }))
         .send()
         .await
-        .context("failed to poll device flow")?;
+    {
+        Ok(response) => response,
+        Err(err) => {
+            return Ok(DevicePollOutcome::RetryableError(format!(
+                "failed to poll device flow: {err}"
+            )));
+        }
+    };
     let status = response.status();
     if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::NOT_FOUND {
-        return Ok(None);
+        return Ok(DevicePollOutcome::Pending);
     }
     if status == reqwest::StatusCode::GONE {
-        return Err(anyhow!("device code expired"));
+        return Ok(DevicePollOutcome::Expired);
+    }
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
+        return Ok(DevicePollOutcome::RetryableError(format!(
+            "device poll temporarily failed: {status}"
+        )));
     }
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
@@ -87,53 +119,12 @@ pub async fn poll_device_flow(
     }
     let success: DevicePollSuccess = response.json().await.context("invalid poll response")?;
     let tokens = exchange_code(
-        &state.http,
+        http,
         &success.authorization_code,
         &success.code_verifier,
     )
     .await?;
-    store_oauth_account(state, tokens).await.map(Some)
-}
-
-async fn store_oauth_account(
-    state: &AppState,
-    tokens: OAuthTokenResponse,
-) -> anyhow::Result<Upstream> {
-    let identity = parse_identity(tokens.id_token.as_deref());
-    let account_id = identity
-        .chatgpt_account_id
-        .clone()
-        .ok_or_else(|| anyhow!("oauth token does not contain chatgpt_account_id"))?;
-    let name = identity
-        .email
-        .clone()
-        .unwrap_or_else(|| format!("ChatGPT {account_id}"));
-    let expires_at = Some(chrono::Utc::now().timestamp() + tokens.expires_in.unwrap_or(3600));
-    let upstream = Upstream::new_codex_oauth(
-        name,
-        account_id,
-        identity.email,
-        identity.plan_type,
-        expires_at,
-    );
-    state.store.save_upstream(&upstream).await?;
-    state
-        .credentials
-        .put(&upstream.id, "access_token", &tokens.access_token)
-        .await?;
-    if let Some(refresh_token) = tokens.refresh_token {
-        state
-            .credentials
-            .put(&upstream.id, "refresh_token", &refresh_token)
-            .await?;
-    }
-    if let Some(id_token) = tokens.id_token {
-        state
-            .credentials
-            .put(&upstream.id, "id_token", &id_token)
-            .await?;
-    }
-    Ok(upstream)
+    Ok(DevicePollOutcome::Authorized(tokens))
 }
 
 fn parse_interval(value: Option<&serde_json::Value>) -> u64 {
@@ -141,5 +132,62 @@ fn parse_interval(value: Option<&serde_json::Value>) -> u64 {
         Some(serde_json::Value::Number(n)) => n.as_u64().unwrap_or(5),
         Some(serde_json::Value::String(s)) => s.parse().unwrap_or(5),
         _ => 5,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{Json, Router, http::StatusCode, routing::post};
+
+    #[tokio::test]
+    async fn maps_device_start_and_poll_states() {
+        let app = Router::new()
+            .route(
+                "/start",
+                post(|| async {
+                    Json(serde_json::json!({
+                        "device_auth_id": "device-one",
+                        "user_code": "CODE-ONE",
+                        "interval": "7",
+                        "expires_in": 120
+                    }))
+                }),
+            )
+            .route("/pending", post(|| async { StatusCode::FORBIDDEN }))
+            .route("/expired", post(|| async { StatusCode::GONE }))
+            .route("/retry", post(|| async { StatusCode::SERVICE_UNAVAILABLE }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let http = reqwest::Client::new();
+        let flow = start_device_flow_at(&http, &format!("http://{address}/start"))
+            .await
+            .unwrap();
+        assert_eq!(flow.device_code, "device-one");
+        assert_eq!(flow.user_code, "CODE-ONE");
+        assert_eq!(flow.interval, 7);
+        assert_eq!(flow.expires_in, 120);
+        assert!(matches!(
+            poll_device_flow_at(&http, &flow, &format!("http://{address}/pending"))
+                .await
+                .unwrap(),
+            DevicePollOutcome::Pending
+        ));
+        assert!(matches!(
+            poll_device_flow_at(&http, &flow, &format!("http://{address}/expired"))
+                .await
+                .unwrap(),
+            DevicePollOutcome::Expired
+        ));
+        assert!(matches!(
+            poll_device_flow_at(&http, &flow, &format!("http://{address}/retry"))
+                .await
+                .unwrap(),
+            DevicePollOutcome::RetryableError(_)
+        ));
+        server.abort();
     }
 }

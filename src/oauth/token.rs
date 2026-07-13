@@ -135,6 +135,13 @@ pub fn parse_identity(id_token: Option<&str>) -> TokenIdentity {
     }
 }
 
+pub fn token_expiry(token: &str) -> Option<i64> {
+    let payload = token.split('.').nth(1)?;
+    let bytes = URL_SAFE_NO_PAD.decode(payload).ok()?;
+    let claims = serde_json::from_slice::<serde_json::Value>(&bytes).ok()?;
+    claims.get("exp")?.as_i64()
+}
+
 async fn parse_token_response(response: reqwest::Response) -> anyhow::Result<OAuthTokenResponse> {
     let status = response.status();
     if !status.is_success() {

@@ -798,9 +798,11 @@ mod tests {
             reqwest::Client::new(),
             events.clone(),
         );
+        let oauth_accounts = crate::oauth::OAuthAccountService::new(store.clone());
         AppState {
             store,
             credentials,
+            oauth_accounts,
             http: reqwest::Client::new(),
             events,
             scheduler: Default::default(),

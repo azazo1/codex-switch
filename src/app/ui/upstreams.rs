@@ -40,33 +40,7 @@ impl CodexSwitchApp {
             }
         });
         ui.separator();
-        ui.heading("Codex OAuth");
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(!self.oauth_start_pending, egui::Button::new("开始登录"))
-                .clicked()
-            {
-                self.start_oauth();
-            }
-            if ui
-                .add_enabled(
-                    self.oauth_device.is_some() && !self.oauth_poll_pending,
-                    egui::Button::new("轮询授权"),
-                )
-                .clicked()
-            {
-                self.poll_oauth();
-            }
-        });
-        if let Some(device) = &self.oauth_device {
-            ui.label(format!("访问: {}", device.verification_uri));
-            ui.label(format!("用户码: {}", device.user_code));
-            ui.label(format!(
-                "轮询间隔: {} 秒, 有效期: {} 秒",
-                device.interval, device.expires_in
-            ));
-        }
-        self.oauth_quota_ui(ui);
+        self.oauth_accounts_ui(ui);
         ui.separator();
         ui.heading("上游列表");
         let upstreams = self.upstreams.clone();

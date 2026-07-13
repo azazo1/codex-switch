@@ -2,6 +2,7 @@ use crate::app::http;
 use crate::cache_keepalive::CacheKeepaliveRuntime;
 use crate::core::models::Upstream;
 use crate::live::LiveRequestStore;
+use crate::oauth::OAuthAccountService;
 use crate::scheduler::SchedulerRuntime;
 use crate::storage::{Store, credentials::CredentialStore};
 use anyhow::Context;
@@ -18,6 +19,7 @@ type RepaintRequester = Arc<dyn Fn() + Send + Sync>;
 pub struct AppState {
     pub store: Store,
     pub credentials: CredentialStore,
+    pub oauth_accounts: OAuthAccountService,
     pub http: reqwest::Client,
     pub events: AppEvents,
     pub scheduler: SchedulerRuntime,
@@ -100,6 +102,7 @@ impl AppState {
         tracing::info!(path = %db_path.display(), "opening sqlite database");
         let store = Store::open(db_path).await?;
         let credentials = CredentialStore::new(store.clone()).await?;
+        let oauth_accounts = OAuthAccountService::new(store.clone());
         let http = http::build_client(None)?;
         let events = AppEvents::default();
         let cache_keepalive = CacheKeepaliveRuntime::new(
@@ -111,6 +114,7 @@ impl AppState {
         let state = Self {
             store,
             credentials,
+            oauth_accounts,
             http,
             events,
             scheduler: SchedulerRuntime::default(),

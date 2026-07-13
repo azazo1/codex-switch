@@ -8,7 +8,6 @@ use crate::core::models::{
     Upstream, UpstreamBalanceAlertSettings, UpstreamCacheKeepaliveSettings, WireApi,
 };
 use crate::live::LiveRequestSnapshot;
-use crate::oauth;
 use crate::pricing;
 use crate::proxy::{self, ServerHandle};
 use crate::quota as quota_api;
@@ -35,6 +34,7 @@ mod cache_keepalive;
 mod dashboard;
 mod data;
 mod logs;
+mod oauth;
 mod quota;
 mod scheduler;
 mod token_amount;
@@ -324,8 +324,22 @@ impl LogDateTimeFilter {
 }
 
 enum UiTaskEvent {
-    OAuthStarted(anyhow::Result<oauth::DeviceFlow>),
-    OAuthPolled(anyhow::Result<Option<Upstream>>),
+    OAuthStarted {
+        task_id: String,
+        result: anyhow::Result<crate::oauth::DeviceFlow>,
+    },
+    OAuthPolled {
+        task_id: String,
+        result: anyhow::Result<oauth::OAuthPollTaskResult>,
+    },
+    OAuthImportProgress {
+        batch_id: String,
+        progress: crate::oauth::OAuthImportProgress,
+    },
+    OAuthImportFinished {
+        batch_id: String,
+        result: crate::oauth::OAuthImportBatchResult,
+    },
     QuotaQueried(anyhow::Result<()>),
     BalanceQueried {
         upstream_id: String,
@@ -399,8 +413,7 @@ pub struct CodexSwitchApp {
     price_cache_age_seconds: Option<i64>,
     database_info: DatabaseInfo,
     token_display_mode: tokens::TokenDisplayMode,
-    oauth_start_pending: bool,
-    oauth_poll_pending: bool,
+    oauth_ui: oauth::OAuthUiState,
     quota_query_pending: bool,
     balance_query_pending_ids: BTreeSet<String>,
     relay_name: String,
@@ -409,7 +422,6 @@ pub struct CodexSwitchApp {
     relay_api_key: String,
     relay_wire_api: WireApi,
     relay_supports_compact: bool,
-    oauth_device: Option<oauth::DeviceFlow>,
     quota_snapshots: Vec<(String, Option<QuotaSnapshot>)>,
     balance_snapshots: Vec<(String, Option<BalanceSnapshot>)>,
     upstream_editor: Option<UpstreamEditor>,
@@ -498,8 +510,7 @@ impl CodexSwitchApp {
             price_cache_age_seconds: None,
             database_info: DatabaseInfo::default(),
             token_display_mode: tokens::TokenDisplayMode::Human,
-            oauth_start_pending: false,
-            oauth_poll_pending: false,
+            oauth_ui: oauth::OAuthUiState::default(),
             quota_query_pending: false,
             balance_query_pending_ids: BTreeSet::new(),
             relay_name: String::new(),
@@ -508,7 +519,6 @@ impl CodexSwitchApp {
             relay_api_key: String::new(),
             relay_wire_api: WireApi::Responses,
             relay_supports_compact: true,
-            oauth_device: None,
             quota_snapshots: Vec::new(),
             balance_snapshots: Vec::new(),
             upstream_editor: None,
@@ -519,6 +529,7 @@ impl CodexSwitchApp {
     }
 
     fn maybe_auto_refresh(&mut self, ctx: &egui::Context) {
+        self.drive_oauth_tasks();
         if self.window_hidden_to_tray {
             ctx.request_repaint_after(HIDDEN_REPAINT_INTERVAL);
             return;
@@ -660,32 +671,17 @@ impl CodexSwitchApp {
     fn drain_task_events(&mut self, ctx: &egui::Context) {
         while let Ok(event) = self.task_rx.try_recv() {
             match event {
-                UiTaskEvent::OAuthStarted(result) => {
-                    self.oauth_start_pending = false;
-                    match result {
-                        Ok(device) => {
-                            self.status = format!(
-                                "打开 {} 并输入 {}",
-                                device.verification_uri, device.user_code
-                            );
-                            self.oauth_device = Some(device);
-                        }
-                        Err(err) => self.status = format!("OAuth 启动失败: {err}"),
-                    }
+                UiTaskEvent::OAuthStarted { task_id, result } => {
+                    self.handle_oauth_started(task_id, result);
                 }
-                UiTaskEvent::OAuthPolled(result) => {
-                    self.oauth_poll_pending = false;
-                    match result {
-                        Ok(Some(upstream)) => {
-                            self.status = format!("OAuth 账号已添加: {}", upstream.name);
-                            self.oauth_device = None;
-                            self.refresh_all_if_visible();
-                        }
-                        Ok(None) => {
-                            self.status = "等待用户授权中".to_string();
-                        }
-                        Err(err) => self.status = format!("OAuth 轮询失败: {err}"),
-                    }
+                UiTaskEvent::OAuthPolled { task_id, result } => {
+                    self.handle_oauth_polled(task_id, result);
+                }
+                UiTaskEvent::OAuthImportProgress { batch_id, progress } => {
+                    self.handle_oauth_import_progress(batch_id, progress);
+                }
+                UiTaskEvent::OAuthImportFinished { batch_id, result } => {
+                    self.handle_oauth_import_finished(batch_id, result);
                 }
                 UiTaskEvent::QuotaQueried(result) => {
                     self.quota_query_pending = false;
@@ -930,38 +926,6 @@ impl CodexSwitchApp {
             }
             Err(err) => self.status = format!("添加失败: {err}"),
         }
-    }
-
-    fn start_oauth(&mut self) {
-        if self.oauth_start_pending {
-            return;
-        }
-        self.oauth_start_pending = true;
-        self.status = "正在启动 OAuth 登录".to_string();
-        let http = self.state.http.clone();
-        let tx = self.task_tx.clone();
-        self.runtime.spawn(async move {
-            let result = oauth::start_device_flow(&http).await;
-            let _ = tx.send(UiTaskEvent::OAuthStarted(result));
-        });
-    }
-
-    fn poll_oauth(&mut self) {
-        if self.oauth_poll_pending {
-            return;
-        }
-        let Some(device) = self.oauth_device.clone() else {
-            self.status = "没有进行中的 OAuth 流程".to_string();
-            return;
-        };
-        self.oauth_poll_pending = true;
-        self.status = "正在轮询 OAuth 授权".to_string();
-        let state = self.state.clone();
-        let tx = self.task_tx.clone();
-        self.runtime.spawn(async move {
-            let result = oauth::poll_device_flow(&state, &device).await;
-            let _ = tx.send(UiTaskEvent::OAuthPolled(result));
-        });
     }
 
     fn query_selected_quota(&mut self, upstream_id: &str) {
