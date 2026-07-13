@@ -4,6 +4,8 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::watch;
 
 const MAX_TAIL_BYTES: usize = 768;
+const MAX_HOVER_OUTPUT_LINES: usize = 10;
+const MAX_HOVER_OUTPUT_CHARS: usize = 768;
 
 #[derive(Clone, Default)]
 pub struct LiveRequestStore {
@@ -29,6 +31,7 @@ pub struct LiveRequestSnapshot {
     pub reasoning_effort: Option<String>,
     pub streaming: bool,
     pub tail: String,
+    pub hover_output: String,
     pub started_at: DateTime<Utc>,
     pub terminating: bool,
 }
@@ -37,6 +40,7 @@ pub struct LiveRequestSnapshot {
 struct LiveRequest {
     meta: LiveRequestMeta,
     tail: String,
+    hover_output: String,
     started_at: DateTime<Utc>,
     terminate_tx: watch::Sender<bool>,
     terminating: bool,
@@ -48,6 +52,7 @@ impl LiveRequestStore {
         let request = LiveRequest {
             meta: meta.clone(),
             tail: String::new(),
+            hover_output: String::new(),
             started_at: Utc::now(),
             terminate_tx,
             terminating: false,
@@ -69,6 +74,7 @@ impl LiveRequestStore {
             return false;
         };
         append_tail(&mut request.tail, delta);
+        append_hover_output(&mut request.hover_output, delta);
         true
     }
 
@@ -115,6 +121,7 @@ impl LiveRequestStore {
                 reasoning_effort: request.meta.reasoning_effort.clone(),
                 streaming: request.meta.streaming,
                 tail: request.tail.clone(),
+                hover_output: request.hover_output.clone(),
                 started_at: request.started_at,
                 terminating: request.terminating,
             })
@@ -147,6 +154,49 @@ fn append_tail(tail: &mut String, delta: &str) {
         .unwrap_or(0);
     if split > 0 {
         tail.drain(..split);
+    }
+}
+
+fn append_hover_output(output: &mut String, delta: &str) {
+    output.push_str(delta);
+
+    while hover_output_line_count(output) > MAX_HOVER_OUTPUT_LINES {
+        pop_hover_output_line(output);
+    }
+
+    while output.chars().count() > MAX_HOVER_OUTPUT_CHARS {
+        if output.contains('\n') {
+            pop_hover_output_line(output);
+        } else {
+            trim_to_recent_chars(output, MAX_HOVER_OUTPUT_CHARS);
+        }
+    }
+}
+
+fn hover_output_line_count(output: &str) -> usize {
+    if output.is_empty() {
+        0
+    } else {
+        output.bytes().filter(|byte| *byte == b'\n').count() + 1
+    }
+}
+
+fn pop_hover_output_line(output: &mut String) {
+    if let Some(line_end) = output.find('\n') {
+        output.drain(..=line_end);
+    }
+}
+
+fn trim_to_recent_chars(text: &mut String, max_chars: usize) {
+    let total_chars = text.chars().count();
+    let skip_chars = total_chars.saturating_sub(max_chars);
+    let split = text
+        .char_indices()
+        .nth(skip_chars)
+        .map(|(index, _)| index)
+        .unwrap_or(0);
+    if split > 0 {
+        text.drain(..split);
     }
 }
 
@@ -212,5 +262,63 @@ mod tests {
         let snapshots = store.snapshots();
 
         assert!(snapshots[0].started_at <= snapshots[1].started_at);
+    }
+
+    #[test]
+    fn hover_output_appends_raw_deltas_to_the_current_line() {
+        let mut output = String::new();
+
+        append_hover_output(&mut output, "first");
+        append_hover_output(&mut output, " line\r\nsecond");
+        append_hover_output(&mut output, "\tpart");
+
+        assert_eq!(output, "first line\r\nsecond\tpart");
+    }
+
+    #[test]
+    fn hover_output_keeps_the_latest_ten_lines() {
+        let mut output = String::new();
+        let input = (0..11)
+            .map(|index| format!("line-{index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let expected = (1..11)
+            .map(|index| format!("line-{index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        append_hover_output(&mut output, &input);
+
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn hover_output_discards_a_complete_line_before_trimming_chars() {
+        let mut output = String::new();
+        let first = "a".repeat(300);
+        let second = "b".repeat(600);
+
+        append_hover_output(&mut output, &format!("{first}\n{second}"));
+
+        assert_eq!(output, second);
+    }
+
+    #[test]
+    fn hover_output_trims_a_single_line_at_unicode_boundaries() {
+        let mut output = String::new();
+
+        append_hover_output(&mut output, &format!("a{}", "界".repeat(768)));
+
+        assert_eq!(output, "界".repeat(768));
+        assert_eq!(output.chars().count(), MAX_HOVER_OUTPUT_CHARS);
+    }
+
+    #[test]
+    fn regular_tail_keeps_its_single_line_behavior() {
+        let mut tail = String::new();
+
+        append_tail(&mut tail, "first\nsecond\r\tthird");
+
+        assert_eq!(tail, "first second \tthird");
     }
 }

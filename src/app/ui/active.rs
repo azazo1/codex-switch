@@ -8,6 +8,7 @@ const LIVE_TAIL_MAX_WIDTH: f32 = 640.0;
 const LIVE_TAIL_RESERVED_WIDTH: f32 = 580.0;
 const LIVE_GRID_COLUMN_SPACING: f32 = 18.0;
 const APPROX_CHAR_WIDTH: f32 = 9.0;
+const LIVE_HOVER_MAX_HEIGHT: f32 = 320.0;
 
 impl CodexSwitchApp {
     pub(super) fn active_connections_ui(&mut self, ui: &mut egui::Ui) {
@@ -92,11 +93,25 @@ fn live_tail_label(ui: &mut egui::Ui, item: &LiveRequestSnapshot, width: f32) {
     };
     let max_chars = (width / APPROX_CHAR_WIDTH).floor().max(8.0) as usize;
     let visible = tail_window(text, max_chars);
-    ui.add_sized(
+    let response = ui.add_sized(
         [width, ui.spacing().interact_size.y],
         egui::Label::new(visible).truncate(),
-    )
-    .on_hover_text(text);
+    );
+    let hover_text = if item.hover_output.is_empty() {
+        text
+    } else {
+        item.hover_output.as_str()
+    };
+    response.on_hover_ui(|ui| {
+        ui.style_mut().interaction.selectable_labels = true;
+        egui::ScrollArea::vertical()
+            .id_salt(("live_output_hover", item.id.as_str()))
+            .max_height(LIVE_HOVER_MAX_HEIGHT)
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                ui.add(egui::Label::new(hover_text).wrap());
+            });
+    });
 }
 
 fn terminate_text(item: &LiveRequestSnapshot) -> &'static str {
