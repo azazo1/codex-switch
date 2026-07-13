@@ -21,9 +21,9 @@ Codex OAuth 上游使用设备授权流程登录 ChatGPT 账号, 并把 Codex Re
 
 点击 `导入 auth.json`, 可以通过系统文件选择器一次选择多个 Codex CLI `auth.json` 文件. 应用逐个处理文件并显示进度, 单个文件无效不会阻止其他账号导入.
 
-导入只支持包含 ChatGPT OAuth `tokens` 的当前 Codex CLI 文件格式. 文件必须提供 access token, refresh token, 以及可从 `tokens.account_id` 或 id token 得到的账号 ID. 仅包含 `OPENAI_API_KEY` 的文件不会创建 OAuth 上游.
+导入只支持包含 ChatGPT OAuth `tokens` 的当前 Codex CLI 文件格式. 文件必须提供 access token, 以及可从 `tokens.account_id` 或 id token 得到的账号 ID. refresh token 可选. 仅包含 `OPENAI_API_KEY` 的文件不会创建 OAuth 上游.
 
-导入过程不会联网校验, 也不会修改或删除源文件. access token 无法解析到期时间时会按已到期处理, 首次实际使用账号时通过 refresh token 获取新 token.
+导入过程不会联网校验, 也不会修改或删除源文件. access token 无法解析到期时间时会按已到期处理. 缺少 refresh token 的账号只能使用到 access token 临近到期, 之后必须重新导入新 token. 界面会把这类结果标记为 `仅 access token`.
 
 设备登录和文件导入都按 `chatgpt_account_id` 识别账号. 再次导入或授权同一账号时, 应用原地更新 token, 邮箱, 套餐和到期时间, 同时保留上游名称, 启用状态, 优先级, 权重, 代理 URL 和调度关系.
 
@@ -40,7 +40,7 @@ Codex OAuth 上游只处理 Responses 请求:
 
 ## Token 刷新
 
-access token 距离过期不足 `60` 秒时, 应用会自动使用 refresh token 获取新 token. 新 token 和过期时间会写回 SQLite.
+access token 距离过期不足 `60` 秒时, 应用会在存在 refresh token 的情况下自动获取新 token. 新 token 和过期时间会写回 SQLite. 缺少 refresh token 时, 当前 access token 在有效期内仍可使用, 临近到期后请求会失败.
 
 下面的情况会导致请求失败:
 

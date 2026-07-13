@@ -9,10 +9,12 @@ pub enum OAuthFileImportOutcome {
     Created {
         upstream_id: String,
         name: String,
+        refreshable: bool,
     },
     Updated {
         upstream_id: String,
         name: String,
+        refreshable: bool,
     },
     Failed {
         message: String,
@@ -104,10 +106,12 @@ fn saved_outcome(saved: OAuthAccountStoreResult) -> OAuthFileImportOutcome {
         OAuthAccountStoreOutcome::Created => OAuthFileImportOutcome::Created {
             upstream_id: saved.upstream.id,
             name: saved.upstream.name,
+            refreshable: saved.refreshable,
         },
         OAuthAccountStoreOutcome::Updated => OAuthFileImportOutcome::Updated {
             upstream_id: saved.upstream.id,
             name: saved.upstream.name,
+            refreshable: saved.refreshable,
         },
     }
 }
@@ -126,7 +130,7 @@ fn parse_auth_json(bytes: &[u8]) -> anyhow::Result<OAuthAccountInput> {
     };
     OAuthAccountInput::imported(
         tokens.access_token.unwrap_or_default(),
-        tokens.refresh_token.unwrap_or_default(),
+        tokens.refresh_token,
         tokens.id_token,
         tokens.account_id,
     )
@@ -176,7 +180,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(input.account_id.as_deref(), Some("account-one"));
-        assert_eq!(input.refresh_token, "refresh-one");
+        assert_eq!(input.refresh_token.as_deref(), Some("refresh-one"));
         assert_eq!(input.token_expires_at, Some(1_900_000_000));
     }
 
@@ -187,12 +191,21 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_refresh_token() {
-        let err = parse_auth_json(
-            br#"{"tokens":{"access_token":"access","account_id":"account-one"}}"#,
+    fn accepts_missing_refresh_token() {
+        let access_token = jwt(&serde_json::json!({ "exp": 1_900_000_000_i64 }));
+        let input = parse_auth_json(
+            serde_json::json!({
+                "tokens": {
+                    "access_token": access_token,
+                    "account_id": "account-one"
+                }
+            })
+            .to_string()
+            .as_bytes(),
         )
-        .unwrap_err();
-        assert!(err.to_string().contains("refresh token"));
+        .unwrap();
+        assert!(input.refresh_token.is_none());
+        assert_eq!(input.token_expires_at, Some(1_900_000_000));
     }
 
     #[test]

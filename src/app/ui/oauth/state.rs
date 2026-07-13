@@ -24,6 +24,7 @@ pub(super) enum OAuthLoginTaskState {
     Succeeded {
         outcome: oauth_api::OAuthAccountStoreOutcome,
         upstream_name: String,
+        refreshable: bool,
     },
     Failed(String),
     Expired,
@@ -65,12 +66,17 @@ pub(super) fn oauth_task_status(state: &OAuthLoginTaskState) -> String {
         OAuthLoginTaskState::Succeeded {
             outcome,
             upstream_name,
+            refreshable,
         } => {
             let action = match outcome {
                 oauth_api::OAuthAccountStoreOutcome::Created => "已新增",
                 oauth_api::OAuthAccountStoreOutcome::Updated => "已更新",
             };
-            format!("{action}: {upstream_name}")
+            if *refreshable {
+                format!("{action}: {upstream_name}")
+            } else {
+                format!("{action}: {upstream_name}, 仅 access token")
+            }
         }
         OAuthLoginTaskState::Failed(message) => format!("失败: {message}"),
         OAuthLoginTaskState::Expired => "已过期".to_string(),

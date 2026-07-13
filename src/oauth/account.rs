@@ -8,7 +8,7 @@ use tokio::sync::Mutex;
 #[derive(Debug, Clone)]
 pub struct OAuthAccountInput {
     pub access_token: String,
-    pub refresh_token: String,
+    pub refresh_token: Option<String>,
     pub id_token: Option<String>,
     pub account_id: Option<String>,
     pub token_expires_at: Option<i64>,
@@ -16,14 +16,13 @@ pub struct OAuthAccountInput {
 
 impl OAuthAccountInput {
     pub fn from_token_response(tokens: OAuthTokenResponse) -> anyhow::Result<Self> {
-        let refresh_token = required_value(tokens.refresh_token, "oauth response is missing refresh token")?;
         let access_token = required_value(Some(tokens.access_token), "oauth response is missing access token")?;
         let token_expires_at = Some(
             chrono::Utc::now().timestamp() + tokens.expires_in.unwrap_or(3600),
         );
         Ok(Self {
             access_token,
-            refresh_token,
+            refresh_token: non_empty(tokens.refresh_token),
             id_token: non_empty(tokens.id_token),
             account_id: None,
             token_expires_at,
@@ -32,12 +31,12 @@ impl OAuthAccountInput {
 
     pub fn imported(
         access_token: String,
-        refresh_token: String,
+        refresh_token: Option<String>,
         id_token: Option<String>,
         account_id: Option<String>,
     ) -> anyhow::Result<Self> {
         let access_token = required_value(Some(access_token), "auth.json is missing access token")?;
-        let refresh_token = required_value(Some(refresh_token), "auth.json is missing refresh token")?;
+        let refresh_token = non_empty(refresh_token);
         let id_token = non_empty(id_token);
         let account_id = non_empty(account_id);
         let token_expires_at = Some(
@@ -63,6 +62,7 @@ pub enum OAuthAccountStoreOutcome {
 pub struct OAuthAccountStoreResult {
     pub outcome: OAuthAccountStoreOutcome,
     pub upstream: Upstream,
+    pub refreshable: bool,
 }
 
 #[derive(Clone)]
@@ -115,12 +115,13 @@ impl OAuthAccountService {
             .save_oauth_account(
                 &upstream,
                 &input.access_token,
-                &input.refresh_token,
+                input.refresh_token.as_deref(),
                 input.id_token.as_deref(),
             )
             .await?;
         tracing::info!(
             account_created = saved.created,
+            refreshable = saved.refreshable,
             elapsed_ms = started_at.elapsed().as_millis(),
             "stored codex oauth account"
         );
@@ -131,6 +132,7 @@ impl OAuthAccountService {
                 OAuthAccountStoreOutcome::Updated
             },
             upstream: saved.upstream,
+            refreshable: saved.refreshable,
         })
     }
 }
@@ -205,19 +207,46 @@ mod tests {
                 .as_deref(),
             Some("access-new")
         );
+        assert!(updated.refreshable);
 
-        let second = service
-            .store_tokens(input(
+        let mut access_only_update = input(
+            "account-one",
+            "latest@example.com",
+            "pro",
+            "access-only-update",
+            "unused-refresh",
+        );
+        access_only_update.refresh_token = None;
+        let access_only_update = service.store_tokens(access_only_update).await.unwrap();
+        assert!(access_only_update.refreshable);
+        assert_eq!(
+            store
+                .get_credential(&updated.upstream.id, "refresh_token")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("refresh-new")
+        );
+
+        let mut second_input = input(
                 "account-two",
                 "two@example.com",
                 "team",
                 "access-two",
-                "refresh-two",
-            ))
-            .await
-            .unwrap();
+                "unused-refresh",
+            );
+        second_input.refresh_token = None;
+        let second = service.store_tokens(second_input).await.unwrap();
         assert_eq!(second.outcome, OAuthAccountStoreOutcome::Created);
+        assert!(!second.refreshable);
         assert_ne!(second.upstream.id, first.upstream.id);
+        assert_eq!(
+            store
+                .get_credential(&second.upstream.id, "refresh_token")
+                .await
+                .unwrap(),
+            None
+        );
         assert_eq!(store.list_upstreams().await.unwrap().len(), 2);
     }
 
@@ -232,7 +261,7 @@ mod tests {
         let err = service
             .store_tokens(OAuthAccountInput {
                 access_token: "access".to_string(),
-                refresh_token: "refresh".to_string(),
+                refresh_token: Some("refresh".to_string()),
                 id_token: None,
                 account_id: None,
                 token_expires_at: Some(1_900_000_000),
@@ -271,7 +300,7 @@ mod tests {
     ) -> OAuthAccountInput {
         OAuthAccountInput {
             access_token: access_token.to_string(),
-            refresh_token: refresh_token.to_string(),
+            refresh_token: Some(refresh_token.to_string()),
             id_token: Some(jwt(&serde_json::json!({
                 "email": email,
                 "https://api.openai.com/auth": {

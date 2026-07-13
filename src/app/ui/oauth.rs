@@ -143,15 +143,17 @@ impl CodexSwitchApp {
                         oauth_api::OAuthFileImportOutcome::Created {
                             upstream_id,
                             name,
+                            refreshable,
                         } => {
-                            ui.label(format!("已新增: {name}"))
+                            ui.label(import_result_label("已新增", name, *refreshable))
                                 .on_hover_text(format!("upstream: {upstream_id}"));
                         }
                         oauth_api::OAuthFileImportOutcome::Updated {
                             upstream_id,
                             name,
+                            refreshable,
                         } => {
-                            ui.label(format!("已更新: {name}"))
+                            ui.label(import_result_label("已更新", name, *refreshable))
                                 .on_hover_text(format!("upstream: {upstream_id}"));
                         }
                         oauth_api::OAuthFileImportOutcome::Failed { message } => {
@@ -253,6 +255,7 @@ impl CodexSwitchApp {
                 task.state = OAuthLoginTaskState::Succeeded {
                     outcome: saved.outcome,
                     upstream_name: saved.upstream.name,
+                    refreshable: saved.refreshable,
                 };
                 task.warning = None;
                 task.next_poll_at = None;
@@ -421,5 +424,13 @@ impl CodexSwitchApp {
             .await;
             let _ = tx.send(UiTaskEvent::OAuthImportFinished { batch_id, result });
         });
+    }
+}
+
+fn import_result_label(action: &str, name: &str, refreshable: bool) -> String {
+    if refreshable {
+        format!("{action}: {name}")
+    } else {
+        format!("{action}: {name}, 仅 access token")
     }
 }

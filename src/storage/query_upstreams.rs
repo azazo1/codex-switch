@@ -7,6 +7,7 @@ use sqlx::Row;
 pub(crate) struct SavedOAuthAccount {
     pub upstream: Upstream,
     pub created: bool,
+    pub refreshable: bool,
 }
 
 impl Store {
@@ -84,7 +85,7 @@ impl Store {
         &self,
         candidate: &Upstream,
         access_token: &str,
-        refresh_token: &str,
+        refresh_token: Option<&str>,
         id_token: Option<&str>,
     ) -> anyhow::Result<SavedOAuthAccount> {
         let account_id = candidate
@@ -137,7 +138,9 @@ impl Store {
         }
 
         save_credential_in_tx(&mut tx, &upstream.id, "access_token", access_token).await?;
-        save_credential_in_tx(&mut tx, &upstream.id, "refresh_token", refresh_token).await?;
+        if let Some(refresh_token) = refresh_token {
+            save_credential_in_tx(&mut tx, &upstream.id, "refresh_token", refresh_token).await?;
+        }
         if let Some(id_token) = id_token {
             save_credential_in_tx(&mut tx, &upstream.id, "id_token", id_token).await?;
         } else {
@@ -146,8 +149,21 @@ impl Store {
                 .execute(&mut *tx)
                 .await?;
         }
+        let refreshable = sqlx::query(
+            "SELECT COUNT(*) AS count FROM credentials
+             WHERE upstream_id = ?1 AND name = 'refresh_token'",
+        )
+        .bind(&upstream.id)
+        .fetch_one(&mut *tx)
+        .await?
+        .get::<i64, _>("count")
+            > 0;
         tx.commit().await?;
-        Ok(SavedOAuthAccount { upstream, created })
+        Ok(SavedOAuthAccount {
+            upstream,
+            created,
+            refreshable,
+        })
     }
 
     pub async fn set_upstream_enabled(&self, id: &str, enabled: bool) -> anyhow::Result<()> {
