@@ -5,59 +5,100 @@ on:
     branches:
       - "**"
     tags:
-      - "**"
+      - "v*"
   pull_request:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  version:
+    name: 校验发布版本
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release_version.outputs.version }}
+
+    steps:
+      - name: 检出代码
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/checkout@v4
+
+      - name: 安装 Rust 工具链
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 校验 tag 和包版本
+        id: release_version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="$(
+            cargo metadata --locked --no-deps --format-version 1 |
+              jq -er '.packages[] | select(.name == "codex-switch") | .version'
+          )"
+          expected_tag="v$package_version"
+
+          if [[ "$TAG_NAME" != "$expected_tag" ]]; then
+            echo "tag $TAG_NAME 与包版本 $package_version 不一致" >&2
+            exit 1
+          fi
+
+          echo "version=$package_version" >> "$GITHUB_OUTPUT"
+
   build:
     name: 构建 ${{ matrix.name }}
+    needs: version
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: Linux x64
-            id: linux-x64
+            id: linux-x86_64
             runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             platform: linux
-            artifact: codex-switch-linux-x64.tar.gz
+            archive: linux-x86_64.tar.gz
           - name: Linux arm64
-            id: linux-arm64
+            id: linux-aarch64
             runner: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             platform: linux
-            artifact: codex-switch-linux-arm64.tar.gz
+            archive: linux-aarch64.tar.gz
           - name: Windows x64
-            id: windows-x64
+            id: windows-x86_64
             runner: windows-2025
             target: x86_64-pc-windows-msvc
             platform: windows
-            artifact: codex-switch-windows-x64.zip
+            archive: windows-x86_64.zip
           - name: Windows arm64
-            id: windows-arm64
+            id: windows-aarch64
             runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             platform: windows
-            artifact: codex-switch-windows-arm64.zip
+            archive: windows-aarch64.zip
           - name: macOS x64
-            id: macos-x64
+            id: macos-x86_64
             runner: macos-15-intel
             target: x86_64-apple-darwin
             platform: macos
-            artifact: codex-switch-macos-x64.dmg
+            archive: macos-x86_64.dmg
           - name: macOS arm64
-            id: macos-arm64
+            id: macos-aarch64
             runner: macos-15
             target: aarch64-apple-darwin
             platform: macos
-            artifact: codex-switch-macos-arm64.dmg
+            archive: macos-aarch64.dmg
 
     steps:
       - name: 检出代码
@@ -91,43 +132,76 @@ jobs:
       - name: 构建 release 二进制文件
         run: cargo build --locked --release --bins --target ${{ matrix.target }}
 
+      - name: 校验 Linux 二进制文件
+        if: startsWith(github.ref, 'refs/tags/') && matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="target/${{ matrix.target }}/release/codex-switch"
+          test -x "$binary"
+          file "$binary" | grep -q 'ELF'
+
+      - name: 校验 Windows 二进制文件
+        if: startsWith(github.ref, 'refs/tags/') && matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $binary = "target/${{ matrix.target }}/release/codex-switch.exe"
+          if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
+            throw "未找到 Windows 二进制文件: $binary"
+          }
+          $header = [System.IO.File]::ReadAllBytes($binary)
+          if ($header.Length -lt 2 -or $header[0] -ne 0x4d -or $header[1] -ne 0x5a) {
+            throw "Windows 二进制文件没有有效的 PE 文件头: $binary"
+          }
+
+      - name: 校验 macOS 二进制文件
+        if: startsWith(github.ref, 'refs/tags/') && matrix.platform == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="target/${{ matrix.target }}/release/codex-switch"
+          test -x "$binary"
+          file "$binary" | grep -q 'Mach-O'
+
       - name: 打包 Linux 产物
-        if: matrix.platform == 'linux'
+        if: startsWith(github.ref, 'refs/tags/') && matrix.platform == 'linux'
         shell: bash
         run: |
           mkdir -p dist
           tar -C "target/${{ matrix.target }}/release" \
-            -czf "dist/${{ matrix.artifact }}" codex-switch
+            -czf "dist/codex-switch-${{ needs.version.outputs.version }}-${{ matrix.archive }}" \
+            codex-switch
 
       - name: 打包 Windows 产物
-        if: matrix.platform == 'windows'
+        if: startsWith(github.ref, 'refs/tags/') && matrix.platform == 'windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Compress-Archive `
             -LiteralPath "target/${{ matrix.target }}/release/codex-switch.exe" `
-            -DestinationPath "dist/${{ matrix.artifact }}"
+            -DestinationPath "dist/codex-switch-${{ needs.version.outputs.version }}-${{ matrix.archive }}"
 
       - name: 打包 macOS DMG
-        if: matrix.platform == 'macos'
+        if: startsWith(github.ref, 'refs/tags/') && matrix.platform == 'macos'
         shell: bash
         run: |
           bash scripts/package-macos.sh \
             "target/${{ matrix.target }}/release" \
-            "dist/${{ matrix.artifact }}"
+            "dist/codex-switch-${{ needs.version.outputs.version }}-${{ matrix.archive }}"
 
       - name: 上传 release 产物
         if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.id }}
-          path: dist/${{ matrix.artifact }}
+          path: dist/codex-switch-${{ needs.version.outputs.version }}-${{ matrix.archive }}
           if-no-files-found: error
+          retention-days: 1
 
   release:
     name: 创建 GitHub Release
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -136,8 +210,8 @@ jobs:
       - name: 检出代码和 tags
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.ref }}
           fetch-depth: 0
-          fetch-tags: true
 
       - name: 下载 release 产物
         uses: actions/download-artifact@v4
@@ -146,39 +220,93 @@ jobs:
           path: release-artifacts
           merge-multiple: true
 
-      - name: 读取 tag 正文
+      - name: 生成 release notes
         env:
+          GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
-          git show-ref --verify --quiet "refs/tags/$TAG_NAME"
-          git tag --list \
-            --format='%(contents:subject)%0a%0a%(contents:body)' \
-            -- "$TAG_NAME" > release-notes.md
+          manual_notes="docs/release-notes/$VERSION.md"
+          base_tag_file="docs/release-notes/$VERSION-base.txt"
+
+          if [[ ! -s "$manual_notes" ]]; then
+            echo "缺少 release notes: $manual_notes" >&2
+            exit 1
+          fi
+
+          api_args=(
+            --method POST
+            "repos/$GITHUB_REPOSITORY/releases/generate-notes"
+            -f "tag_name=$TAG_NAME"
+            -f "target_commitish=$GITHUB_SHA"
+          )
+
+          if [[ -s "$base_tag_file" ]]; then
+            base_tag="$(<"$base_tag_file")"
+            git check-ref-format "refs/tags/$base_tag"
+            api_args+=(-f "previous_tag_name=$base_tag")
+          fi
+
+          gh api "${api_args[@]}" --jq '.body' > generated-notes.md
+          cp "$manual_notes" release-notes.md
+
+          if [[ -s generated-notes.md ]]; then
+            printf '\n\n' >> release-notes.md
+            cat generated-notes.md >> release-notes.md
+          fi
+
+      - name: 生成校验和
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          cd release-artifacts
+          archives=(codex-switch-*.tar.gz codex-switch-*.zip codex-switch-*.dmg)
+          if (( ${#archives[@]} != 6 )); then
+            echo "预期 6 个发布归档, 实际找到 ${#archives[@]} 个" >&2
+            exit 1
+          fi
+          sha256sum "${archives[@]}" > SHA256SUMS
 
       - name: 创建或更新 GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
-          assets=(release-artifacts/*)
-          if (( ${#assets[@]} == 0 )); then
-            echo "没有可发布的构建产物" >&2
+          assets=(
+            release-artifacts/codex-switch-*.tar.gz
+            release-artifacts/codex-switch-*.zip
+            release-artifacts/codex-switch-*.dmg
+            release-artifacts/SHA256SUMS
+          )
+
+          if (( ${#assets[@]} != 7 )); then
+            echo "预期 7 个发布文件, 实际找到 ${#assets[@]} 个" >&2
             exit 1
+          fi
+
+          prerelease_args=()
+          if [[ "$VERSION" == *-* ]]; then
+            prerelease_args+=(--prerelease)
           fi
 
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
             gh release edit "$TAG_NAME" \
-              --title "$TAG_NAME" \
-              --notes-file release-notes.md
+              --verify-tag \
+              --title "Codex Switch v$VERSION" \
+              --notes-file release-notes.md \
+              "${prerelease_args[@]}"
             gh release upload "$TAG_NAME" "${assets[@]}" --clobber
           else
             gh release create "$TAG_NAME" "${assets[@]}" \
               --verify-tag \
-              --title "$TAG_NAME" \
-              --notes-file release-notes.md
+              --title "Codex Switch v$VERSION" \
+              --notes-file release-notes.md \
+              "${prerelease_args[@]}"
           fi

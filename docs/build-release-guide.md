@@ -65,15 +65,15 @@ Bundle 最低系统版本为 macOS 12.0. Bundle 版本读取 `Cargo.toml` 中的
 
 只有 tag push 会上传产物并进入 GitHub Release job. Release 完全由 Actions 创建或更新, 本地 `gh` 不参与发布.
 
-Release 标题使用 tag 名称, 正文使用 tag subject 和 body. Workflow 重跑时会更新正文并覆盖同名资产.
+Release 标题包含项目名和版本. 正文优先读取 `docs/release-notes/<version>.md`, 后面附加 GitHub 自动生成的提交和 PR 说明. 可选的 `<version>-base.txt` 用于指定累计 notes 的起始 tag. Workflow 重跑时会更新正文并覆盖同名资产.
 
 ## 发布一个版本
 
-先让 `Cargo.toml` 中的版本与计划 tag 一致, 再提交版本变更. 使用 annotated tag 保存 release 正文:
+先让 `Cargo.toml` 中的版本与计划 tag 一致, 再提交版本变更. Workflow 会通过 `cargo metadata` 严格校验 `v<package-version>` 格式, 版本不一致时不会执行构建矩阵. 使用 annotated tag 保存 release 正文:
 
 ```shell
-git tag -a v0.1.0 -m "v0.1.0" -m "这里填写发布内容"
-git push origin v0.1.0
+git tag -a v0.2.1 -m "v0.2.1" -m "这里填写简短发布导语"
+git push origin v0.2.1
 ```
 
 tag push 后, 在 GitHub Actions 中等待六个平台全部构建成功. Release job 会附加:
@@ -81,14 +81,15 @@ tag push 后, 在 GitHub Actions 中等待六个平台全部构建成功. Releas
 - Linux x64 和 arm64 的 `.tar.gz`.
 - Windows x64 和 arm64 的 `.zip`.
 - macOS x64 和 arm64 的 `.dmg`.
+- 包含全部归档 SHA-256 摘要的 `SHA256SUMS`.
 
-如果 `Cargo.toml` 版本没有同步, DMG 内的 Bundle 版本会与 tag 不一致.
+归档名称包含包版本, 系统和架构. Release 创建前会检查六个归档是否齐全.
 
 ## 发布边界
 
 - macOS `.app` 和 DMG 当前未签名, 也未 notarize.
 - Windows `.exe` 当前未进行代码签名.
 - Linux 产物是动态链接的裸二进制压缩包, 不是发行版安装包.
-- Workflow 没有上传校验和或 SBOM.
+- Workflow 没有生成 SBOM.
 
 正式面向大量用户分发前, 应补充各平台签名, macOS notarization 和发布校验信息.
