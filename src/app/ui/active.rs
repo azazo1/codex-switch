@@ -87,7 +87,7 @@ fn live_tail_width(available_width: f32) -> f32 {
 
 fn live_tail_label(ui: &mut egui::Ui, item: &LiveRequestSnapshot, width: f32) {
     let text = match item.response_state {
-        LiveResponseState::AwaitingHeaders => "等待响应",
+        LiveResponseState::AwaitingHeaders => "请求中",
         LiveResponseState::NonStreaming => "非流式",
         LiveResponseState::Streaming if item.tail.is_empty() => "等待输出",
         LiveResponseState::Streaming => item.tail.as_str(),
