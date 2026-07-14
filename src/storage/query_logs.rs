@@ -149,7 +149,7 @@ impl Store {
 
     pub async fn provider_stats(&self) -> anyhow::Result<Vec<ProviderStats>> {
         let rows = sqlx::query(
-            "SELECT upstream_id, upstream_name,
+            "SELECT usage_rollups.upstream_id, upstreams.name AS upstream_name,
                     COALESCE(SUM(requests), 0) AS requests,
                     COALESCE(SUM(input_tokens), 0) AS input_tokens,
                     COALESCE(SUM(output_tokens), 0) AS output_tokens,
@@ -157,8 +157,9 @@ impl Store {
                     COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
                     COALESCE(SUM(total_tokens), 0) AS total_tokens
              FROM usage_rollups
-             WHERE upstream_id != ?1
-             GROUP BY upstream_id, upstream_name
+             INNER JOIN upstreams ON upstreams.id = usage_rollups.upstream_id
+             WHERE usage_rollups.upstream_id != ?1
+             GROUP BY usage_rollups.upstream_id, upstreams.name
              ORDER BY total_tokens DESC",
         )
         .bind(UNASSIGNED_UPSTREAM_ID)
@@ -618,7 +619,7 @@ fn usage_from_rollup(row: &sqlx::sqlite::SqliteRow) -> TokenUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::models::ModelPrice;
+    use crate::core::models::{BalanceProvider, ModelPrice, Upstream, WireApi};
     use chrono::TimeZone;
 
     #[tokio::test]
@@ -626,21 +627,40 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
         let store = Store::open(path).await.unwrap();
+        let upstream = save_test_upstream(&store, "relay-a").await;
         store
             .insert_request_log(test_log(None, None, 5))
             .await
             .unwrap();
         store
-            .insert_request_log(test_log(Some("upstream-a"), Some("relay-a"), 7))
+            .insert_request_log(test_log(Some(&upstream.id), Some("relay-a"), 7))
             .await
             .unwrap();
 
         let stats = store.provider_stats().await.unwrap();
 
         assert_eq!(stats.len(), 1);
-        assert_eq!(stats[0].upstream_id, "upstream-a");
+        assert_eq!(stats[0].upstream_id, upstream.id);
         assert_eq!(stats[0].requests, 1);
         assert_eq!(stats[0].usage.total_tokens, 7);
+    }
+
+    #[tokio::test]
+    async fn provider_stats_hides_deleted_upstream() {
+        let path =
+            std::env::temp_dir().join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
+        let store = Store::open(path).await.unwrap();
+        let upstream = save_test_upstream(&store, "relay-a").await;
+        store
+            .insert_request_log(test_log(Some(&upstream.id), Some("relay-a"), 7))
+            .await
+            .unwrap();
+
+        store.delete_upstream(&upstream.id).await.unwrap();
+
+        assert!(store.provider_stats().await.unwrap().is_empty());
+        assert_eq!(store.dashboard_stats().await.unwrap().total_requests, 1);
+        assert_eq!(store.request_log_count().await.unwrap(), 1);
     }
 
     #[tokio::test]
@@ -648,14 +668,25 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
         let store = Store::open(path).await.unwrap();
+        let upstream = save_test_upstream(&store, "relay-a").await;
         let old_ts = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
         let new_ts = Utc.with_ymd_and_hms(2024, 1, 3, 12, 0, 0).unwrap();
         store
-            .insert_request_log(test_log_at(old_ts, Some("upstream-a"), Some("relay-a"), 5))
+            .insert_request_log(test_log_at(
+                old_ts,
+                Some(&upstream.id),
+                Some("relay-a"),
+                5,
+            ))
             .await
             .unwrap();
         store
-            .insert_request_log(test_log_at(new_ts, Some("upstream-a"), Some("relay-a"), 7))
+            .insert_request_log(test_log_at(
+                new_ts,
+                Some(&upstream.id),
+                Some("relay-a"),
+                7,
+            ))
             .await
             .unwrap();
 
@@ -712,6 +743,18 @@ mod tests {
         assert_eq!(logs[0].status, 200);
         assert_eq!(stats.total_requests, 1);
         assert_eq!(stats.total_usage.total_tokens, 5);
+    }
+
+    async fn save_test_upstream(store: &Store, name: &str) -> Upstream {
+        let upstream = Upstream::new_relay(
+            name.to_string(),
+            "http://127.0.0.1".to_string(),
+            WireApi::Responses,
+            true,
+            BalanceProvider::Unsupported,
+        );
+        store.save_upstream(&upstream).await.unwrap();
+        upstream
     }
 
     #[tokio::test]
