@@ -1,5 +1,5 @@
 use super::CodexSwitchApp;
-use crate::live::LiveRequestSnapshot;
+use crate::live::{LiveRequestSnapshot, LiveResponseState};
 use chrono::{Local, Utc};
 use eframe::egui;
 
@@ -86,12 +86,11 @@ fn live_tail_width(available_width: f32) -> f32 {
 }
 
 fn live_tail_label(ui: &mut egui::Ui, item: &LiveRequestSnapshot, width: f32) {
-    let text = if !item.streaming {
-        "非流式"
-    } else if item.tail.is_empty() {
-        "等待输出"
-    } else {
-        item.tail.as_str()
+    let text = match item.response_state {
+        LiveResponseState::AwaitingHeaders => "等待响应",
+        LiveResponseState::NonStreaming => "非流式",
+        LiveResponseState::Streaming if item.tail.is_empty() => "等待输出",
+        LiveResponseState::Streaming => item.tail.as_str(),
     };
     let max_chars = (width / APPROX_CHAR_WIDTH).floor().max(8.0) as usize;
     let visible = tail_window(text, max_chars);

@@ -388,7 +388,6 @@ async fn forward_with_upstream(
         endpoint: request.endpoint.clone(),
         model: request.model.clone(),
         reasoning_effort: request.reasoning_effort.clone(),
-        streaming: false,
     });
     request.state.events.bump_live_streams();
     let mut active_guard =
@@ -410,12 +409,16 @@ async fn forward_with_upstream(
         .unwrap_or_default()
         .to_string();
 
-    if content_type.contains("text/event-stream") {
-        request
-            .state
-            .live_requests
-            .set_streaming(&request.request_id, true);
+    let streaming = content_type.contains("text/event-stream");
+    if request
+        .state
+        .live_requests
+        .confirm_response_kind(&request.request_id, streaming)
+    {
         request.state.events.bump_live_streams();
+    }
+
+    if streaming {
         let stream = build_live_response_stream(LiveResponseStreamInput {
             request,
             upstream: upstream.clone(),

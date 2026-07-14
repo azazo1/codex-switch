@@ -7,6 +7,13 @@ const MAX_TAIL_BYTES: usize = 768;
 const MAX_HOVER_OUTPUT_LINES: usize = 10;
 const MAX_HOVER_OUTPUT_CHARS: usize = 768;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiveResponseState {
+    AwaitingHeaders,
+    Streaming,
+    NonStreaming,
+}
+
 #[derive(Clone, Default)]
 pub struct LiveRequestStore {
     inner: Arc<RwLock<BTreeMap<String, LiveRequest>>>,
@@ -19,7 +26,6 @@ pub struct LiveRequestMeta {
     pub endpoint: String,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
-    pub streaming: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -29,7 +35,7 @@ pub struct LiveRequestSnapshot {
     pub endpoint: String,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
-    pub streaming: bool,
+    pub response_state: LiveResponseState,
     pub tail: String,
     pub hover_output: String,
     pub started_at: DateTime<Utc>,
@@ -39,6 +45,7 @@ pub struct LiveRequestSnapshot {
 #[derive(Debug, Clone)]
 struct LiveRequest {
     meta: LiveRequestMeta,
+    response_state: LiveResponseState,
     tail: String,
     hover_output: String,
     started_at: DateTime<Utc>,
@@ -51,6 +58,7 @@ impl LiveRequestStore {
         let (terminate_tx, terminate_rx) = watch::channel(false);
         let request = LiveRequest {
             meta: meta.clone(),
+            response_state: LiveResponseState::AwaitingHeaders,
             tail: String::new(),
             hover_output: String::new(),
             started_at: Utc::now(),
@@ -78,14 +86,21 @@ impl LiveRequestStore {
         true
     }
 
-    pub fn set_streaming(&self, id: &str, streaming: bool) -> bool {
+    pub fn confirm_response_kind(&self, id: &str, streaming: bool) -> bool {
         let Ok(mut inner) = self.inner.write() else {
             return false;
         };
         let Some(request) = inner.get_mut(id) else {
             return false;
         };
-        request.meta.streaming = streaming;
+        if request.response_state != LiveResponseState::AwaitingHeaders {
+            return false;
+        }
+        request.response_state = if streaming {
+            LiveResponseState::Streaming
+        } else {
+            LiveResponseState::NonStreaming
+        };
         true
     }
 
@@ -119,7 +134,7 @@ impl LiveRequestStore {
                 endpoint: request.meta.endpoint.clone(),
                 model: request.meta.model.clone(),
                 reasoning_effort: request.meta.reasoning_effort.clone(),
-                streaming: request.meta.streaming,
+                response_state: request.response_state,
                 tail: request.tail.clone(),
                 hover_output: request.hover_output.clone(),
                 started_at: request.started_at,
@@ -211,7 +226,6 @@ mod tests {
             endpoint: "/responses".to_string(),
             model: Some("model-a".to_string()),
             reasoning_effort: None,
-            streaming: true,
         }
     }
 
@@ -239,16 +253,43 @@ mod tests {
     }
 
     #[test]
-    fn set_streaming_updates_snapshot_kind() {
+    fn new_request_awaits_response_headers() {
         let store = LiveRequestStore::default();
-        let mut meta = request_meta();
-        meta.streaming = false;
-        store.start(meta);
+        store.start(request_meta());
 
-        assert!(!store.snapshots()[0].streaming);
-        assert!(store.set_streaming("request-a", true));
+        assert_eq!(
+            store.snapshots()[0].response_state,
+            LiveResponseState::AwaitingHeaders
+        );
+    }
 
-        assert!(store.snapshots()[0].streaming);
+    #[test]
+    fn response_kind_can_be_confirmed_as_streaming() {
+        let store = LiveRequestStore::default();
+        store.start(request_meta());
+
+        assert!(store.confirm_response_kind("request-a", true));
+        assert_eq!(
+            store.snapshots()[0].response_state,
+            LiveResponseState::Streaming
+        );
+        assert!(!store.confirm_response_kind("request-a", false));
+        assert_eq!(
+            store.snapshots()[0].response_state,
+            LiveResponseState::Streaming
+        );
+    }
+
+    #[test]
+    fn response_kind_can_be_confirmed_as_non_streaming() {
+        let store = LiveRequestStore::default();
+        store.start(request_meta());
+
+        assert!(store.confirm_response_kind("request-a", false));
+        assert_eq!(
+            store.snapshots()[0].response_state,
+            LiveResponseState::NonStreaming
+        );
     }
 
     #[test]
