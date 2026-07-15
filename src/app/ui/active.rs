@@ -8,6 +8,7 @@ const LIVE_TAIL_MAX_WIDTH: f32 = 640.0;
 const LIVE_TAIL_RESERVED_WIDTH: f32 = 580.0;
 const LIVE_GRID_COLUMN_SPACING: f32 = 18.0;
 const APPROX_CHAR_WIDTH: f32 = 9.0;
+const LIVE_HOVER_MIN_WIDTH: f32 = 480.0;
 const LIVE_HOVER_MAX_HEIGHT: f32 = 320.0;
 
 impl CodexSwitchApp {
@@ -104,6 +105,7 @@ fn live_tail_label(ui: &mut egui::Ui, item: &LiveRequestSnapshot, width: f32) {
         item.hover_output.as_str()
     };
     response.on_hover_ui(|ui| {
+        ui.set_min_width(LIVE_HOVER_MIN_WIDTH);
         ui.style_mut().interaction.selectable_labels = true;
         egui::ScrollArea::vertical()
             .id_salt(("live_output_hover", item.id.as_str()))
