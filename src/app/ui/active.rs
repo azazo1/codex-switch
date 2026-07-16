@@ -12,11 +12,18 @@ mod scroll;
 
 pub(super) use scroll::LiveTailScrollState;
 
-const LIVE_TAIL_MIN_WIDTH: f32 = 200.0;
-const LIVE_TAIL_MAX_WIDTH: f32 = 640.0;
-const LIVE_TAIL_RESERVED_WIDTH: f32 = 700.0;
-const LIVE_GRID_COLUMN_SPACING: f32 = 18.0;
-const LIVE_OUTPUT_SPEED_WIDTH: f32 = 104.0;
+const LIVE_TAIL_MIN_WIDTH: f32 = 120.0;
+const LIVE_TAIL_MAX_WIDTH: f32 = 480.0;
+const LIVE_TAIL_RESERVED_WIDTH: f32 = 624.0;
+const LIVE_GRID_COLUMN_SPACING: f32 = 8.0;
+const LIVE_UPSTREAM_WIDTH: f32 = 80.0;
+const LIVE_MODEL_WIDTH: f32 = 96.0;
+const LIVE_REASONING_WIDTH: f32 = 64.0;
+const LIVE_ENDPOINT_WIDTH: f32 = 72.0;
+const LIVE_OUTPUT_SPEED_WIDTH: f32 = 76.0;
+const LIVE_ELAPSED_WIDTH: f32 = 48.0;
+const LIVE_STARTED_WIDTH: f32 = 64.0;
+const LIVE_ACTION_WIDTH: f32 = 60.0;
 const APPROX_CHAR_WIDTH: f32 = 9.0;
 const LIVE_HOVER_MIN_WIDTH: f32 = 480.0;
 const LIVE_HOVER_MAX_HEIGHT: f32 = 320.0;
@@ -132,41 +139,61 @@ impl CodexSwitchApp {
                     .num_columns(9)
                     .spacing([LIVE_GRID_COLUMN_SPACING, 10.0])
                     .show(ui, |ui| {
-                        ui.strong("上游");
-                        ui.strong("模型");
-                        ui.strong("推理强度");
-                        ui.strong("endpoint");
-                        ui.strong("实时输出窗口");
-                        ui.strong("实时输出速度");
-                        ui.strong("已持续");
-                        ui.strong("开始时间");
-                        ui.strong("操作");
+                        column_header(ui, "上游", LIVE_UPSTREAM_WIDTH);
+                        column_header(ui, "模型", LIVE_MODEL_WIDTH);
+                        column_header(ui, "推理强度", LIVE_REASONING_WIDTH);
+                        column_header(ui, "endpoint", LIVE_ENDPOINT_WIDTH);
+                        column_header(ui, "实时输出窗口", tail_width);
+                        column_header(ui, "输出速度", LIVE_OUTPUT_SPEED_WIDTH);
+                        column_header(ui, "已持续", LIVE_ELAPSED_WIDTH);
+                        column_header(ui, "开始时间", LIVE_STARTED_WIDTH);
+                        column_header(ui, "操作", LIVE_ACTION_WIDTH);
                         ui.end_row();
 
                         for item in live_connections {
                             let finished = item.finished_at.is_some();
-                            row_label(ui, item.upstream_name.as_deref().unwrap_or("-"), finished)
-                                .on_hover_text(format!("id: {}", item.id));
-                            row_label(ui, item.model.as_deref().unwrap_or("-"), finished);
-                            row_label(
+                            let upstream_name = item.upstream_name.as_deref().unwrap_or("-");
+                            sized_row_label(ui, upstream_name, LIVE_UPSTREAM_WIDTH, finished)
+                                .on_hover_text(format!("{upstream_name}\nid: {}", item.id));
+                            let model = item.model.as_deref().unwrap_or("-");
+                            sized_row_label(ui, model, LIVE_MODEL_WIDTH, finished)
+                                .on_hover_text(model);
+                            let reasoning = item.reasoning_effort.as_deref().unwrap_or("-");
+                            sized_row_label(
                                 ui,
-                                item.reasoning_effort.as_deref().unwrap_or("-"),
+                                reasoning,
+                                LIVE_REASONING_WIDTH,
                                 finished,
-                            );
-                            row_label(ui, &item.endpoint, finished);
+                            )
+                            .on_hover_text(reasoning);
+                            sized_row_label(ui, &item.endpoint, LIVE_ENDPOINT_WIDTH, finished)
+                                .on_hover_text(&item.endpoint);
                             if let Some(scroll) = scroll_states.get_mut(&item.id) {
                                 live_tail_label(ui, item, scroll, settings, tail_width, finished);
                             } else {
-                                row_label(ui, "-", finished);
+                                sized_row_label(ui, "-", tail_width, finished);
                             }
                             output_speed_label(ui, item, finished);
-                            row_label(ui, format_elapsed(item), finished);
-                            row_label(ui, format_started_at(item), finished);
+                            sized_row_label(
+                                ui,
+                                format_elapsed(item),
+                                LIVE_ELAPSED_WIDTH,
+                                finished,
+                            );
+                            sized_row_label(
+                                ui,
+                                format_started_at(item),
+                                LIVE_STARTED_WIDTH,
+                                finished,
+                            );
                             if ui
-                                .add_enabled(
-                                    !item.terminating && !finished,
-                                    egui::Button::new(terminate_text(item)),
-                                )
+                                .add_enabled_ui(!item.terminating && !finished, |ui| {
+                                    ui.add_sized(
+                                        [LIVE_ACTION_WIDTH, ui.spacing().interact_size.y],
+                                        egui::Button::new(terminate_text(item)),
+                                    )
+                                })
+                                .inner
                                 .on_hover_text(terminate_hover_text(item))
                                 .clicked()
                             {
@@ -294,11 +321,8 @@ fn output_speed_label(ui: &mut egui::Ui, item: &LiveRequestSnapshot, finished: b
     };
     ui.add_sized(
         [LIVE_OUTPUT_SPEED_WIDTH, ui.spacing().interact_size.y],
-        egui::Label::new(row_text(
-            ui,
-            format!("~{:.1} tps", rate.estimated_tokens_per_second),
-            finished,
-        )),
+        egui::Label::new(row_text(ui, format_tps(rate.estimated_tokens_per_second), finished))
+            .truncate(),
     )
     .on_hover_text(format!("字符速度: {:.1} 字符/秒", rate.chars_per_second));
 }
@@ -331,12 +355,31 @@ fn char_byte_index(text: &str, char_index: usize) -> usize {
         .unwrap_or(text.len())
 }
 
-fn row_label(
+fn column_header(ui: &mut egui::Ui, text: &str, width: f32) -> egui::Response {
+    ui.add_sized(
+        [width, ui.spacing().interact_size.y],
+        egui::Label::new(egui::RichText::new(text).strong()).truncate(),
+    )
+}
+
+fn sized_row_label(
     ui: &mut egui::Ui,
     text: impl Into<String>,
+    width: f32,
     finished: bool,
 ) -> egui::Response {
-    ui.label(row_text(ui, text, finished))
+    ui.add_sized(
+        [width, ui.spacing().interact_size.y],
+        egui::Label::new(row_text(ui, text, finished)).truncate(),
+    )
+}
+
+fn format_tps(value: f64) -> String {
+    if value.abs() >= 1_000.0 {
+        format!("~{value:.0} tps")
+    } else {
+        format!("~{value:.1} tps")
+    }
 }
 
 fn row_text(ui: &egui::Ui, text: impl Into<String>, finished: bool) -> egui::RichText {
@@ -415,5 +458,10 @@ mod tests {
         let items = vec![snapshot("active", false), snapshot("closed", true)];
 
         assert_eq!(active_connection_count(&items), 1);
+    }
+
+    #[test]
+    fn default_window_keeps_a_useful_tail_width() {
+        assert_eq!(live_tail_width(800.0), 176.0);
     }
 }
