@@ -7,7 +7,7 @@ use crate::core::models::{
     RequestLog, ScheduleGroup, ScheduleGroupChild, ScheduleGroupMember, ScheduleRouteRule,
     Upstream, UpstreamBalanceAlertSettings, UpstreamCacheKeepaliveSettings, WireApi,
 };
-use crate::live::LiveRequestSnapshot;
+use crate::live::{LiveOutputSettings, LiveRequestSnapshot};
 use crate::pricing;
 use crate::proxy::{self, ServerHandle};
 use crate::quota as quota_api;
@@ -374,6 +374,7 @@ pub struct CodexSwitchApp {
     last_seen_request_log_version: u64,
     last_request_log_poll_at: Instant,
     last_seen_live_stream_version: u64,
+    last_live_output_rate_refresh_at: Instant,
     last_seen_cache_keepalive_version: u64,
     last_seen_balance_snapshot_version: u64,
     last_cache_keepalive_refresh_at: Instant,
@@ -395,6 +396,8 @@ pub struct CodexSwitchApp {
     provider_stats: Vec<ProviderStats>,
     logs: Vec<RequestLog>,
     live_connections: Vec<LiveRequestSnapshot>,
+    live_output_settings: LiveOutputSettings,
+    live_tail_scroll_states: BTreeMap<String, active::LiveTailScrollState>,
     cache_keepalive_sessions: Vec<CacheKeepaliveSessionSnapshot>,
     selected_cache_keepalive_key: Option<String>,
     log_page: usize,
@@ -443,6 +446,7 @@ impl CodexSwitchApp {
             .ok()
             .flatten()
             .unwrap_or_default();
+        let live_output_settings = LiveOutputSettings::default();
         let last_seen_request_log_version = state.events.request_log_version();
         let last_seen_live_stream_version = state.events.live_stream_version();
         let last_seen_cache_keepalive_version = state.events.cache_keepalive_version();
@@ -471,6 +475,7 @@ impl CodexSwitchApp {
             last_seen_request_log_version,
             last_request_log_poll_at: Instant::now(),
             last_seen_live_stream_version,
+            last_live_output_rate_refresh_at: Instant::now(),
             last_seen_cache_keepalive_version,
             last_seen_balance_snapshot_version,
             last_cache_keepalive_refresh_at: Instant::now(),
@@ -492,6 +497,8 @@ impl CodexSwitchApp {
             provider_stats: Vec::new(),
             logs: Vec::new(),
             live_connections: Vec::new(),
+            live_output_settings,
+            live_tail_scroll_states: BTreeMap::new(),
             cache_keepalive_sessions: Vec::new(),
             selected_cache_keepalive_key: None,
             log_page: 0,
@@ -530,16 +537,12 @@ impl CodexSwitchApp {
 
     fn maybe_auto_refresh(&mut self, ctx: &egui::Context) {
         self.drive_oauth_tasks();
+        self.update_live_connections(ctx);
         if self.window_hidden_to_tray {
             ctx.request_repaint_after(HIDDEN_REPAINT_INTERVAL);
             return;
         }
         ctx.request_repaint_after(Duration::from_millis(500));
-        let live_version = self.state.events.live_stream_version();
-        if live_version != self.last_seen_live_stream_version {
-            self.last_seen_live_stream_version = live_version;
-            self.live_connections = self.state.live_requests.snapshots();
-        }
         let cache_keepalive_version = self.state.events.cache_keepalive_version();
         if cache_keepalive_version != self.last_seen_cache_keepalive_version {
             self.last_seen_cache_keepalive_version = cache_keepalive_version;
@@ -1023,7 +1026,9 @@ impl eframe::App for CodexSwitchApp {
                     ui,
                     &mut self.tab,
                     Tab::ActiveConnections,
-                    &active_connections_tab_text(self.live_connections.len()),
+                    &active_connections_tab_text(active::active_connection_count(
+                        &self.live_connections,
+                    )),
                 );
                 tab_button(ui, &mut self.tab, Tab::Logs, "日志");
                 if ui.button("刷新").clicked() {
