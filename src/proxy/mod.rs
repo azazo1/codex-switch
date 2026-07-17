@@ -1,3 +1,5 @@
+mod compat;
+mod debug;
 mod forward;
 mod router;
 mod server;

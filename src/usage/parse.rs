@@ -1,5 +1,5 @@
 use crate::core::models::TokenUsage;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 pub fn extract_model(body: &[u8]) -> Option<String> {
     serde_json::from_slice::<Value>(body)
@@ -107,95 +107,6 @@ pub fn for_each_sse_text_delta(text: &str, mut on_delta: impl FnMut(&str)) {
     }
 }
 
-pub fn responses_to_chat_json(body: &[u8]) -> anyhow::Result<Vec<u8>> {
-    let value: Value = serde_json::from_slice(body)?;
-    let model = value
-        .get("model")
-        .cloned()
-        .unwrap_or_else(|| json!("gpt-5"));
-    let mut messages = Vec::new();
-    if let Some(instructions) = value.get("instructions").and_then(|v| v.as_str()) {
-        messages.push(json!({"role":"system","content":instructions}));
-    }
-    match value.get("input") {
-        Some(Value::String(text)) => messages.push(json!({"role":"user","content":text})),
-        Some(Value::Array(items)) => {
-            for item in items {
-                if let Some(message) = input_item_to_chat_message(item) {
-                    messages.push(message);
-                }
-            }
-        }
-        Some(other) => messages.push(json!({"role":"user","content":other.to_string()})),
-        None => {}
-    }
-    if messages.is_empty() {
-        messages.push(json!({"role":"user","content":""}));
-    }
-    let mut result = json!({
-        "model": model,
-        "messages": messages,
-        "stream": value.get("stream").and_then(|v| v.as_bool()).unwrap_or(false),
-    });
-    if let Some(max) = value.get("max_output_tokens") {
-        result["max_tokens"] = max.clone();
-    }
-    if let Some(temp) = value.get("temperature") {
-        result["temperature"] = temp.clone();
-    }
-    if result["stream"].as_bool() == Some(true) {
-        result["stream_options"] = json!({"include_usage": true});
-    }
-    Ok(serde_json::to_vec(&result)?)
-}
-
-pub fn chat_to_responses_json(value: &Value) -> Value {
-    let model = value
-        .get("model")
-        .cloned()
-        .unwrap_or_else(|| json!("unknown"));
-    let text = value
-        .pointer("/choices/0/message/content")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    json!({
-        "id": value.get("id").cloned().unwrap_or_else(|| json!(format!("resp_{}", uuid::Uuid::new_v4()))),
-        "object": "response",
-        "model": model,
-        "status": "completed",
-        "output": [{
-            "type": "message",
-            "role": "assistant",
-            "content": [{"type": "output_text", "text": text}],
-            "status": "completed"
-        }],
-        "usage": normalize_chat_usage(value.get("usage"))
-    })
-}
-
-fn input_item_to_chat_message(item: &Value) -> Option<Value> {
-    let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("user");
-    let content = match item.get("content") {
-        Some(Value::String(text)) => text.clone(),
-        Some(Value::Array(parts)) => parts
-            .iter()
-            .filter_map(|part| {
-                part.get("text")
-                    .or_else(|| part.get("input_text"))
-                    .and_then(|v| v.as_str())
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-        Some(other) => other.to_string(),
-        None => item
-            .get("text")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
-    };
-    Some(json!({"role": role, "content": content}))
-}
-
 fn usage_from_value(usage: &Value) -> TokenUsage {
     let input = int_field(usage, &["input_tokens", "prompt_tokens"]);
     let output = int_field(usage, &["output_tokens", "completion_tokens"]);
@@ -215,16 +126,6 @@ fn usage_from_value(usage: &Value) -> TokenUsage {
     };
     result.finish();
     result
-}
-
-fn normalize_chat_usage(usage: Option<&Value>) -> Value {
-    let usage = usage.map(usage_from_value).unwrap_or_default();
-    json!({
-        "input_tokens": usage.input_tokens,
-        "output_tokens": usage.output_tokens,
-        "total_tokens": usage.total_tokens,
-        "input_tokens_details": {"cached_tokens": usage.cache_read_tokens}
-    })
 }
 
 fn sse_text_delta(value: &Value) -> Option<&str> {
@@ -297,15 +198,6 @@ mod tests {
         assert_eq!(usage.input_tokens, 4096);
         assert_eq!(usage.output_tokens, 1);
         assert_eq!(usage.cache_read_tokens, 2048);
-    }
-
-    #[test]
-    fn converts_responses_to_chat() {
-        let body =
-            responses_to_chat_json(br#"{"model":"gpt","input":"hello","stream":true}"#).unwrap();
-        let value: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["messages"][0]["content"], "hello");
-        assert_eq!(value["stream_options"]["include_usage"], true);
     }
 
     #[test]

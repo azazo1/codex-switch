@@ -162,6 +162,8 @@ mod tests {
         ResponsesSse,
         ChatJson,
         ChatSse,
+        ChatToolSse,
+        ChatCustomToolSse,
         SlowChatSse,
         ImagesJson,
     }
@@ -294,6 +296,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chat_wire_preserves_upstream_error_response() {
+        let (mock_base, _hits) = spawn_mock(MockMode::BalanceError).await;
+        let state = test_state(&mock_base, WireApi::ChatCompletions).await;
+        let proxy_base = spawn_proxy(state).await;
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({"model":"domestic-coder","input":"hello"}))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
+        let value = response.json::<Value>().await.unwrap();
+        assert_eq!(value["error"]["message"], "insufficient balance");
+        assert!(value.get("object").is_none());
+    }
+
+    #[tokio::test]
+    async fn chat_route_downgrades_developer_role() {
+        let (mock_base, hits) = spawn_mock(MockMode::ChatJson).await;
+        let state = test_state(&mock_base, WireApi::ChatCompletions).await;
+        let proxy_base = spawn_proxy(state).await;
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/chat/completions"))
+            .bearer_auth("local-test")
+            .json(&json!({
+                "model":"domestic-chat",
+                "messages":[
+                    {"role":"developer","content":"follow the rules"},
+                    {"role":"user","content":"hello"}
+                ]
+            }))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let hits = hits.lock().await;
+        assert_eq!(hits[0].body["messages"][0]["role"], "system");
+        assert_eq!(hits[0].body["messages"][1]["role"], "user");
+    }
+
+    #[tokio::test]
+    async fn final_send_normalizes_developer_role_for_responses_wire() {
+        let (mock_base, hits) = spawn_mock(MockMode::ResponsesJson).await;
+        let state = test_state(&mock_base, WireApi::Responses).await;
+        let proxy_base = spawn_proxy(state).await;
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({
+                "model":"domestic-chat",
+                "messages":[{"role":"developer","content":"follow the rules"}]
+            }))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let hits = hits.lock().await;
+        assert_eq!(hits[0].body["messages"][0]["role"], "system");
+    }
+
+    #[tokio::test]
     async fn images_route_forwards_generations_request() {
         let (mock_base, hits) = spawn_mock(MockMode::ImagesJson).await;
         let state = test_state(&mock_base, WireApi::Responses).await;
@@ -344,6 +411,143 @@ mod tests {
         assert_eq!(logs[0].usage.output_tokens, 3);
         assert_eq!(logs[0].usage.total_tokens, 5);
         assert!(logs[0].first_token_ms.is_some());
+    }
+
+    #[tokio::test]
+    async fn chat_wire_converts_codex_tool_calls_end_to_end() {
+        let (mock_base, hits) = spawn_mock(MockMode::ChatToolSse).await;
+        let state = test_state(&mock_base, WireApi::ChatCompletions).await;
+        let proxy_base = spawn_proxy(state.clone()).await;
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({
+                "model":"domestic-coder",
+                "instructions":"Use tools when needed",
+                "input":[{
+                    "type":"message",
+                    "role":"user",
+                    "content":[{"type":"input_text","text":"read the source"}]
+                }],
+                "tools":[{
+                    "type":"function",
+                    "name":"read_file",
+                    "description":"Read one file",
+                    "parameters":{
+                        "type":"object",
+                        "properties":{"path":{"type":"string"}},
+                        "required":["path"]
+                    },
+                    "strict":false
+                }],
+                "stream":true
+            }))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response.text().await.unwrap();
+        assert!(text.contains("response.function_call_arguments.delta"));
+        assert!(text.contains("response.function_call_arguments.done"));
+        assert!(text.contains("\"type\":\"function_call\""));
+        assert!(text.contains("codex-switch-reasoning-v1:"));
+        assert!(text.contains("response.completed"));
+
+        let hits = hits.lock().await;
+        assert_eq!(hits[0].path, "/v1/chat/completions");
+        assert_eq!(hits[0].body["messages"][0]["role"], "system");
+        assert_eq!(hits[0].body["messages"][1]["content"], "read the source");
+        assert_eq!(hits[0].body["tools"][0]["function"]["name"], "read_file");
+        assert_eq!(hits[0].body["tools"][0]["function"]["strict"], false);
+        drop(hits);
+
+        let logs = state.store.recent_logs(1).await.unwrap();
+        assert_eq!(logs[0].usage.input_tokens, 8);
+        assert_eq!(logs[0].usage.output_tokens, 3);
+    }
+
+    #[tokio::test]
+    async fn chat_wire_converts_additional_custom_and_namespace_tools_end_to_end() {
+        let (mock_base, hits) = spawn_mock(MockMode::ChatCustomToolSse).await;
+        let state = test_state(&mock_base, WireApi::ChatCompletions).await;
+        let proxy_base = spawn_proxy(state.clone()).await;
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({
+                "model":"domestic-coder",
+                "input":[
+                    {
+                        "type":"additional_tools",
+                        "role":"developer",
+                        "tools":[
+                            {
+                                "type":"custom",
+                                "name":"exec",
+                                "description":"Run JavaScript tools",
+                                "format":{
+                                    "type":"grammar",
+                                    "syntax":"lark",
+                                    "definition":"start: source"
+                                }
+                            },
+                            {
+                                "type":"function",
+                                "name":"wait",
+                                "parameters":{"type":"object"},
+                                "strict":true
+                            },
+                            {
+                                "type":"namespace",
+                                "name":"collaboration",
+                                "tools":[{
+                                    "type":"function",
+                                    "name":"spawn_agent",
+                                    "parameters":{"type":"object"}
+                                }]
+                            }
+                        ]
+                    },
+                    {
+                        "type":"message",
+                        "role":"user",
+                        "content":[{"type":"input_text","text":"patch the file"}]
+                    }
+                ],
+                "tool_choice":"auto",
+                "parallel_tool_calls":false,
+                "stream":true
+            }))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response.text().await.unwrap();
+        assert!(text.contains("response.custom_tool_call_input.delta"));
+        assert!(text.contains("response.custom_tool_call_input.done"));
+        assert!(text.contains("\"type\":\"custom_tool_call\""));
+        assert!(text.contains("\"name\":\"exec\""));
+        assert!(text.contains("await tools.apply_patch()"));
+
+        let hits = hits.lock().await;
+        assert_eq!(hits[0].path, "/v1/chat/completions");
+        assert_eq!(hits[0].body["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(hits[0].body["messages"][0]["content"], "patch the file");
+        assert_eq!(hits[0].body["tools"].as_array().unwrap().len(), 3);
+        assert_eq!(hits[0].body["tools"][0]["function"]["name"], "exec");
+        assert!(hits[0].body["tools"][0]["function"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("\"format\""));
+        assert_eq!(hits[0].body["tools"][1]["function"]["strict"], true);
+        assert_eq!(
+            hits[0].body["tools"][2]["function"]["name"],
+            "collaboration__spawn_agent"
+        );
+        assert_eq!(hits[0].body["tool_choice"], "auto");
+        assert_eq!(hits[0].body["parallel_tool_calls"], false);
     }
 
     #[tokio::test]
@@ -1007,6 +1211,28 @@ mod tests {
                 concat!(
                     "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
                     "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":3,\"total_tokens\":5,\"prompt_tokens_details\":{\"cached_tokens\":2048}}}\n\n",
+                    "data: [DONE]\n\n"
+                ),
+            )
+                .into_response(),
+            MockMode::ChatToolSse => (
+                [(header::CONTENT_TYPE, "text/event-stream")],
+                concat!(
+                    "data: {\"model\":\"domestic-coder\",\"choices\":[{\"delta\":{\"reasoning_content\":\"need a file\"},\"finish_reason\":null}]}\n\n",
+                    "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_read\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\"}}]},\"finish_reason\":null}]}\n\n",
+                    "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"src/main.rs\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+                    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":3,\"total_tokens\":11}}\n\n",
+                    "data: [DONE]\n\n"
+                ),
+            )
+                .into_response(),
+            MockMode::ChatCustomToolSse => (
+                [(header::CONTENT_TYPE, "text/event-stream")],
+                concat!(
+                    "data: {\"model\":\"domestic-coder\",\"choices\":[{\"delta\":{\"reasoning_content\":\"need a patch\"},\"finish_reason\":null}]}\n\n",
+                    "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_exec\",\"type\":\"function\",\"function\":{\"name\":\"exec\",\"arguments\":\"{\\\"input\\\":\\\"await \"}}]},\"finish_reason\":null}]}\n\n",
+                    "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"tools.apply_patch()\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+                    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":4,\"total_tokens\":16}}\n\n",
                     "data: [DONE]\n\n"
                 ),
             )

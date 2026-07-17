@@ -59,12 +59,14 @@ Authorization: Bearer <仪表盘本地访问 key>
 Relay 上游可以声明 `Responses` 或 `Chat Completions` Wire API.
 
 - Responses 上游按 Responses 路径转发.
-- Chat Completions 上游收到 Responses 请求时, Codex Switch 会执行基础 JSON 和 SSE 转换.
-- 入站 Chat Completions 不会反向转换为 Responses.
+- Chat Completions 上游收到 Responses 请求时, Codex Switch 会执行 JSON 和 SSE 协议转换.
+- 入站 Chat Completions 不会反向转换为 Responses, 但会将 `developer` 角色降级为兼容性更广的 `system`.
 - Images 只会发往 Relay API Key 上游.
 - Codex OAuth 只会接收 Responses 请求.
 
-Responses 到 Chat Completions 的转换主要覆盖文本输入, instructions, model, stream, token 上限和 temperature. 工具调用, 多模态输入和部分高级字段可能无法完整转换. 依赖完整 Responses 语义时, 应优先选择原生 Responses 上游.
+Responses 到 Chat Completions 的转换覆盖文本和图片消息, instructions, function tools, custom tools, tool output, reasoning, stream, token 上限, temperature, JSON 输出格式和 usage. custom tool 会转换成接收 `input` 字符串的 function tool. Chat 上游返回的 `reasoning_content`, `reasoning` 和 `reasoning_details` 会保存为可跨工具轮次回传的 Responses reasoning item.
+
+转换层只使用 OpenAI 兼容字段. provider 私有工具类型, 私有消息结构, 音频, 文件输入和服务端内置工具不会自动转换. 上游对标准字段的支持也可能因模型而异. 依赖完整 Responses 语义时, 仍应优先选择原生 Responses 上游.
 
 ## Compact 请求
 

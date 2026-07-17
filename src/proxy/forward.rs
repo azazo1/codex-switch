@@ -2,6 +2,8 @@ use crate::app::AppState;
 use crate::cache_keepalive::CacheKeepaliveRegistration;
 use crate::core::models::{TokenUsage, Upstream, UpstreamKind, WireApi};
 use crate::live::LiveRequestMeta;
+use crate::proxy::compat::{self, ChatResponseContext, ChatSseConverter};
+use crate::proxy::debug;
 use crate::proxy::transform;
 use crate::quota;
 use crate::scheduler::{self, SchedulerFailureKind};
@@ -90,6 +92,8 @@ pub async fn handle_openai(
     let model = usage::extract_model(&body);
     let reasoning_effort = usage::extract_reasoning_effort(&body);
     let compact = endpoint.starts_with("/responses/compact");
+    let request_id = uuid::Uuid::new_v4().to_string();
+    debug::log_body("client_request", &request_id, &endpoint, &body);
 
     let request = ForwardRequest {
         state: &state,
@@ -99,7 +103,7 @@ pub async fn handle_openai(
         body,
         endpoint: endpoint.clone(),
         started,
-        request_id: uuid::Uuid::new_v4().to_string(),
+        request_id,
         model: model.clone(),
         reasoning_effort: reasoning_effort.clone(),
         endpoint_kind,
@@ -343,6 +347,7 @@ async fn forward_with_upstream(
     upstream: Upstream,
     target_model: Option<&str>,
 ) -> anyhow::Result<ForwardResult> {
+    let mut chat_response_context = None;
     let mut target_body = match target_model {
         Some(model) => transform::rewrite_model(&request.body, model)?,
         None => request.body.to_vec(),
@@ -359,7 +364,9 @@ async fn forward_with_upstream(
         target_url = format!("https://chatgpt.com/backend-api/codex{}", request.endpoint);
     } else if request.endpoint_kind.is_responses() && upstream.wire_api == WireApi::ChatCompletions
     {
-        target_body = usage::responses_to_chat_json(&target_body)?;
+        let converted = compat::responses_to_chat_json(&target_body)?;
+        target_body = converted.body;
+        chat_response_context = Some(converted.response_context);
         target_url = transform::build_endpoint(&upstream.base_url, "/chat/completions");
     } else if request.endpoint_kind.is_responses()
         || request.endpoint_kind == OpenAiEndpoint::Images
@@ -368,6 +375,15 @@ async fn forward_with_upstream(
     } else {
         target_url = transform::build_endpoint(&upstream.base_url, "/chat/completions");
     }
+    if request.endpoint_kind != OpenAiEndpoint::Images {
+        target_body = compat::normalize_chat_request_json(&target_body)?;
+    }
+    debug::log_body(
+        "upstream_request",
+        &request.request_id,
+        &target_url,
+        &target_body,
+    );
     let keepalive_body = target_body.clone();
 
     let http = request.state.http_for_upstream(&upstream)?;
@@ -426,6 +442,7 @@ async fn forward_with_upstream(
             effective_model,
             status,
             response,
+            chat_response_context: chat_response_context.filter(|_| status.is_success()),
             active_guard,
             terminate_rx,
         });
@@ -441,18 +458,27 @@ async fn forward_with_upstream(
         })
     } else {
         let bytes = read_response_bytes(response, &mut terminate_rx).await?;
+        debug::log_body(
+            "upstream_response",
+            &request.request_id,
+            &target_url,
+            &bytes,
+        );
         active_guard.finish();
         let value = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
         let mut usage = usage::extract_usage_from_json(&value);
         usage.finish();
         let failure_kind = scheduler::classify_response(status, &bytes);
-        let response_body = if request.endpoint_kind.is_responses()
-            && upstream.wire_api == WireApi::ChatCompletions
-        {
-            serde_json::to_vec(&usage::chat_to_responses_json(&value))?
-        } else {
-            bytes.to_vec()
+        let response_body = match chat_response_context.as_ref().filter(|_| status.is_success()) {
+            Some(context) => serde_json::to_vec(&compat::chat_to_responses_json(&value, context))?,
+            None => bytes.to_vec(),
         };
+        debug::log_body(
+            "client_response",
+            &request.request_id,
+            &request.endpoint,
+            &response_body,
+        );
         maybe_register_cache_keepalive(
             request.state,
             &upstream,
@@ -529,6 +555,7 @@ struct LiveResponseStreamInput<'a> {
     effective_model: Option<String>,
     status: StatusCode,
     response: reqwest::Response,
+    chat_response_context: Option<ChatResponseContext>,
     active_guard: ActiveRequestGuard,
     terminate_rx: watch::Receiver<bool>,
 }
@@ -543,6 +570,7 @@ fn build_live_response_stream(
         effective_model,
         status,
         response,
+        chat_response_context,
         active_guard,
         mut terminate_rx,
     } = input;
@@ -552,9 +580,7 @@ fn build_live_response_stream(
     let model = request.model.clone();
     let reasoning_effort = request.reasoning_effort.clone();
     let started = request.started;
-    let convert_chat =
-        request.endpoint_kind.is_responses() && upstream.wire_api == WireApi::ChatCompletions;
-    let response_id = format!("resp_{}", uuid::Uuid::new_v4());
+    let convert_chat = chat_response_context.is_some();
     let log_draft = StreamLogDraft::new(
         state.clone(),
         &upstream,
@@ -572,15 +598,12 @@ fn build_live_response_stream(
         let mut usage = TokenUsage::default();
         let mut sse_buffer = String::new();
         let mut upstream_stream = response.bytes_stream();
+        let mut chat_converter = chat_response_context.map(ChatSseConverter::new);
         let mut termination_closed = false;
         let mut cache_keepalive_registered = false;
 
-        if convert_chat {
-            let created = format!(
-                "event: response.created\ndata: {}\n\n",
-                json!({"type":"response.created","response":{"id":response_id,"object":"response","status":"in_progress","output":[]}})
-            );
-            yield Ok(Bytes::from(created));
+        if let Some(converter) = &mut chat_converter {
+            yield Ok(Bytes::from(converter.initial_events()));
         }
 
         loop {
@@ -628,6 +651,12 @@ fn build_live_response_stream(
                     return;
                 }
             };
+            debug::log_body(
+                "upstream_stream_chunk",
+                &request_id,
+                &endpoint,
+                &chunk,
+            );
             if first_token_ms.is_none() && !chunk.is_empty() {
                 let elapsed = started.elapsed().as_millis() as i64;
                 first_token_ms = Some(elapsed);
@@ -636,8 +665,7 @@ fn build_live_response_stream(
             let converted = process_live_sse_chunk(
                 &state,
                 &request_id,
-                &response_id,
-                convert_chat,
+                chat_converter.as_mut(),
                 &mut usage,
                 &mut sse_buffer,
                 &chunk,
@@ -660,9 +688,21 @@ fn build_live_response_stream(
             }
             if convert_chat {
                 if !converted.is_empty() {
+                    debug::log_body(
+                        "client_stream_chunk",
+                        &request_id,
+                        &endpoint,
+                        &converted,
+                    );
                     yield Ok(Bytes::from(converted));
                 }
             } else {
+                debug::log_body(
+                    "client_stream_chunk",
+                    &request_id,
+                    &endpoint,
+                    &chunk,
+                );
                 yield Ok(chunk);
             }
         }
@@ -672,13 +712,18 @@ fn build_live_response_stream(
             let converted = process_complete_sse_blocks(
                 &state,
                 &request_id,
-                &response_id,
-                convert_chat,
+                chat_converter.as_mut(),
                 &mut usage,
                 &mut sse_buffer,
             );
             log_draft.merge_usage(&usage);
             if convert_chat && !converted.is_empty() {
+                debug::log_body(
+                    "client_stream_chunk",
+                    &request_id,
+                    &endpoint,
+                    &converted,
+                );
                 yield Ok(Bytes::from(converted));
             }
         }
@@ -699,6 +744,18 @@ fn build_live_response_stream(
             .await;
         }
         if convert_chat {
+            if let Some(converter) = &mut chat_converter {
+                let final_events = converter.finish();
+                if !final_events.is_empty() {
+                    debug::log_body(
+                        "client_stream_chunk",
+                        &request_id,
+                        &endpoint,
+                        &final_events,
+                    );
+                    yield Ok(Bytes::from(final_events));
+                }
+            }
             yield Ok(Bytes::from_static(b"data: [DONE]\n\n"));
         }
     }
@@ -788,22 +845,20 @@ async fn maybe_register_cache_keepalive(
 fn process_live_sse_chunk(
     state: &AppState,
     request_id: &str,
-    response_id: &str,
-    convert_chat: bool,
+    chat_converter: Option<&mut ChatSseConverter>,
     usage: &mut TokenUsage,
     buffer: &mut String,
     chunk: &[u8],
 ) -> Vec<u8> {
     let text = String::from_utf8_lossy(chunk);
     buffer.push_str(&text);
-    process_complete_sse_blocks(state, request_id, response_id, convert_chat, usage, buffer)
+    process_complete_sse_blocks(state, request_id, chat_converter, usage, buffer)
 }
 
 fn process_complete_sse_blocks(
     state: &AppState,
     request_id: &str,
-    response_id: &str,
-    convert_chat: bool,
+    mut chat_converter: Option<&mut ChatSseConverter>,
     usage: &mut TokenUsage,
     buffer: &mut String,
 ) -> Vec<u8> {
@@ -817,8 +872,8 @@ fn process_complete_sse_blocks(
             usage::for_each_sse_text_delta(block, |delta| {
                 changed |= state.live_requests.append_delta(request_id, delta);
             });
-            if convert_chat {
-                converted.extend_from_slice(&convert_chat_sse_block(response_id, block));
+            if let Some(converter) = chat_converter.as_deref_mut() {
+                converted.extend_from_slice(&converter.convert_block(block));
             }
         }
         buffer.drain(..index + separator_len);
@@ -837,44 +892,4 @@ fn find_sse_block_separator(buffer: &str) -> Option<(usize, usize)> {
         (Some(found), None) | (None, Some(found)) => Some(found),
         (None, None) => None,
     }
-}
-
-fn convert_chat_sse_block(response_id: &str, block: &str) -> Vec<u8> {
-    let mut out = String::new();
-    for line in block.lines() {
-        let Some(data) = line.strip_prefix("data:") else {
-            continue;
-        };
-        let data = data.trim();
-        if data.is_empty() || data == "[DONE]" {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(data) else {
-            continue;
-        };
-        if let Some(delta) = value
-            .pointer("/choices/0/delta/content")
-            .and_then(|value| value.as_str())
-            .filter(|value| !value.is_empty())
-            .or_else(|| {
-                value
-                    .pointer("/choices/0/delta/reasoning_content")
-                    .and_then(|value| value.as_str())
-                    .filter(|value| !value.is_empty())
-            })
-        {
-            out.push_str(&format!(
-                "event: response.output_text.delta\ndata: {}\n\n",
-                json!({"type":"response.output_text.delta","delta":delta})
-            ));
-        }
-        if value.get("usage").is_some() {
-            let usage = usage::chat_to_responses_json(&value)["usage"].clone();
-            out.push_str(&format!(
-                "event: response.completed\ndata: {}\n\n",
-                json!({"type":"response.completed","response":{"id":response_id,"status":"completed","usage":usage}})
-            ));
-        }
-    }
-    out.into_bytes()
 }

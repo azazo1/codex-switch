@@ -183,7 +183,7 @@ impl CodexSwitchApp {
             return;
         }
         if upstream.kind == UpstreamKind::RelayApiKey && upstream.base_url.is_empty() {
-            self.status = "Relay Base URL 不能为空".to_string();
+            self.status = "Base URL 不能为空".to_string();
             return;
         }
         let result = self.runtime.block_on(async {

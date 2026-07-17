@@ -16,14 +16,15 @@ mod storage;
 mod usage;
 
 use anyhow::Context;
-use std::sync::Arc;
-#[cfg(target_os = "windows")]
 use std::{
     fs::{self, OpenOptions},
-    sync::Mutex,
+    path::Path,
+    sync::{Arc, Mutex},
 };
 use tokio::runtime::Runtime;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+
+const LOG_FILE_ENV: &str = "CODEX_SWITCH_LOG_FILE";
 
 fn main() -> eframe::Result<()> {
     if let Err(err) = init_tracing() {
@@ -65,22 +66,15 @@ fn init_tracing() -> anyhow::Result<()> {
         .or_else(|_| EnvFilter::try_new("info"))
         .context("failed to create tracing env filter")?;
 
+    if let Some(log_path) = std::env::var_os(LOG_FILE_ENV).filter(|path| !path.is_empty()) {
+        return init_file_tracing(Path::new(&log_path), env_filter, false);
+    }
+
     #[cfg(target_os = "windows")]
     {
         let data_dir = app::data_dir()?;
-        fs::create_dir_all(&data_dir).context("failed to create application data directory")?;
         let log_path = data_dir.join("codex-switch.log");
-        let log_file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-            .with_context(|| format!("failed to open log file: {}", log_path.display()))?;
-        tracing_subscriber::registry()
-            .with(env_filter)
-            .with(fmt::layer().with_writer(Mutex::new(log_file)))
-            .try_init()
-            .context("failed to install tracing subscriber")?;
-        Ok(())
+        init_file_tracing(&log_path, env_filter, true)
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -92,4 +86,30 @@ fn init_tracing() -> anyhow::Result<()> {
             .context("failed to install tracing subscriber")?;
         Ok(())
     }
+}
+
+fn init_file_tracing(log_path: &Path, env_filter: EnvFilter, append: bool) -> anyhow::Result<()> {
+    if let Some(parent) = log_path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        fs::create_dir_all(parent).context("failed to create log directory")?;
+    }
+    let mut options = OpenOptions::new();
+    options.create(true).write(true);
+    if append {
+        options.append(true);
+    } else {
+        options.truncate(true);
+    }
+    let log_file = options
+        .open(log_path)
+        .with_context(|| format!("failed to open log file: {}", log_path.display()))?;
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(
+            fmt::layer()
+                .with_ansi(false)
+                .with_writer(Mutex::new(log_file)),
+        )
+        .try_init()
+        .context("failed to install tracing subscriber")?;
+    Ok(())
 }

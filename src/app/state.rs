@@ -13,6 +13,8 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
+const DATA_DIR_ENV: &str = "CODEX_SWITCH_DATA_DIR";
+
 type RepaintRequester = Arc<dyn Fn() + Send + Sync>;
 
 #[derive(Clone)]
@@ -135,6 +137,11 @@ impl AppState {
 }
 
 pub(crate) fn data_dir() -> anyhow::Result<PathBuf> {
+    if let Some(path) = std::env::var_os(DATA_DIR_ENV)
+        && !path.is_empty()
+    {
+        return Ok(PathBuf::from(path));
+    }
     let dirs = ProjectDirs::from("", "", "codex-switch")
         .context("failed to resolve system data directory")?;
     Ok(dirs.data_dir().to_path_buf())

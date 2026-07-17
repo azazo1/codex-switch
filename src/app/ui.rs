@@ -924,7 +924,7 @@ impl CodexSwitchApp {
                 self.relay_base_url.clear();
                 self.relay_proxy_url.clear();
                 self.relay_api_key.clear();
-                self.status = "已添加中转站上游".to_string();
+                self.status = "已添加 OpenAI 兼容上游".to_string();
                 self.refresh_all();
             }
             Err(err) => self.status = format!("添加失败: {err}"),

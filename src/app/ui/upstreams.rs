@@ -7,7 +7,7 @@ use eframe::egui;
 
 impl CodexSwitchApp {
     pub(super) fn upstreams_ui(&mut self, ui: &mut egui::Ui) {
-        ui.heading("添加 API Key 上游");
+        ui.heading("添加 OpenAI 兼容上游");
         ui.horizontal(|ui| {
             ui.label("名称");
             ui.text_edit_singleline(&mut self.relay_name);
@@ -28,6 +28,7 @@ impl CodexSwitchApp {
             ui.add(egui::TextEdit::singleline(&mut self.relay_api_key).password(true));
         });
         ui.horizontal(|ui| {
+            ui.label("Wire API");
             ui.radio_value(&mut self.relay_wire_api, WireApi::Responses, "Responses");
             ui.radio_value(
                 &mut self.relay_wire_api,

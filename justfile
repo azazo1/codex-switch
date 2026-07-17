@@ -9,6 +9,10 @@ test:
 clippy:
     cargo clippy
 
+# 使用隔离数据库启动桌面应用并将完整代理 body 写入日志文件.
+debug:
+    CODEX_SWITCH_DATA_DIR=target/codex-switch-debug CODEX_SWITCH_LOG_FILE=target/codex-switch-debug/codex-switch.log CODEX_SWITCH_LOG_BODIES=1 RUST_LOG=codex_switch=trace,tower_http=debug cargo run
+
 # 启动桌面应用.
 run:
     cargo run
