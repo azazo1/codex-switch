@@ -46,6 +46,33 @@ impl WireApi {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ErrorRetryPolicy {
+    Off,
+    Transient,
+    All,
+}
+
+impl ErrorRetryPolicy {
+    pub const ALL: [Self; 3] = [Self::Off, Self::Transient, Self::All];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Transient => "transient",
+            Self::All => "all",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "transient" => Self::Transient,
+            "all" => Self::All,
+            _ => Self::Off,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BalanceProvider {
     Auto,
     DeepSeek,
@@ -138,6 +165,7 @@ pub struct Upstream {
     pub base_url: String,
     pub wire_api: WireApi,
     pub supports_compact: bool,
+    pub error_retry_policy: ErrorRetryPolicy,
     pub enabled: bool,
     pub priority: i64,
     pub weight: i64,
@@ -167,6 +195,7 @@ impl Upstream {
             base_url,
             wire_api,
             supports_compact,
+            error_retry_policy: ErrorRetryPolicy::Off,
             enabled: true,
             priority: 0,
             weight: 1,
@@ -196,6 +225,7 @@ impl Upstream {
             base_url: "https://chatgpt.com/backend-api/codex".to_string(),
             wire_api: WireApi::Responses,
             supports_compact: true,
+            error_retry_policy: ErrorRetryPolicy::Off,
             enabled: true,
             priority: 10,
             weight: 1,

@@ -1,6 +1,6 @@
 use crate::app::AppState;
 use crate::cache_keepalive::CacheKeepaliveRegistration;
-use crate::core::models::{TokenUsage, Upstream, UpstreamKind, WireApi};
+use crate::core::models::{ErrorRetryPolicy, TokenUsage, Upstream, UpstreamKind, WireApi};
 use crate::live::LiveRequestMeta;
 use crate::proxy::compat::{self, ChatResponseContext, ChatSseConverter};
 use crate::proxy::debug;
@@ -28,6 +28,7 @@ use std::time::Instant;
 use tokio::sync::watch;
 
 mod auth;
+mod error_policy;
 mod headers;
 mod logging;
 mod models;
@@ -469,10 +470,29 @@ async fn forward_with_upstream(
         let mut usage = usage::extract_usage_from_json(&value);
         usage.finish();
         let failure_kind = scheduler::classify_response(status, &bytes);
-        let response_body = match chat_response_context.as_ref().filter(|_| status.is_success()) {
+        let mut response_body = match chat_response_context.as_ref().filter(|_| status.is_success()) {
             Some(context) => serde_json::to_vec(&compat::chat_to_responses_json(&value, context))?,
             None => bytes.to_vec(),
         };
+        let mut client_status = status;
+        if let Some(rewritten) = error_policy::rewrite_json_response(
+            status,
+            &response_body,
+            upstream.error_retry_policy,
+        )
+        {
+            tracing::warn!(
+                request_id = %request.request_id,
+                upstream_id = %upstream.id,
+                upstream_name = %upstream.name,
+                policy = %upstream.error_retry_policy.as_str(),
+                upstream_status = %status.as_u16(),
+                client_status = %rewritten.status.as_u16(),
+                "rewrote upstream response as retryable error"
+            );
+            client_status = rewritten.status;
+            response_body = rewritten.body;
+        }
         debug::log_body(
             "client_response",
             &request.request_id,
@@ -496,7 +516,7 @@ async fn forward_with_upstream(
             first_token_ms: None,
             failure_kind,
             log_on_return: true,
-            response: build_response(status, response_headers, response_body),
+            response: build_response(client_status, response_headers, response_body),
         })
     }
 }
@@ -599,6 +619,10 @@ fn build_live_response_stream(
         let mut sse_buffer = String::new();
         let mut upstream_stream = response.bytes_stream();
         let mut chat_converter = chat_response_context.map(ChatSseConverter::new);
+        let mut error_rewriter = (!convert_chat
+            && upstream.error_retry_policy != ErrorRetryPolicy::Off)
+            .then(|| error_policy::SseErrorRewriter::new(upstream.error_retry_policy));
+        let mut error_rewrite_logged = false;
         let mut termination_closed = false;
         let mut cache_keepalive_registered = false;
 
@@ -696,6 +720,27 @@ fn build_live_response_stream(
                     );
                     yield Ok(Bytes::from(converted));
                 }
+            } else if let Some(rewriter) = &mut error_rewriter {
+                let output = rewriter.push(&chunk);
+                if output.rewrite_count > 0 && !error_rewrite_logged {
+                    tracing::warn!(
+                        request_id = %request_id,
+                        upstream_id = %upstream.id,
+                        upstream_name = %upstream.name,
+                        policy = %upstream.error_retry_policy.as_str(),
+                        "rewrote upstream SSE response as retryable error"
+                    );
+                    error_rewrite_logged = true;
+                }
+                if !output.bytes.is_empty() {
+                    debug::log_body(
+                        "client_stream_chunk",
+                        &request_id,
+                        &endpoint,
+                        &output.bytes,
+                    );
+                    yield Ok(Bytes::from(output.bytes));
+                }
             } else {
                 debug::log_body(
                     "client_stream_chunk",
@@ -725,6 +770,27 @@ fn build_live_response_stream(
                     &converted,
                 );
                 yield Ok(Bytes::from(converted));
+            }
+        }
+        if let Some(rewriter) = &mut error_rewriter {
+            let output = rewriter.finish();
+            if output.rewrite_count > 0 && !error_rewrite_logged {
+                tracing::warn!(
+                    request_id = %request_id,
+                    upstream_id = %upstream.id,
+                    upstream_name = %upstream.name,
+                    policy = %upstream.error_retry_policy.as_str(),
+                    "rewrote upstream SSE response as retryable error"
+                );
+            }
+            if !output.bytes.is_empty() {
+                debug::log_body(
+                    "client_stream_chunk",
+                    &request_id,
+                    &endpoint,
+                    &output.bytes,
+                );
+                yield Ok(Bytes::from(output.bytes));
             }
         }
         usage.finish();

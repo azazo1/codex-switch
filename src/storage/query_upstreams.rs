@@ -1,4 +1,6 @@
-use crate::core::models::{BalanceProvider, Upstream, UpstreamKind, WireApi};
+use crate::core::models::{
+    BalanceProvider, ErrorRetryPolicy, Upstream, UpstreamKind, WireApi,
+};
 use crate::storage::Store;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
@@ -38,16 +40,17 @@ impl Store {
     pub async fn save_upstream(&self, upstream: &Upstream) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO upstreams (
-                id, kind, name, base_url, wire_api, supports_compact, enabled, priority, weight,
-                proxy_url, balance_provider, chatgpt_account_id, email, plan_type, token_expires_at,
-                created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                id, kind, name, base_url, wire_api, supports_compact, error_retry_policy,
+                enabled, priority, weight, proxy_url, balance_provider, chatgpt_account_id, email,
+                plan_type, token_expires_at, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
              ON CONFLICT(id) DO UPDATE SET
                 kind = excluded.kind,
                 name = excluded.name,
                 base_url = excluded.base_url,
                 wire_api = excluded.wire_api,
                 supports_compact = excluded.supports_compact,
+                error_retry_policy = excluded.error_retry_policy,
                 enabled = excluded.enabled,
                 priority = excluded.priority,
                 weight = excluded.weight,
@@ -65,6 +68,7 @@ impl Store {
         .bind(&upstream.base_url)
         .bind(upstream.wire_api.as_str())
         .bind(i64::from(upstream.supports_compact))
+        .bind(upstream.error_retry_policy.as_str())
         .bind(i64::from(upstream.enabled))
         .bind(upstream.priority)
         .bind(upstream.weight)
@@ -248,10 +252,10 @@ async fn insert_upstream(
 ) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO upstreams (
-            id, kind, name, base_url, wire_api, supports_compact, enabled, priority, weight,
-            proxy_url, balance_provider, chatgpt_account_id, email, plan_type, token_expires_at,
-            created_at, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            id, kind, name, base_url, wire_api, supports_compact, error_retry_policy,
+            enabled, priority, weight, proxy_url, balance_provider, chatgpt_account_id, email,
+            plan_type, token_expires_at, created_at, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
     )
     .bind(&upstream.id)
     .bind(upstream.kind.as_str())
@@ -259,6 +263,7 @@ async fn insert_upstream(
     .bind(&upstream.base_url)
     .bind(upstream.wire_api.as_str())
     .bind(i64::from(upstream.supports_compact))
+    .bind(upstream.error_retry_policy.as_str())
     .bind(i64::from(upstream.enabled))
     .bind(upstream.priority)
     .bind(upstream.weight)
@@ -307,6 +312,9 @@ pub(super) fn row_to_upstream(row: sqlx::sqlite::SqliteRow) -> anyhow::Result<Up
         base_url: row.get("base_url"),
         wire_api: WireApi::from_str(&row.get::<String, _>("wire_api")),
         supports_compact: row.get::<i64, _>("supports_compact") != 0,
+        error_retry_policy: ErrorRetryPolicy::from_str(
+            &row.get::<String, _>("error_retry_policy"),
+        ),
         enabled: row.get::<i64, _>("enabled") != 0,
         priority: row.get("priority"),
         weight: row.get("weight"),
@@ -323,4 +331,31 @@ pub(super) fn row_to_upstream(row: sqlx::sqlite::SqliteRow) -> anyhow::Result<Up
             .context("invalid updated_at")?
             .with_timezone(&Utc),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn persists_error_retry_policy() {
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-upstream-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let store = Store::open(path).await.unwrap();
+        let mut upstream = Upstream::new_relay(
+            "relay".to_string(),
+            "https://example.com/v1".to_string(),
+            WireApi::Responses,
+            false,
+            BalanceProvider::Unsupported,
+        );
+        upstream.error_retry_policy = ErrorRetryPolicy::All;
+
+        store.save_upstream(&upstream).await.unwrap();
+        let saved = store.get_upstream(&upstream.id).await.unwrap().unwrap();
+
+        assert_eq!(saved.error_retry_policy, ErrorRetryPolicy::All);
+    }
 }

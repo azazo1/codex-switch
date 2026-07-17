@@ -2,8 +2,8 @@ use super::{CodexSwitchApp, token_amount};
 use crate::app::http;
 use crate::balance;
 use crate::core::models::{
-    BalanceProvider, CacheKeepaliveMode, Upstream, UpstreamCacheKeepaliveSettings, UpstreamKind,
-    UpstreamBalanceAlertSettings, WireApi,
+    BalanceProvider, CacheKeepaliveMode, ErrorRetryPolicy, Upstream,
+    UpstreamBalanceAlertSettings, UpstreamCacheKeepaliveSettings, UpstreamKind, WireApi,
 };
 use eframe::egui;
 
@@ -271,6 +271,24 @@ impl UpstreamEditor {
             );
         });
         ui.horizontal(|ui| {
+            ui.label("错误重试");
+            egui::ComboBox::from_id_salt("upstream_error_retry_policy")
+                .selected_text(error_retry_policy_label(self.upstream.error_retry_policy))
+                .show_ui(ui, |ui| {
+                    for policy in ErrorRetryPolicy::ALL {
+                        ui.selectable_value(
+                            &mut self.upstream.error_retry_policy,
+                            policy,
+                            error_retry_policy_label(policy),
+                        );
+                    }
+                })
+                .response
+                .on_hover_text(
+                    "仅临时错误处理容量和普通限流, 全部上游错误还会重试上下文, 额度, 策略和无效请求错误",
+                );
+        });
+        ui.horizontal(|ui| {
             ui.label("代理 URL");
             let proxy_url = self.upstream.proxy_url.get_or_insert_with(String::new);
             ui.add(egui::TextEdit::singleline(proxy_url).hint_text("留空使用系统代理"));
@@ -353,6 +371,14 @@ impl UpstreamEditor {
         });
         ui.separator();
         ui.label("缓存保持仅支持 Relay API Key 上游");
+    }
+}
+
+fn error_retry_policy_label(policy: ErrorRetryPolicy) -> &'static str {
+    match policy {
+        ErrorRetryPolicy::Off => "关闭",
+        ErrorRetryPolicy::Transient => "仅临时错误",
+        ErrorRetryPolicy::All => "全部上游错误",
     }
 }
 
