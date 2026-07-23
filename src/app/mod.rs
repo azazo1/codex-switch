@@ -1,3 +1,4 @@
+mod build_info;
 mod fonts;
 pub(crate) mod http;
 mod icon;
@@ -6,6 +7,7 @@ mod state;
 mod tray;
 mod ui;
 
+pub use build_info::display_version;
 pub use fonts::install_fonts;
 pub use icon::app_icon;
 #[cfg(target_os = "windows")]

@@ -103,6 +103,8 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: 安装 Linux 依赖
         if: matrix.platform == 'linux'

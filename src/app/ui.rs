@@ -1046,6 +1046,8 @@ impl eframe::App for CodexSwitchApp {
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label(&self.status);
+                ui.separator();
+                ui.weak(crate::app::display_version());
             });
         });
 
