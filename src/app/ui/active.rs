@@ -291,7 +291,9 @@ fn live_tail_label(
     };
     let response = ui.add_sized(
         [width, ui.spacing().interact_size.y],
-        egui::Label::new(row_text(ui, text, finished)).truncate(),
+        egui::Label::new(row_text(ui, text, finished))
+            .truncate()
+            .show_tooltip_when_elided(false),
     );
     let hover_text = if item.hover_output.is_empty() {
         text
