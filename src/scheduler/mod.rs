@@ -180,13 +180,25 @@ pub fn classify_response(status: StatusCode, body: &[u8]) -> Option<SchedulerFai
     if looks_like_balance_failure(status, body) {
         return Some(SchedulerFailureKind::Balance);
     }
-    if status.is_server_error() {
+    if status.is_server_error() || status.as_u16() == 529 || looks_like_overload(body) {
         return Some(SchedulerFailureKind::Server);
     }
     if status == StatusCode::TOO_MANY_REQUESTS {
         return Some(SchedulerFailureKind::OtherStatus);
     }
     None
+}
+
+fn looks_like_overload(body: &[u8]) -> bool {
+    let value = serde_json::from_slice::<Value>(body).ok();
+    value.as_ref().is_some_and(|value| {
+        value
+            .pointer("/error/type")
+            .or_else(|| value.pointer("/response/error/code"))
+            .or_else(|| value.pointer("/response/error/type"))
+            .and_then(Value::as_str)
+            .is_some_and(|kind| matches!(kind, "overloaded_error" | "server_is_overloaded"))
+    })
 }
 
 fn fixed_candidates(
@@ -533,6 +545,21 @@ mod tests {
         );
 
         assert_eq!(failure, Some(SchedulerFailureKind::Balance));
+    }
+
+    #[test]
+    fn classifies_anthropic_overload_failures() {
+        assert_eq!(
+            classify_response(
+                StatusCode::OK,
+                br#"{"type":"error","error":{"type":"overloaded_error","message":"busy"}}"#,
+            ),
+            Some(SchedulerFailureKind::Server)
+        );
+        assert_eq!(
+            classify_response(StatusCode::from_u16(529).unwrap(), b""),
+            Some(SchedulerFailureKind::Server)
+        );
     }
 
     #[test]

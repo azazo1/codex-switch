@@ -58,6 +58,16 @@ pub(super) fn to_axum_headers(headers: &reqwest::header::HeaderMap) -> HeaderMap
 fn should_return_header(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
-        "content-type" | "cache-control" | "x-request-id"
+        "content-type"
+            | "cache-control"
+            | "x-request-id"
+            | "request-id"
+            | "retry-after"
+            | "anthropic-ratelimit-requests-limit"
+            | "anthropic-ratelimit-requests-remaining"
+            | "anthropic-ratelimit-requests-reset"
+            | "anthropic-ratelimit-tokens-limit"
+            | "anthropic-ratelimit-tokens-remaining"
+            | "anthropic-ratelimit-tokens-reset"
     )
 }

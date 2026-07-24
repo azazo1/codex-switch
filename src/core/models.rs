@@ -27,6 +27,7 @@ impl UpstreamKind {
 pub enum WireApi {
     Responses,
     ChatCompletions,
+    AnthropicMessages,
 }
 
 impl WireApi {
@@ -34,13 +35,37 @@ impl WireApi {
         match self {
             Self::Responses => "responses",
             Self::ChatCompletions => "chat_completions",
+            Self::AnthropicMessages => "anthropic_messages",
         }
     }
 
     pub fn from_str(value: &str) -> Self {
         match value {
             "chat" | "openai_chat" | "chat_completions" => Self::ChatCompletions,
+            "anthropic" | "messages" | "anthropic_messages" => Self::AnthropicMessages,
             _ => Self::Responses,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ApiKeyAuthScheme {
+    Bearer,
+    XApiKey,
+}
+
+impl ApiKeyAuthScheme {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Bearer => "bearer",
+            Self::XApiKey => "x_api_key",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "x_api_key" | "x-api-key" => Self::XApiKey,
+            _ => Self::Bearer,
         }
     }
 }
@@ -164,6 +189,7 @@ pub struct Upstream {
     pub name: String,
     pub base_url: String,
     pub wire_api: WireApi,
+    pub api_key_auth_scheme: ApiKeyAuthScheme,
     pub supports_compact: bool,
     pub error_retry_policy: ErrorRetryPolicy,
     pub enabled: bool,
@@ -194,6 +220,11 @@ impl Upstream {
             name,
             base_url,
             wire_api,
+            api_key_auth_scheme: if wire_api == WireApi::AnthropicMessages {
+                ApiKeyAuthScheme::XApiKey
+            } else {
+                ApiKeyAuthScheme::Bearer
+            },
             supports_compact,
             error_retry_policy: ErrorRetryPolicy::Off,
             enabled: true,
@@ -224,6 +255,7 @@ impl Upstream {
             name,
             base_url: "https://chatgpt.com/backend-api/codex".to_string(),
             wire_api: WireApi::Responses,
+            api_key_auth_scheme: ApiKeyAuthScheme::Bearer,
             supports_compact: true,
             error_retry_policy: ErrorRetryPolicy::Off,
             enabled: true,

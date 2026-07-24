@@ -12,7 +12,8 @@ pub(super) fn session_key(
     let value = serde_json::from_slice::<Value>(body).ok()?;
     let raw_session = find_string(&value, "prompt_cache_key")
         .or_else(|| find_string(&value, "conversation_id"))
-        .or_else(|| find_string(&value, "session_id"))?;
+        .or_else(|| find_string(&value, "session_id"))
+        .or_else(|| contains_cache_control(&value).then_some("anthropic-cache-control"))?;
     let mut hasher = Sha256::new();
     hasher.update(upstream_id.as_bytes());
     hasher.update(model.as_bytes());
@@ -28,6 +29,7 @@ fn cacheable_prefix_fingerprint(value: &Value) -> String {
             let mut prefix = serde_json::Map::new();
             for key in [
                 "instructions",
+                "system",
                 "messages",
                 "tools",
                 "text",
@@ -42,6 +44,16 @@ fn cacheable_prefix_fingerprint(value: &Value) -> String {
         _ => value.clone(),
     };
     serde_json::to_string(&prefix).unwrap_or_default()
+}
+
+fn contains_cache_control(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => {
+            map.contains_key("cache_control") || map.values().any(contains_cache_control)
+        }
+        Value::Array(values) => values.iter().any(contains_cache_control),
+        _ => false,
+    }
 }
 
 fn find_string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {

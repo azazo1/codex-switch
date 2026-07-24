@@ -16,7 +16,7 @@ use crate::core::models::{
 };
 use crate::pricing;
 use crate::storage::{Store, credentials::CredentialStore};
-use crate::{proxy::transform, usage};
+use crate::{proxy::{transform, upstream_auth}, usage};
 use reqwest::StatusCode;
 use serde_json::Value;
 use std::sync::Arc;
@@ -424,6 +424,9 @@ impl CacheKeepaliveRuntime {
             WireApi::ChatCompletions => {
                 transform::build_endpoint(&session.upstream.base_url, "/chat/completions")
             }
+            WireApi::AnthropicMessages => {
+                transform::build_endpoint(&session.upstream.base_url, "/messages")
+            }
         };
         tracing::debug!(
             upstream_id = %session.upstream.id,
@@ -443,13 +446,14 @@ impl CacheKeepaliveRuntime {
             Some(proxy_url) if !proxy_url.trim().is_empty() => http::build_client(Some(proxy_url))?,
             _ => self.http.clone(),
         };
-        let response = http
+        let request = http
             .post(target_url)
-            .bearer_auth(api_key)
             .header(reqwest::header::ACCEPT, "application/json")
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .timeout(KEEPALIVE_REQUEST_TIMEOUT)
-            .body(target_body)
+            .body(target_body);
+        let request = upstream_auth::apply_api_key_auth(request, &session.upstream, &api_key);
+        let response = upstream_auth::apply_anthropic_version(request, &session.upstream)
             .send()
             .await?;
         let status = response.status();

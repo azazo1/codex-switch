@@ -3,9 +3,10 @@ use crate::app::{http, platform, state::AppState};
 use crate::balance;
 use crate::cache_keepalive::CacheKeepaliveSessionSnapshot;
 use crate::core::models::{
-    BalanceProvider, BalanceSnapshot, DashboardStats, DatabaseInfo, ProviderStats, QuotaSnapshot,
-    RequestLog, ScheduleGroup, ScheduleGroupChild, ScheduleGroupMember, ScheduleRouteRule,
-    Upstream, UpstreamBalanceAlertSettings, UpstreamCacheKeepaliveSettings, WireApi,
+    ApiKeyAuthScheme, BalanceProvider, BalanceSnapshot, DashboardStats, DatabaseInfo, ProviderStats,
+    QuotaSnapshot, RequestLog, ScheduleGroup, ScheduleGroupChild, ScheduleGroupMember,
+    ScheduleRouteRule, Upstream, UpstreamBalanceAlertSettings, UpstreamCacheKeepaliveSettings,
+    WireApi,
 };
 use crate::live::{LiveOutputSettings, LiveRequestSnapshot};
 use crate::pricing;
@@ -424,6 +425,7 @@ pub struct CodexSwitchApp {
     relay_proxy_url: String,
     relay_api_key: String,
     relay_wire_api: WireApi,
+    relay_api_key_auth_scheme: ApiKeyAuthScheme,
     relay_supports_compact: bool,
     quota_snapshots: Vec<(String, Option<QuotaSnapshot>)>,
     balance_snapshots: Vec<(String, Option<BalanceSnapshot>)>,
@@ -525,6 +527,7 @@ impl CodexSwitchApp {
             relay_proxy_url: String::new(),
             relay_api_key: String::new(),
             relay_wire_api: WireApi::Responses,
+            relay_api_key_auth_scheme: ApiKeyAuthScheme::Bearer,
             relay_supports_compact: true,
             quota_snapshots: Vec::new(),
             balance_snapshots: Vec::new(),
@@ -907,6 +910,10 @@ impl CodexSwitchApp {
             self.relay_supports_compact,
             provider,
         );
+        upstream.api_key_auth_scheme = self.relay_api_key_auth_scheme;
+        if upstream.wire_api == WireApi::AnthropicMessages {
+            upstream.supports_compact = false;
+        }
         if !proxy_url.is_empty() {
             upstream.proxy_url = Some(proxy_url);
         }
@@ -924,7 +931,7 @@ impl CodexSwitchApp {
                 self.relay_base_url.clear();
                 self.relay_proxy_url.clear();
                 self.relay_api_key.clear();
-                self.status = "已添加 OpenAI 兼容上游".to_string();
+                self.status = "已添加 API Key 上游".to_string();
                 self.refresh_all();
             }
             Err(err) => self.status = format!("添加失败: {err}"),

@@ -1,10 +1,15 @@
 mod shared;
 mod stream;
+mod reverse;
 mod tools;
 #[cfg(test)]
 mod tests;
 
 pub(crate) use stream::ChatSseConverter;
+pub(crate) use reverse::{
+    ResponsesToChatSseConverter, chat_to_responses_request_json,
+    responses_response_to_chat_json,
+};
 
 use self::shared::*;
 use self::tools::{TOOL_SEARCH_CHAT_NAME, ToolContext, ToolKind};
@@ -17,6 +22,35 @@ pub(crate) struct ChatResponseContext {
 }
 
 impl ChatResponseContext {
+    pub(crate) fn from_responses_request(value: &Value) -> Self {
+        Self {
+            tool_context: ToolContext::from_request(value),
+            model: value.get("model").and_then(Value::as_str).map(str::to_string),
+        }
+    }
+
+    pub(crate) fn compatible_function_tools(&self) -> &[Value] {
+        self.tool_context.chat_tools()
+    }
+
+    pub(crate) fn restore_tool_item(
+        &self,
+        item_id: &str,
+        status: &str,
+        call_id: &str,
+        name: &str,
+        arguments: &str,
+    ) -> Value {
+        response_tool_item_from_chat_name(
+            item_id,
+            status,
+            call_id,
+            name,
+            arguments,
+            self,
+        )
+    }
+
     fn is_custom_tool(&self, name: &str) -> bool {
         self.tool_context.is_custom_tool(name)
     }
@@ -95,14 +129,12 @@ pub(crate) fn responses_to_chat_json(body: &[u8]) -> anyhow::Result<ConvertedCha
     let object = value
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("responses request body must be a JSON object"))?;
+    validate_responses_tools(object.get("tools"))?;
     let model = object
         .get("model")
         .cloned()
         .unwrap_or_else(|| json!("unknown"));
-    let context = ChatResponseContext {
-        tool_context: ToolContext::from_request(&value),
-        model: model.as_str().map(str::to_string),
-    };
+    let context = ChatResponseContext::from_responses_request(&value);
     let mut messages = Vec::new();
     if let Some(instructions) = object.get("instructions").and_then(Value::as_str) {
         messages.push(json!({"role":"system","content":instructions}));
@@ -318,7 +350,9 @@ fn chat_content(content: Option<&Value>) -> anyhow::Result<Value> {
                         converted.push(json!({"type":"image_url","image_url":image_url}));
                         has_media = true;
                     }
-                    _ => {}
+                    kind => anyhow::bail!(
+                        "Responses content block {kind} cannot be converted to Chat Completions"
+                    ),
                 }
             }
             if has_media {
@@ -333,6 +367,22 @@ fn chat_content(content: Option<&Value>) -> anyhow::Result<Value> {
         }
         other => Ok(json!(json_text(other))),
     }
+}
+
+fn validate_responses_tools(tools: Option<&Value>) -> anyhow::Result<()> {
+    let Some(tools) = tools.and_then(Value::as_array) else {
+        return Ok(());
+    };
+    for tool in tools {
+        match tool.get("type").and_then(Value::as_str).unwrap_or("function") {
+            "function" | "custom" | "namespace" | "tool_search" | "web_search"
+            | "web_search_preview" => {}
+            kind => anyhow::bail!(
+                "Responses server tool {kind} cannot be converted to Chat Completions"
+            ),
+        }
+    }
+    Ok(())
 }
 
 fn convert_text_format(value: &Value) -> Value {

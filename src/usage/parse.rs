@@ -55,6 +55,23 @@ pub fn extract_usage_from_sse(text: &str) -> TokenUsage {
     usage
 }
 
+pub fn has_anthropic_usage_event(text: &str) -> bool {
+    let text = text.replace("\r\n", "\n");
+    text.split("\n\n").any(|block| {
+        block.lines().any(|line| {
+            line.strip_prefix("data:")
+                .map(str::trim)
+                .and_then(|data| serde_json::from_str::<Value>(data).ok())
+                .is_some_and(|value| {
+                    matches!(
+                        value.get("type").and_then(Value::as_str),
+                        Some("message_start" | "message_delta")
+                    ) && (value.get("usage").is_some() || value.pointer("/message/usage").is_some())
+                })
+        })
+    })
+}
+
 fn find_usage_value(value: &Value) -> Option<&Value> {
     match value {
         Value::Object(map) => {
@@ -81,6 +98,7 @@ fn looks_like_usage(value: &Value) -> bool {
         "input_tokens_details",
         "prompt_tokens_details",
         "cache_read_input_tokens",
+        "cache_creation_input_tokens",
     ]
     .iter()
     .any(|key| map.contains_key(*key))
@@ -108,7 +126,7 @@ pub fn for_each_sse_text_delta(text: &str, mut on_delta: impl FnMut(&str)) {
 }
 
 fn usage_from_value(usage: &Value) -> TokenUsage {
-    let input = int_field(usage, &["input_tokens", "prompt_tokens"]);
+    let raw_input = int_field(usage, &["input_tokens", "prompt_tokens"]);
     let output = int_field(usage, &["output_tokens", "completion_tokens"]);
     let cache_read = usage
         .pointer("/input_tokens_details/cached_tokens")
@@ -116,7 +134,19 @@ fn usage_from_value(usage: &Value) -> TokenUsage {
         .and_then(Value::as_i64)
         .unwrap_or_else(|| int_field(usage, &["cache_read_input_tokens"]));
     let cache_creation = int_field(usage, &["cache_creation_input_tokens"]);
-    let total = int_field(usage, &["total_tokens"]);
+    let anthropic_semantics = (usage.get("cache_read_input_tokens").is_some()
+        || usage.get("cache_creation_input_tokens").is_some())
+        && usage.get("input_tokens_details").is_none()
+        && usage.get("prompt_tokens_details").is_none();
+    let input = if anthropic_semantics {
+        raw_input + cache_read + cache_creation
+    } else {
+        raw_input
+    };
+    let total = usage
+        .get("total_tokens")
+        .and_then(Value::as_i64)
+        .unwrap_or(input + output);
     let mut result = TokenUsage {
         input_tokens: input,
         output_tokens: output,
@@ -148,6 +178,13 @@ fn sse_text_delta(value: &Value) -> Option<&str> {
         .or_else(|| {
             value
                 .get("delta")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+        })
+        .or_else(|| {
+            value
+                .pointer("/delta/text")
+                .or_else(|| value.pointer("/delta/thinking"))
                 .and_then(Value::as_str)
                 .filter(|value| !value.is_empty())
         })
@@ -198,6 +235,20 @@ mod tests {
         assert_eq!(usage.input_tokens, 4096);
         assert_eq!(usage.output_tokens, 1);
         assert_eq!(usage.cache_read_tokens, 2048);
+    }
+
+    #[test]
+    fn extracts_complete_anthropic_usage_event() {
+        let usage = extract_usage_from_sse(concat!(
+            "event: message_delta\n",
+            "data: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":4,\"output_tokens\":2,\"cache_read_input_tokens\":3,\"cache_creation_input_tokens\":1}}\n\n"
+        ));
+
+        assert_eq!(usage.input_tokens, 8);
+        assert_eq!(usage.output_tokens, 2);
+        assert_eq!(usage.cache_read_tokens, 3);
+        assert_eq!(usage.cache_creation_tokens, 1);
+        assert_eq!(usage.total_tokens, 10);
     }
 
     #[test]

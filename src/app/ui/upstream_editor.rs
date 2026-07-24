@@ -2,7 +2,7 @@ use super::{CodexSwitchApp, token_amount};
 use crate::app::http;
 use crate::balance;
 use crate::core::models::{
-    BalanceProvider, CacheKeepaliveMode, ErrorRetryPolicy, Upstream,
+    ApiKeyAuthScheme, BalanceProvider, CacheKeepaliveMode, ErrorRetryPolicy, Upstream,
     UpstreamBalanceAlertSettings, UpstreamCacheKeepaliveSettings, UpstreamKind, WireApi,
 };
 use eframe::egui;
@@ -140,6 +140,9 @@ impl CodexSwitchApp {
             return;
         }
         upstream.weight = upstream.weight.max(1);
+        if upstream.wire_api == WireApi::AnthropicMessages {
+            upstream.supports_compact = false;
+        }
         let api_key = editor.api_key.trim().to_string();
         let newapi_user_key = editor.newapi_user_key.trim().to_string();
         let newapi_user_id = editor.newapi_user_id.trim().to_string();
@@ -337,7 +340,36 @@ impl UpstreamEditor {
                 WireApi::ChatCompletions,
                 "Chat Completions",
             );
-            ui.checkbox(&mut self.upstream.supports_compact, "支持 compact");
+            if ui
+                .radio_value(
+                    &mut self.upstream.wire_api,
+                    WireApi::AnthropicMessages,
+                    "Anthropic Messages",
+                )
+                .clicked()
+            {
+                self.upstream.api_key_auth_scheme = ApiKeyAuthScheme::XApiKey;
+                self.upstream.supports_compact = false;
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("API Key 认证");
+            ui.radio_value(
+                &mut self.upstream.api_key_auth_scheme,
+                ApiKeyAuthScheme::Bearer,
+                "Bearer",
+            );
+            ui.radio_value(
+                &mut self.upstream.api_key_auth_scheme,
+                ApiKeyAuthScheme::XApiKey,
+                "x-api-key",
+            );
+            ui.add_enabled_ui(
+                self.upstream.wire_api != WireApi::AnthropicMessages,
+                |ui| {
+                    ui.checkbox(&mut self.upstream.supports_compact, "支持 compact");
+                },
+            );
         });
         provider_combo(ui, &mut self.upstream.balance_provider);
         if self.upstream.balance_provider == BalanceProvider::Auto

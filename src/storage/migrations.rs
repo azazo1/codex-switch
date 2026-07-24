@@ -375,6 +375,13 @@ fn migrations() -> &'static [Migration] {
                 "ALTER TABLE upstreams ADD COLUMN error_retry_policy TEXT NOT NULL DEFAULT 'off'",
             ],
         },
+        Migration {
+            version: 13,
+            name: "upstream_api_key_auth_scheme",
+            statements: &[
+                "ALTER TABLE upstreams ADD COLUMN api_key_auth_scheme TEXT NOT NULL DEFAULT 'bearer'",
+            ],
+        },
     ]
 }
 
@@ -395,7 +402,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 12);
+        assert_eq!(rows.len(), 13);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -438,6 +445,11 @@ mod tests {
             rows[11].get::<String, _>("name"),
             "upstream_error_retry_policy"
         );
+        assert_eq!(rows[12].get::<i64, _>("version"), 13);
+        assert_eq!(
+            rows[12].get::<String, _>("name"),
+            "upstream_api_key_auth_scheme"
+        );
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
             Some("127.0.0.1:15721")
@@ -466,6 +478,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 12);
+        assert_eq!(count, 13);
     }
 }

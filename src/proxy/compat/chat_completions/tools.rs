@@ -110,6 +110,9 @@ impl ToolContext {
                 Some("custom") => self.add_custom_tool(tool),
                 Some("namespace") => self.add_namespace_tool(tool),
                 Some("tool_search") => self.add_tool_search_tool(),
+                Some("web_search" | "web_search_preview") => {
+                    self.chat_tools.push(tool.clone());
+                }
                 Some(tool_type) => {
                     tracing::debug!(tool_type, "忽略不支持的 Responses 工具类型");
                 }

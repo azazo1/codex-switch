@@ -11,7 +11,16 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use super::headers::apply_headers;
 
-pub(super) async fn query_models(state: &AppState, headers: &HeaderMap) -> anyhow::Result<Value> {
+#[derive(Debug, thiserror::Error)]
+#[error("model not found: {0}")]
+pub(super) struct ModelNotFound(pub String);
+
+pub(super) async fn query_models(
+    state: &AppState,
+    headers: &HeaderMap,
+    uri: &axum::http::Uri,
+    model_id: Option<&str>,
+) -> anyhow::Result<Value> {
     let group = state.store.current_schedule_group().await?;
     let max_hops = state.store.scheduler_route_max_hops().await?;
     let sources = reachable_model_sources(state, group, max_hops).await?;
@@ -55,7 +64,87 @@ pub(super) async fn query_models(state: &AppState, headers: &HeaderMap) -> anyho
         );
     }
 
-    Ok(json!({"object":"list","data":models}))
+    let anthropic = headers.contains_key("anthropic-version");
+    if let Some(model_id) = model_id {
+        let model = models
+            .into_iter()
+            .find(|model| model.get("id").and_then(Value::as_str) == Some(model_id))
+            .ok_or_else(|| ModelNotFound(model_id.to_string()))?;
+        return Ok(if anthropic {
+            anthropic_model_item(&model)
+        } else {
+            model
+        });
+    }
+    if anthropic {
+        Ok(anthropic_model_page(models, uri.query()))
+    } else {
+        Ok(json!({"object":"list","data":models}))
+    }
+}
+
+fn anthropic_model_page(models: Vec<Value>, query: Option<&str>) -> Value {
+    let parameters = query
+        .map(|query| {
+            url::form_urlencoded::parse(query.as_bytes())
+                .into_owned()
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let after = parameters.get("after_id").and_then(|id| {
+        models
+            .iter()
+            .position(|model| model.get("id").and_then(Value::as_str) == Some(id.as_str()))
+            .map(|index| index + 1)
+    });
+    let before = parameters.get("before_id").and_then(|id| {
+        models
+            .iter()
+            .position(|model| model.get("id").and_then(Value::as_str) == Some(id.as_str()))
+    });
+    let start = after.unwrap_or(0).min(models.len());
+    let end = before.unwrap_or(models.len()).max(start).min(models.len());
+    let limit = parameters
+        .get("limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(20)
+        .clamp(1, 1000);
+    let available = &models[start..end];
+    let data = available
+        .iter()
+        .take(limit)
+        .map(anthropic_model_item)
+        .collect::<Vec<_>>();
+    let first_id = data.first().and_then(|item| item.get("id")).cloned().unwrap_or(Value::Null);
+    let last_id = data.last().and_then(|item| item.get("id")).cloned().unwrap_or(Value::Null);
+    json!({
+        "data":data,
+        "has_more":available.len() > limit,
+        "first_id":first_id,
+        "last_id":last_id
+    })
+}
+
+fn anthropic_model_item(model: &Value) -> Value {
+    let id = model.get("id").and_then(Value::as_str).unwrap_or_default();
+    let created_at = model
+        .get("created_at")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            model
+                .get("created")
+                .and_then(Value::as_i64)
+                .and_then(|timestamp| chrono::DateTime::from_timestamp(timestamp, 0))
+                .map(|value| value.to_rfc3339())
+        })
+        .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string());
+    json!({
+        "type":"model",
+        "id":id,
+        "display_name":model.get("display_name").and_then(Value::as_str).unwrap_or(id),
+        "created_at":created_at
+    })
 }
 
 #[derive(Clone)]
@@ -262,8 +351,14 @@ async fn query_relay_models(
     upstream: &Upstream,
 ) -> anyhow::Result<Vec<Value>> {
     let target_url = transform::build_endpoint(&upstream.base_url, "/models");
-    let request = state.http_for_upstream(upstream)?.get(target_url);
-    let request = apply_headers(state, upstream, request, headers).await?;
+    let mut request = state.http_for_upstream(upstream)?.get(target_url);
+    if upstream.wire_api == crate::core::models::WireApi::AnthropicMessages {
+        request = request.query(&[("limit", "1000")]);
+    }
+    let client_wire_api = headers
+        .contains_key("anthropic-version")
+        .then_some(crate::core::models::WireApi::AnthropicMessages);
+    let request = apply_headers(state, upstream, request, headers, client_wire_api).await?;
     let response = request.send().await?;
     let status = response.status();
     let value = response.json::<Value>().await?;

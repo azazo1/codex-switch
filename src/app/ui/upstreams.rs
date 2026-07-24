@@ -1,13 +1,13 @@
 use super::{CodexSwitchApp, DeleteAction};
 use crate::core::models::{
-    BalanceSnapshot, CacheKeepaliveMode, UpstreamCacheKeepaliveSettings, UpstreamKind, WireApi,
-    UpstreamBalanceAlertSettings,
+    ApiKeyAuthScheme, BalanceSnapshot, CacheKeepaliveMode, UpstreamBalanceAlertSettings,
+    UpstreamCacheKeepaliveSettings, UpstreamKind, WireApi,
 };
 use eframe::egui;
 
 impl CodexSwitchApp {
     pub(super) fn upstreams_ui(&mut self, ui: &mut egui::Ui) {
-        ui.heading("添加 OpenAI 兼容上游");
+        ui.heading("添加 API Key 上游");
         ui.horizontal(|ui| {
             ui.label("名称");
             ui.text_edit_singleline(&mut self.relay_name);
@@ -29,13 +29,49 @@ impl CodexSwitchApp {
         });
         ui.horizontal(|ui| {
             ui.label("Wire API");
-            ui.radio_value(&mut self.relay_wire_api, WireApi::Responses, "Responses");
+            if ui
+                .radio_value(&mut self.relay_wire_api, WireApi::Responses, "Responses")
+                .clicked()
+            {
+                self.relay_api_key_auth_scheme = ApiKeyAuthScheme::Bearer;
+            }
+            if ui
+                .radio_value(
+                    &mut self.relay_wire_api,
+                    WireApi::ChatCompletions,
+                    "Chat Completions",
+                )
+                .clicked()
+            {
+                self.relay_api_key_auth_scheme = ApiKeyAuthScheme::Bearer;
+            }
+            if ui
+                .radio_value(
+                    &mut self.relay_wire_api,
+                    WireApi::AnthropicMessages,
+                    "Anthropic Messages",
+                )
+                .clicked()
+            {
+                self.relay_api_key_auth_scheme = ApiKeyAuthScheme::XApiKey;
+                self.relay_supports_compact = false;
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("API Key 认证");
             ui.radio_value(
-                &mut self.relay_wire_api,
-                WireApi::ChatCompletions,
-                "Chat Completions",
+                &mut self.relay_api_key_auth_scheme,
+                ApiKeyAuthScheme::Bearer,
+                "Bearer",
             );
-            ui.checkbox(&mut self.relay_supports_compact, "支持 compact");
+            ui.radio_value(
+                &mut self.relay_api_key_auth_scheme,
+                ApiKeyAuthScheme::XApiKey,
+                "x-api-key",
+            );
+            ui.add_enabled_ui(self.relay_wire_api != WireApi::AnthropicMessages, |ui| {
+                ui.checkbox(&mut self.relay_supports_compact, "支持 compact");
+            });
             if ui.button("添加").clicked() {
                 self.add_relay();
             }

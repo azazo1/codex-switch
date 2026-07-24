@@ -31,21 +31,21 @@
 - 返回 usage 中存在 `cached_tokens`.
 - `cached_tokens` 大于等于该上游的 `最小缓存 tokens`.
 - `cached_tokens` 小于等于该上游的 `最大缓存 tokens`.
-- 请求体中能找到 `prompt_cache_key`, `conversation_id`, 或 `session_id`.
+- 请求体中能找到 `prompt_cache_key`, `conversation_id`, `session_id`, 或 Anthropic 原生 `cache_control` marker.
 - 上游配置里已经启用缓存保持.
 - 模型价格缓存里能找到该模型. 当前 `smart` 和 `always` 都有这个限制.
 
 当前不支持 `Codex OAuth` 上游. 这是有意限制, 因为该上游对 cache key 和保活请求字段的兼容性不可稳定证明.
 
-## 为什么需要 cache key 或 session id
+## 为什么需要会话标识或 cache marker
 
 缓存保持需要知道哪些请求属于同一个会话. Codex Switch 会按下面这些信息隔离缓存保持会话:
 
 ```text
-upstream_id + model + endpoint + prompt_cache_key/conversation_id/session_id + cacheable_prefix_hash
+upstream_id + model + endpoint + prompt_cache_key/conversation_id/session_id/cache_control + cacheable_prefix_hash
 ```
 
-这可以避免不同用户会话互相影响. 如果请求没有 `prompt_cache_key`, `conversation_id`, 或 `session_id`, Codex Switch 不会为它建立保活会话.
+这可以避免不同用户会话互相影响. Anthropic 原生请求没有显式会话 ID 时, 只会在请求已经包含 `cache_control` 且 usage 确认存在 `cache_read_input_tokens` 后, 根据 system, messages 和 tools 前缀建立保活会话. Codex Switch 不会为跨协议请求自动注入 cache marker.
 
 建议客户端对长上下文会话稳定传入 `prompt_cache_key`. 同一个会话使用同一个 key, 不同会话使用不同 key.
 
@@ -101,6 +101,7 @@ upstream_id + model + endpoint + prompt_cache_key/conversation_id/session_id + c
 - `store=false`
 - Responses API 使用 `max_output_tokens=1`
 - Chat Completions API 使用 `max_tokens=1`
+- Anthropic Messages 使用 `max_tokens=1`, 保留原始 `cache_control`, 不发送 `store`
 - 如果请求里有 reasoning 配置, 会尽量降到 `minimal`
 - 响应体会被丢弃, 不返回给客户端
 - usage 会作为内部日志记录

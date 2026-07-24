@@ -1,6 +1,7 @@
 use crate::app::AppState;
 use crate::core::models::{
     ScheduleGroup, ScheduleMode, ScheduleRouteRule, ScheduleRouteTargetKind, Upstream, UpstreamKind,
+    WireApi,
 };
 use crate::scheduler::{
     DirectSchedulerPlan, ScheduleRouteTraceStep, SchedulerPlan, glob_captures,
@@ -220,13 +221,23 @@ fn trimmed_value(value: &str) -> Option<String> {
 
 fn upstream_available(upstream: &Upstream, endpoint_kind: OpenAiEndpoint, compact: bool) -> bool {
     upstream.enabled
-        && (!compact || upstream.supports_compact)
+        && (!compact
+            || upstream.supports_compact && upstream.wire_api != WireApi::AnthropicMessages)
         && match endpoint_kind {
-            OpenAiEndpoint::Responses => {
+            OpenAiEndpoint::Responses
+            | OpenAiEndpoint::ChatCompletions
+            | OpenAiEndpoint::AnthropicMessages => {
                 upstream.kind == UpstreamKind::CodexOauth || !upstream.base_url.is_empty()
             }
-            OpenAiEndpoint::ChatCompletions | OpenAiEndpoint::Images => {
-                upstream.kind == UpstreamKind::RelayApiKey && !upstream.base_url.is_empty()
+            OpenAiEndpoint::AnthropicCountTokens => {
+                (upstream.kind == UpstreamKind::CodexOauth
+                    || upstream.wire_api != WireApi::ChatCompletions)
+                    && (upstream.kind == UpstreamKind::CodexOauth || !upstream.base_url.is_empty())
+            }
+            OpenAiEndpoint::Images => {
+                upstream.kind == UpstreamKind::RelayApiKey
+                    && upstream.wire_api != WireApi::AnthropicMessages
+                    && !upstream.base_url.is_empty()
             }
         }
 }

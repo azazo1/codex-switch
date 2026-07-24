@@ -90,6 +90,22 @@ impl ChatSseConverter {
             let Ok(value) = serde_json::from_str::<Value>(data) else {
                 continue;
             };
+            if let Some(error) = value.get("error") {
+                self.completed = true;
+                let response = json!({
+                    "id":self.response_id,
+                    "object":"response",
+                    "model":self.model,
+                    "status":"failed",
+                    "output":[],
+                    "error":{
+                        "code":error.get("code").or_else(|| error.get("type")).cloned().unwrap_or_else(|| json!("api_error")),
+                        "message":error.get("message").cloned().unwrap_or_else(|| json!("Chat stream failed"))
+                    }
+                });
+                out.push_str(&self.event("response.failed", json!({"response":response})));
+                continue;
+            }
             if let Some(model) = value.get("model").and_then(Value::as_str) {
                 self.model = model.to_string();
             }

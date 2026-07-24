@@ -22,6 +22,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/v1/models", get(models))
         .route("/models", get(models))
+        .route("/v1/models/:id", get(model))
+        .route("/models/:id", get(model))
         .route("/v1/responses", post(responses).get(ws_placeholder))
         .route("/v1/responses/*subpath", post(responses_subpath))
         .route("/responses", post(responses).get(ws_placeholder))
@@ -36,6 +38,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/v1/chat/completions", post(chat_completions))
         .route("/chat/completions", post(chat_completions))
+        .route("/v1/messages", post(messages))
+        .route("/messages", post(messages))
+        .route("/v1/messages/count_tokens", post(count_tokens))
+        .route("/messages/count_tokens", post(count_tokens))
         .route("/v1/images/*subpath", post(images))
         .route("/images/*subpath", post(images))
         .layer(DefaultBodyLimit::disable())
@@ -48,8 +54,21 @@ async fn health() -> impl IntoResponse {
     (StatusCode::OK, "ok")
 }
 
-async fn models(State(state): State<Arc<ProxyState>>, headers: HeaderMap) -> Response {
-    forward::handle_models(state.app.clone(), headers).await
+async fn models(
+    State(state): State<Arc<ProxyState>>,
+    uri: Uri,
+    headers: HeaderMap,
+) -> Response {
+    forward::handle_models(state.app.clone(), headers, uri, None).await
+}
+
+async fn model(
+    State(state): State<Arc<ProxyState>>,
+    Path(id): Path<String>,
+    uri: Uri,
+    headers: HeaderMap,
+) -> Response {
+    forward::handle_models(state.app.clone(), headers, uri, Some(id)).await
 }
 
 async fn responses(
@@ -110,6 +129,44 @@ async fn chat_completions(
     .await
 }
 
+async fn messages(
+    State(state): State<Arc<ProxyState>>,
+    uri: Uri,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    forward::handle_openai(
+        state.app.clone(),
+        method,
+        uri,
+        headers,
+        body,
+        None,
+        OpenAiEndpoint::AnthropicMessages,
+    )
+    .await
+}
+
+async fn count_tokens(
+    State(state): State<Arc<ProxyState>>,
+    uri: Uri,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    forward::handle_openai(
+        state.app.clone(),
+        method,
+        uri,
+        headers,
+        body,
+        None,
+        OpenAiEndpoint::AnthropicCountTokens,
+    )
+    .await
+}
+
 async fn images(
     State(state): State<Arc<ProxyState>>,
     Path(subpath): Path<String>,
@@ -142,9 +199,9 @@ mod tests {
     use super::*;
     use crate::cache_keepalive::CacheKeepaliveRuntime;
     use crate::core::models::{
-        BalanceProvider, CacheKeepaliveMode, ScheduleGroup, ScheduleGroupMember, ScheduleMode,
-        ScheduleRouteRule, ScheduleRouteTargetKind, Upstream, UpstreamCacheKeepaliveSettings,
-        WireApi,
+        ApiKeyAuthScheme, BalanceProvider, CacheKeepaliveMode, ScheduleGroup, ScheduleGroupMember,
+        ScheduleMode, ScheduleRouteRule, ScheduleRouteTargetKind, Upstream,
+        UpstreamCacheKeepaliveSettings, WireApi,
     };
     use crate::storage::{Store, credentials::CredentialStore};
     use axum::{body::Body, http::header, routing::get};
@@ -165,6 +222,10 @@ mod tests {
         ChatToolSse,
         ChatCustomToolSse,
         SlowChatSse,
+        AnthropicJson,
+        AnthropicSse,
+        CountTokens,
+        NotFound,
         ImagesJson,
     }
 
@@ -178,6 +239,9 @@ mod tests {
     struct MockHit {
         path: String,
         authorization: Option<String>,
+        x_api_key: Option<String>,
+        anthropic_version: Option<String>,
+        anthropic_beta: Option<String>,
         body: Value,
     }
 
@@ -967,6 +1031,389 @@ mod tests {
         assert_eq!(hits.lock().await.len(), 0);
     }
 
+    #[tokio::test]
+    async fn text_protocol_matrix_converts_non_streaming_requests_and_responses() {
+        let upstreams = [
+            (WireApi::Responses, MockMode::ResponsesJson, "/v1/responses"),
+            (
+                WireApi::ChatCompletions,
+                MockMode::ChatJson,
+                "/v1/chat/completions",
+            ),
+            (
+                WireApi::AnthropicMessages,
+                MockMode::AnthropicJson,
+                "/v1/messages",
+            ),
+        ];
+        for (upstream_api, mode, expected_path) in upstreams {
+            for client_api in [
+                WireApi::Responses,
+                WireApi::ChatCompletions,
+                WireApi::AnthropicMessages,
+            ] {
+                let (mock_base, hits) = spawn_mock(mode).await;
+                let state = test_state(&mock_base, upstream_api).await;
+                let proxy_base = spawn_proxy(state.clone()).await;
+                let client = reqwest::Client::new();
+                let request = match client_api {
+                    WireApi::Responses => client
+                        .post(format!("{proxy_base}/v1/responses"))
+                        .bearer_auth("local-test")
+                        .json(&json!({"model":"test-model","input":"hello","stream":false})),
+                    WireApi::ChatCompletions => client
+                        .post(format!("{proxy_base}/v1/chat/completions"))
+                        .bearer_auth("local-test")
+                        .json(&json!({
+                            "model":"test-model",
+                            "messages":[{"role":"user","content":"hello"}],
+                            "stream":false
+                        })),
+                    WireApi::AnthropicMessages => client
+                        .post(format!("{proxy_base}/v1/messages"))
+                        .header("x-api-key", "local-test")
+                        .header("anthropic-version", "2023-06-01")
+                        .json(&json!({
+                            "model":"test-model",
+                            "messages":[{"role":"user","content":"hello"}],
+                            "max_tokens":64,
+                            "stream":false
+                        })),
+                };
+                let response = request.send().await.unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let value = response.json::<Value>().await.unwrap();
+                match client_api {
+                    WireApi::Responses => assert_eq!(
+                        value["object"],
+                        "response",
+                        "upstream={upstream_api:?}, body={value}"
+                    ),
+                    WireApi::ChatCompletions => {
+                        assert_eq!(
+                            value["object"],
+                            "chat.completion",
+                            "upstream={upstream_api:?}, body={value}"
+                        )
+                    }
+                    WireApi::AnthropicMessages => assert_eq!(
+                        value["type"],
+                        "message",
+                        "upstream={upstream_api:?}, body={value}"
+                    ),
+                }
+
+                let hits = hits.lock().await;
+                assert_eq!(hits.len(), 1);
+                assert_eq!(hits[0].path, expected_path);
+                if upstream_api == WireApi::AnthropicMessages {
+                    assert_eq!(hits[0].x_api_key.as_deref(), Some("sk-test"));
+                    assert_eq!(
+                        hits[0].anthropic_version.as_deref(),
+                        Some("2023-06-01")
+                    );
+                    assert!(hits[0].authorization.is_none());
+                    assert!(hits[0].body.get("messages").is_some());
+                } else {
+                    assert_eq!(hits[0].authorization.as_deref(), Some("Bearer sk-test"));
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn text_protocol_matrix_converts_fragmented_streams() {
+        let upstreams = [
+            (WireApi::Responses, MockMode::ResponsesSse),
+            (WireApi::ChatCompletions, MockMode::ChatSse),
+            (WireApi::AnthropicMessages, MockMode::AnthropicSse),
+        ];
+        for (upstream_api, mode) in upstreams {
+            for client_api in [
+                WireApi::Responses,
+                WireApi::ChatCompletions,
+                WireApi::AnthropicMessages,
+            ] {
+                let (mock_base, _hits) = spawn_mock(mode).await;
+                let state = test_state(&mock_base, upstream_api).await;
+                let proxy_base = spawn_proxy(state.clone()).await;
+                let client = reqwest::Client::new();
+                let request = match client_api {
+                    WireApi::Responses => client
+                        .post(format!("{proxy_base}/v1/responses"))
+                        .bearer_auth("local-test")
+                        .json(&json!({"model":"test-model","input":"hello","stream":true})),
+                    WireApi::ChatCompletions => client
+                        .post(format!("{proxy_base}/v1/chat/completions"))
+                        .bearer_auth("local-test")
+                        .json(&json!({
+                            "model":"test-model",
+                            "messages":[{"role":"user","content":"hello"}],
+                            "stream":true
+                        })),
+                    WireApi::AnthropicMessages => client
+                        .post(format!("{proxy_base}/v1/messages"))
+                        .header("x-api-key", "local-test")
+                        .header("anthropic-version", "2023-06-01")
+                        .json(&json!({
+                            "model":"test-model",
+                            "messages":[{"role":"user","content":"hello"}],
+                            "max_tokens":64,
+                            "stream":true
+                        })),
+                };
+                let response = request.send().await.unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let text = response.text().await.unwrap();
+                match client_api {
+                    WireApi::Responses => assert!(
+                        text.contains("response.completed"),
+                        "upstream={upstream_api:?}, stream={text}"
+                    ),
+                    WireApi::ChatCompletions => {
+                        assert!(
+                            text.contains("chat.completion.chunk"),
+                            "upstream={upstream_api:?}, stream={text}"
+                        );
+                        assert!(text.contains("data: [DONE]"), "stream={text}");
+                    }
+                    WireApi::AnthropicMessages => {
+                        assert!(
+                            text.contains("event: message_start"),
+                            "upstream={upstream_api:?}, stream={text}"
+                        );
+                        assert!(text.contains("event: message_stop"), "stream={text}");
+                    }
+                }
+                if upstream_api == WireApi::AnthropicMessages {
+                    let logs = state.store.recent_logs(1).await.unwrap();
+                    assert_eq!(logs[0].usage.input_tokens, 7);
+                    assert_eq!(logs[0].usage.output_tokens, 2);
+                    assert_eq!(logs[0].usage.cache_read_tokens, 3);
+                    assert_eq!(logs[0].usage.total_tokens, 9);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn anthropic_passthrough_preserves_private_blocks_and_beta_header() {
+        let (mock_base, hits) = spawn_mock(MockMode::AnthropicJson).await;
+        let state = test_state(&mock_base, WireApi::AnthropicMessages).await;
+        let proxy_base = spawn_proxy(state).await;
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/messages"))
+            .header("x-api-key", "local-test")
+            .header("anthropic-version", "2023-06-01")
+            .header("anthropic-beta", "files-api-2025-04-14")
+            .json(&json!({
+                "model":"claude-test",
+                "messages":[{"role":"user","content":[{
+                    "type":"document",
+                    "source":{"type":"base64","media_type":"application/pdf","data":"AA=="},
+                    "cache_control":{"type":"ephemeral"}
+                }]}],
+                "max_tokens":16,
+                "private_field":{"keep":true}
+            }))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let hits = hits.lock().await;
+        assert_eq!(hits[0].body["messages"][0]["content"][0]["type"], "document");
+        assert_eq!(hits[0].body["private_field"]["keep"], true);
+        assert_eq!(
+            hits[0].anthropic_beta.as_deref(),
+            Some("files-api-2025-04-14")
+        );
+    }
+
+    #[tokio::test]
+    async fn anthropic_upstream_can_use_bearer_without_forwarding_cross_protocol_beta() {
+        let (mock_base, hits) = spawn_mock(MockMode::AnthropicJson).await;
+        let state = test_state(&mock_base, WireApi::AnthropicMessages).await;
+        let mut upstream = upstream_by_name(&state, "mock").await;
+        upstream.api_key_auth_scheme = ApiKeyAuthScheme::Bearer;
+        state.store.save_upstream(&upstream).await.unwrap();
+        let proxy_base = spawn_proxy(state).await;
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .header("anthropic-beta", "must-not-forward")
+            .json(&json!({"model":"claude-test","input":"hello","stream":false}))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let hits = hits.lock().await;
+        assert_eq!(hits[0].authorization.as_deref(), Some("Bearer sk-test"));
+        assert!(hits[0].x_api_key.is_none());
+        assert_eq!(
+            hits[0].anthropic_version.as_deref(),
+            Some("2023-06-01")
+        );
+        assert!(hits[0].anthropic_beta.is_none());
+    }
+
+    #[tokio::test]
+    async fn anthropic_cross_protocol_rejects_document_before_upstream_send() {
+        let (mock_base, hits) = spawn_mock(MockMode::ResponsesJson).await;
+        let state = test_state(&mock_base, WireApi::Responses).await;
+        let proxy_base = spawn_proxy(state).await;
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/messages"))
+            .header("x-api-key", "local-test")
+            .header("anthropic-version", "2023-06-01")
+            .json(&json!({
+                "model":"claude-test",
+                "messages":[{"role":"user","content":[{"type":"document"}]}],
+                "max_tokens":16
+            }))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let value = response.json::<Value>().await.unwrap();
+        assert_eq!(value["type"], "error");
+        assert_eq!(value["error"]["type"], "invalid_request_error");
+        assert!(hits.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn count_tokens_uses_only_native_upstream_protocols() {
+        let (responses_base, responses_hits) = spawn_mock(MockMode::CountTokens).await;
+        let responses_state = test_state(&responses_base, WireApi::Responses).await;
+        let responses_proxy = spawn_proxy(responses_state).await;
+        let response = reqwest::Client::new()
+            .post(format!("{responses_proxy}/v1/messages/count_tokens"))
+            .header("x-api-key", "local-test")
+            .header("anthropic-version", "2023-06-01")
+            .json(&json!({
+                "model":"claude-test",
+                "messages":[{"role":"user","content":"hello"}]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.json::<Value>().await.unwrap()["input_tokens"], 7);
+        assert_eq!(responses_hits.lock().await[0].path, "/v1/responses/input_tokens");
+
+        let (anthropic_base, anthropic_hits) = spawn_mock(MockMode::CountTokens).await;
+        let anthropic_state = test_state(&anthropic_base, WireApi::AnthropicMessages).await;
+        let anthropic_proxy = spawn_proxy(anthropic_state).await;
+        let response = reqwest::Client::new()
+            .post(format!("{anthropic_proxy}/v1/messages/count_tokens"))
+            .header("x-api-key", "local-test")
+            .header("anthropic-version", "2023-06-01")
+            .json(&json!({
+                "model":"claude-test",
+                "messages":[{"role":"user","content":"hello"}]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.json::<Value>().await.unwrap()["input_tokens"], 7);
+        let anthropic_hits = anthropic_hits.lock().await;
+        assert_eq!(anthropic_hits[0].path, "/v1/messages/count_tokens");
+        assert_eq!(anthropic_hits[0].x_api_key.as_deref(), Some("sk-test"));
+
+        let (chat_base, chat_hits) = spawn_mock(MockMode::CountTokens).await;
+        let chat_state = test_state(&chat_base, WireApi::ChatCompletions).await;
+        let chat_proxy = spawn_proxy(chat_state).await;
+        let response = reqwest::Client::new()
+            .post(format!("{chat_proxy}/messages/count_tokens"))
+            .header("x-api-key", "local-test")
+            .header("anthropic-version", "2023-06-01")
+            .json(&json!({
+                "model":"claude-test",
+                "messages":[{"role":"user","content":"hello"}]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let value = response.json::<Value>().await.unwrap();
+        assert_eq!(value["error"]["type"], "not_found_error");
+        assert!(chat_hits.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn count_tokens_retries_native_capability_miss() {
+        let (missing_base, missing_hits) = spawn_mock(MockMode::NotFound).await;
+        let (working_base, working_hits) = spawn_mock(MockMode::CountTokens).await;
+        let state = test_state_with_relays(vec![
+            ("missing", missing_base.as_str(), WireApi::Responses, 10),
+            (
+                "working",
+                working_base.as_str(),
+                WireApi::AnthropicMessages,
+                0,
+            ),
+        ])
+        .await;
+        set_group_mode(&state, "default", ScheduleMode::Failover).await;
+        let proxy_base = spawn_proxy(state).await;
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/messages/count_tokens"))
+            .header("x-api-key", "local-test")
+            .header("anthropic-version", "2023-06-01")
+            .json(&json!({
+                "model":"claude-test",
+                "messages":[{"role":"user","content":"hello"}]
+            }))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.json::<Value>().await.unwrap()["input_tokens"], 7);
+        assert_eq!(missing_hits.lock().await.len(), 1);
+        assert_eq!(working_hits.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn anthropic_models_support_pagination_detail_and_stored_auth() {
+        let (mock_base, hits) = spawn_mock(MockMode::ModelsJson).await;
+        let state = test_state(&mock_base, WireApi::AnthropicMessages).await;
+        let proxy_base = spawn_proxy(state).await;
+        let client = reqwest::Client::new();
+        let response = client
+            .get(format!("{proxy_base}/v1/models?limit=1"))
+            .header("x-api-key", "local-test")
+            .header("anthropic-version", "2023-06-01")
+            .header("anthropic-beta", "models-test")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = response.json::<Value>().await.unwrap();
+        assert_eq!(value["data"][0]["type"], "model");
+        assert_eq!(value["first_id"], "gpt-mock");
+        assert_eq!(value["last_id"], "gpt-mock");
+        assert_eq!(value["has_more"], false);
+
+        let response = client
+            .get(format!("{proxy_base}/models/gpt-mock"))
+            .header("x-api-key", "local-test")
+            .header("anthropic-version", "2023-06-01")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.json::<Value>().await.unwrap()["id"], "gpt-mock");
+
+        let hits = hits.lock().await;
+        assert!(hits.iter().all(|hit| hit.x_api_key.as_deref() == Some("sk-test")));
+        assert!(hits.iter().all(|hit| hit.authorization.is_none()));
+        assert_eq!(hits[0].anthropic_beta.as_deref(), Some("models-test"));
+    }
+
     async fn test_state(base_url: &str, wire_api: WireApi) -> AppState {
         test_state_with_relays(vec![("mock", base_url, wire_api, 0)]).await
     }
@@ -1148,9 +1595,24 @@ mod tests {
             .get(header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
             .map(str::to_string);
+        let x_api_key = headers
+            .get("x-api-key")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let anthropic_version = headers
+            .get("anthropic-version")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let anthropic_beta = headers
+            .get("anthropic-beta")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
         state.hits.lock().await.push(MockHit {
             path: uri.path().to_string(),
             authorization,
+            x_api_key,
+            anthropic_version,
+            anthropic_beta,
             body,
         });
 
@@ -1200,6 +1662,7 @@ mod tests {
                 StatusCode::OK,
                 axum::Json(json!({
                     "id":"chatcmpl_mock",
+                    "object":"chat.completion",
                     "model":"gpt-test",
                     "choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
                     "usage":{"prompt_tokens":4,"completion_tokens":5,"total_tokens":9}
@@ -1209,7 +1672,7 @@ mod tests {
             MockMode::ChatSse => (
                 [(header::CONTENT_TYPE, "text/event-stream")],
                 concat!(
-                    "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
+                    "data: {\"id\":\"chatcmpl_mock\",\"object\":\"chat.completion.chunk\",\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
                     "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":3,\"total_tokens\":5,\"prompt_tokens_details\":{\"cached_tokens\":2048}}}\n\n",
                     "data: [DONE]\n\n"
                 ),
@@ -1254,6 +1717,53 @@ mod tests {
                     .body(Body::from_stream(stream))
                     .unwrap()
             }
+            MockMode::AnthropicJson => (
+                StatusCode::OK,
+                axum::Json(json!({
+                    "id":"msg_mock",
+                    "type":"message",
+                    "role":"assistant",
+                    "model":"claude-test",
+                    "content":[{"type":"text","text":"ok"}],
+                    "stop_reason":"end_turn",
+                    "stop_sequence":null,
+                    "usage":{
+                        "input_tokens":4,
+                        "output_tokens":2,
+                        "cache_read_input_tokens":3,
+                        "cache_creation_input_tokens":1
+                    }
+                })),
+            )
+                .into_response(),
+            MockMode::AnthropicSse => {
+                let stream = async_stream::stream! {
+                    yield Ok::<_, std::convert::Infallible>(Bytes::from_static(
+                        b"event: message_start\r\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_mock\",\"model\":\"claude-test\",\"usage\":{\"input_tokens\":4,\"cache_read_input_tokens\":3}}}\r\n\r\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+                    ));
+                    yield Ok::<_, std::convert::Infallible>(Bytes::from_static(
+                        b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"o",
+                    ));
+                    yield Ok::<_, std::convert::Infallible>(Bytes::from_static(
+                        b"k\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+                    ));
+                };
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, "text/event-stream")
+                    .body(Body::from_stream(stream))
+                    .unwrap()
+            }
+            MockMode::CountTokens => (
+                StatusCode::OK,
+                axum::Json(json!({"input_tokens":7})),
+            )
+                .into_response(),
+            MockMode::NotFound => (
+                StatusCode::NOT_FOUND,
+                axum::Json(json!({"error":{"type":"not_found_error","message":"unsupported"}})),
+            )
+                .into_response(),
             MockMode::ImagesJson => (
                 StatusCode::OK,
                 axum::Json(json!({

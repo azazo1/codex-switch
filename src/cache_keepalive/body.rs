@@ -13,9 +13,9 @@ pub(super) fn keepalive_body(
         anyhow::bail!("request body is not a json object");
     };
     obj.insert("stream".to_string(), Value::Bool(false));
-    obj.insert("store".to_string(), Value::Bool(false));
     match wire_api {
         WireApi::Responses => {
+            obj.insert("store".to_string(), Value::Bool(false));
             obj.insert("max_output_tokens".to_string(), json!(1));
             if obj.contains_key("reasoning") {
                 obj.insert("reasoning".to_string(), json!({"effort":"minimal"}));
@@ -25,10 +25,15 @@ pub(super) fn keepalive_body(
             }
         }
         WireApi::ChatCompletions => {
+            obj.insert("store".to_string(), Value::Bool(false));
             obj.insert("max_tokens".to_string(), json!(1));
             if obj.contains_key("reasoning_effort") {
                 obj.insert("reasoning_effort".to_string(), json!("minimal"));
             }
+        }
+        WireApi::AnthropicMessages => {
+            obj.remove("store");
+            obj.insert("max_tokens".to_string(), json!(1));
         }
     }
     Ok(serde_json::to_vec(&value)?)

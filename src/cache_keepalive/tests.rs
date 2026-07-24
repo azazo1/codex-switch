@@ -31,12 +31,43 @@ fn keepalive_body_limits_responses_output() {
 }
 
 #[test]
+fn keepalive_body_preserves_anthropic_cache_markers() {
+    let settings = UpstreamCacheKeepaliveSettings::new("upstream".to_string());
+    let body = keepalive_body(
+        br#"{"model":"claude-test","messages":[{"role":"user","content":[{"type":"text","text":"hello","cache_control":{"type":"ephemeral"}}]}],"stream":true,"store":true,"max_tokens":128}"#,
+        WireApi::AnthropicMessages,
+        &settings,
+    )
+    .unwrap();
+    let value: Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(value["stream"], false);
+    assert_eq!(value["max_tokens"], 1);
+    assert!(value.get("store").is_none());
+    assert_eq!(
+        value.pointer("/messages/0/content/0/cache_control/type"),
+        Some(&json!("ephemeral"))
+    );
+}
+
+#[test]
 fn session_key_uses_upstream_and_cache_key() {
     let body = br#"{"model":"gpt-test","prompt_cache_key":"stable","input":"hello"}"#;
     let first = session_key("a", "gpt-test", "/responses", body).unwrap();
     let second = session_key("b", "gpt-test", "/responses", body).unwrap();
 
     assert_ne!(first, second);
+}
+
+#[test]
+fn session_key_uses_anthropic_cache_control_prefix() {
+    let first = br#"{"model":"claude-test","system":[{"type":"text","text":"rules","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"one"}]}"#;
+    let second = br#"{"model":"claude-test","system":[{"type":"text","text":"other","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"one"}]}"#;
+
+    let first_key = session_key("a", "claude-test", "/messages", first).unwrap();
+    let second_key = session_key("a", "claude-test", "/messages", second).unwrap();
+
+    assert_ne!(first_key, second_key);
 }
 
 #[tokio::test]
