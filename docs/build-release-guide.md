@@ -72,8 +72,8 @@ Release 标题包含项目名和版本. 正文优先读取 `docs/release-notes/<
 先让 `Cargo.toml` 中的版本与计划 tag 一致, 再提交版本变更. Workflow 会通过 `cargo metadata` 严格校验 `v<package-version>` 格式, 版本不一致时不会执行构建矩阵. 使用 annotated tag 保存 release 正文:
 
 ```shell
-git tag -a v0.5.0 -m "v0.5.0" -m "这里填写简短发布导语"
-git push origin v0.5.0
+git tag -a v0.6.0 -m "v0.6.0" -m "这里填写简短发布导语"
+git push origin v0.6.0
 ```
 
 tag push 后, 在 GitHub Actions 中等待六个平台全部构建成功. Release job 会附加:
