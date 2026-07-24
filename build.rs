@@ -4,11 +4,14 @@ use std::{
     process::Command,
 };
 
+const WINDOWS_ICON_PATH: &str = "assets/app-icon.ico";
+
 fn main() {
     let manifest_dir = PathBuf::from(
         env::var_os("CARGO_MANIFEST_DIR").expect("Cargo must set CARGO_MANIFEST_DIR"),
     );
     emit_rerun_hints(&manifest_dir);
+    embed_windows_resources();
 
     let metadata = GitMetadata::collect(&manifest_dir);
     println!("cargo:rustc-env=CODEX_SWITCH_BUILD_TAG={}", metadata.tag);
@@ -59,6 +62,10 @@ impl GitMetadata {
 
 fn emit_rerun_hints(manifest_dir: &Path) {
     println!("cargo:rerun-if-changed=build.rs");
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_dir.join(WINDOWS_ICON_PATH).display()
+    );
 
     if let Some(files) = git_output(manifest_dir, &["ls-files"]) {
         for file in files.lines() {
@@ -78,6 +85,17 @@ fn emit_rerun_hints(manifest_dir: &Path) {
     for path in ["HEAD", "index", "packed-refs", "refs"] {
         println!("cargo:rerun-if-changed={}", git_dir.join(path).display());
     }
+}
+
+fn embed_windows_resources() {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+
+    winresource::WindowsResource::new()
+        .set_icon(WINDOWS_ICON_PATH)
+        .compile()
+        .expect("failed to compile Windows application icon");
 }
 
 fn select_version_tag(tags: &str) -> Option<String> {

@@ -20,6 +20,8 @@ cargo build --locked --release --bins
 
 输出位于 `target/release`.
 
+Windows 构建会将 `assets/app-icon.ico` 内嵌到 `.exe` 中. 图标包含从 16x16 到 256x256 的多档尺寸.
+
 ## Linux 依赖
 
 Ubuntu 或 Debian 构建环境可以安装:
