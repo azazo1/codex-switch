@@ -413,12 +413,12 @@ fn common_balance_urls(base_url: &str, provider: BalanceProvider) -> Vec<CommonB
         BalanceProvider::Sub2Api => {
             push_unique_url(
                 &mut urls,
-                append_path_url(base_url, "usage"),
+                root_path_url(base_url, "/v1/usage"),
                 CommonBalanceUrlKind::Generic,
             );
             push_unique_url(
                 &mut urls,
-                root_path_url(base_url, "/v1/usage"),
+                append_path_url(base_url, "usage"),
                 CommonBalanceUrlKind::Generic,
             );
         }
@@ -428,12 +428,12 @@ fn common_balance_urls(base_url: &str, provider: BalanceProvider) -> Vec<CommonB
         BalanceProvider::Auto => {
             push_unique_url(
                 &mut urls,
-                append_path_url(base_url, "usage"),
+                root_path_url(base_url, "/v1/usage"),
                 CommonBalanceUrlKind::Generic,
             );
             push_unique_url(
                 &mut urls,
-                root_path_url(base_url, "/v1/usage"),
+                append_path_url(base_url, "usage"),
                 CommonBalanceUrlKind::Generic,
             );
             push_newapi_urls(&mut urls, base_url);
@@ -752,6 +752,22 @@ mod tests {
         );
         assert_eq!(snapshot.remaining, Some(6.5));
         assert_eq!(snapshot.total, Some(10.0));
+    }
+
+    #[test]
+    fn prefers_sub2api_v1_usage_endpoint() {
+        let urls = common_balance_urls("https://sub2api.example/api/v1", BalanceProvider::Sub2Api);
+        let values = urls
+            .iter()
+            .map(|item| item.url.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values,
+            vec![
+                "https://sub2api.example/v1/usage",
+                "https://sub2api.example/api/v1/usage"
+            ]
+        );
     }
 
     #[test]
