@@ -151,8 +151,21 @@ impl SchedulerRuntime {
         }
     }
 
-    pub async fn record_failure(&self, group_id: &str, upstream_id: &str) -> i64 {
+    pub async fn record_failure(
+        &self,
+        group_id: &str,
+        upstream_id: &str,
+        affinity_key: Option<&str>,
+    ) -> i64 {
         let mut inner = self.inner.lock().await;
+        if let Some(key) = affinity_key
+            && inner
+                .affinity
+                .get(key)
+                .is_some_and(|entry| entry.upstream_id == upstream_id)
+        {
+            inner.affinity.remove(key);
+        }
         let state = inner
             .failures
             .entry(failure_key(group_id, upstream_id))
@@ -183,7 +196,7 @@ pub fn classify_response(status: StatusCode, body: &[u8]) -> Option<SchedulerFai
     if status.is_server_error() || status.as_u16() == 529 || looks_like_overload(body) {
         return Some(SchedulerFailureKind::Server);
     }
-    if status == StatusCode::TOO_MANY_REQUESTS {
+    if status.is_client_error() {
         return Some(SchedulerFailureKind::OtherStatus);
     }
     None
@@ -545,6 +558,49 @@ mod tests {
         );
 
         assert_eq!(failure, Some(SchedulerFailureKind::Balance));
+    }
+
+    #[test]
+    fn classifies_other_client_errors() {
+        let failure = classify_response(
+            StatusCode::FORBIDDEN,
+            br#"{"error":{"message":"forbidden"}}"#,
+        );
+
+        assert_eq!(failure, Some(SchedulerFailureKind::OtherStatus));
+    }
+
+    #[tokio::test]
+    async fn failure_only_clears_matching_affinity() {
+        let runtime = SchedulerRuntime::default();
+        let group = ScheduleGroup::new("test".to_string());
+        let affinity_key = "stable";
+
+        runtime
+            .record_success(&group.id, "b", Some(affinity_key), 1800)
+            .await;
+        runtime
+            .record_failure(&group.id, "a", Some(affinity_key))
+            .await;
+        {
+            let inner = runtime.inner.lock().await;
+            assert_eq!(
+                inner
+                    .affinity
+                    .get(affinity_key)
+                    .map(|entry| entry.upstream_id.as_str()),
+                Some("b")
+            );
+        }
+
+        runtime
+            .record_success(&group.id, "a", Some(affinity_key), 1800)
+            .await;
+        runtime
+            .record_failure(&group.id, "a", Some(affinity_key))
+            .await;
+        let inner = runtime.inner.lock().await;
+        assert!(!inner.affinity.contains_key(affinity_key));
     }
 
     #[test]

@@ -315,7 +315,11 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
                     let count = request
                         .state
                         .scheduler
-                        .record_failure(&plan.group.id, &upstream.id)
+                        .record_failure(
+                            &plan.group.id,
+                            &upstream.id,
+                            plan.affinity_key.as_deref(),
+                        )
                         .await;
                     let should_retry = crate::scheduler::SchedulerRuntime::should_retry(
                         &plan.group,
@@ -346,7 +350,7 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
                         );
                         continue;
                     }
-                } else {
+                } else if result.status.is_success() {
                     request
                         .state
                         .scheduler
@@ -367,7 +371,11 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
                 let count = request
                     .state
                     .scheduler
-                    .record_failure(&plan.group.id, &upstream.id)
+                    .record_failure(
+                        &plan.group.id,
+                        &upstream.id,
+                        plan.affinity_key.as_deref(),
+                    )
                     .await;
                 let should_retry = crate::scheduler::SchedulerRuntime::should_retry(
                     &plan.group,

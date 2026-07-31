@@ -92,7 +92,9 @@ Chat Completions 上游的 compact 依赖转换能力, 应在实际中转站上�
 
 是否重试由最终解析到的目标组决定. 失败切换组可能在返回错误前尝试下一个候选. 随机, 轮询, 固定上游和模型映射直达上游只有一个候选. 模型映射或固定模式跳入失败切换组后, 仍会执行该组的重试策略. 具体行为见[调度组配置指南](scheduler-guide.md).
 
-单个上游可以配置 `错误重试` 策略. 调度层识别普通 HTTP `429`, HTTP `529`, Anthropic `overloaded_error`, `server_is_overloaded` 和 `slow_down`. JSON 错误与 Responses/Anthropic/Chat SSE 错误事件会转换为客户端协议的失败事件. 流式响应开始后无法透明切换上游.
+调度层会将 HTTP `4xx` 记为状态失败, 并在达到失败阈值后尝试备用上游. HTTP `529`, `5xx`, Anthropic `overloaded_error`, `server_is_overloaded` 和 `slow_down` 继续按服务端失败处理. 流式响应开始后无法透明切换上游.
+
+单个上游可以配置 `错误重试` 策略. 它在调度器根据原始上游响应完成选路后, 才将特定错误改写为可由客户端重试的响应. 它不会触发当前请求的上游切换, 但客户端自行发起的新请求仍会重新进入调度.
 
 ## 已知限制
 

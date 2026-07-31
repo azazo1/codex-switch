@@ -199,8 +199,8 @@ mod tests {
     use super::*;
     use crate::cache_keepalive::CacheKeepaliveRuntime;
     use crate::core::models::{
-        ApiKeyAuthScheme, BalanceProvider, CacheKeepaliveMode, ScheduleGroup, ScheduleGroupMember,
-        ScheduleMode, ScheduleRouteRule, ScheduleRouteTargetKind, Upstream,
+        ApiKeyAuthScheme, BalanceProvider, CacheKeepaliveMode, ErrorRetryPolicy, ScheduleGroup,
+        ScheduleGroupMember, ScheduleMode, ScheduleRouteRule, ScheduleRouteTargetKind, Upstream,
         UpstreamCacheKeepaliveSettings, WireApi,
     };
     use crate::storage::{Store, credentials::CredentialStore};
@@ -214,8 +214,11 @@ mod tests {
     #[derive(Clone, Copy)]
     enum MockMode {
         BalanceError,
+        ForbiddenError,
+        InvalidPromptError,
         ModelsJson,
         ResponsesJson,
+        ResponsesThenForbidden,
         ResponsesSse,
         ChatJson,
         ChatSse,
@@ -761,6 +764,136 @@ mod tests {
             logs[1].status,
             i64::from(StatusCode::PAYMENT_REQUIRED.as_u16())
         );
+    }
+
+    #[tokio::test]
+    async fn failover_group_retries_client_error_and_replaces_affinity() {
+        let (bad_base, bad_hits) = spawn_mock(MockMode::ResponsesThenForbidden).await;
+        let (good_base, good_hits) = spawn_mock(MockMode::ResponsesJson).await;
+        let state = test_state_with_relays(vec![
+            ("bad", bad_base.as_str(), WireApi::Responses, 10),
+            ("good", good_base.as_str(), WireApi::Responses, 0),
+        ])
+        .await;
+        let proxy_base = spawn_proxy(state).await;
+        let client = reqwest::Client::new();
+        let request = json!({
+            "model":"gpt-test",
+            "input":"hello",
+            "prompt_cache_key":"stable"
+        });
+
+        let first = client
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&request)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(bad_hits.lock().await.len(), 1);
+        assert_eq!(good_hits.lock().await.len(), 0);
+
+        let second = client
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&request)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::OK);
+        assert_eq!(bad_hits.lock().await.len(), 2);
+        assert_eq!(good_hits.lock().await.len(), 1);
+
+        let third = client
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&request)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(third.status(), StatusCode::OK);
+        assert_eq!(bad_hits.lock().await.len(), 2);
+        assert_eq!(good_hits.lock().await.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn client_error_waits_for_failure_threshold() {
+        let (bad_base, bad_hits) = spawn_mock(MockMode::ForbiddenError).await;
+        let (good_base, good_hits) = spawn_mock(MockMode::ResponsesJson).await;
+        let state = test_state_with_relays(vec![
+            ("bad", bad_base.as_str(), WireApi::Responses, 10),
+            ("good", good_base.as_str(), WireApi::Responses, 0),
+        ])
+        .await;
+        set_group_failure_threshold(&state, "default", 2).await;
+        let proxy_base = spawn_proxy(state).await;
+        let client = reqwest::Client::new();
+
+        let first = client
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({"model":"gpt-test","input":"hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::FORBIDDEN);
+        assert_eq!(bad_hits.lock().await.len(), 1);
+        assert_eq!(good_hits.lock().await.len(), 0);
+
+        let second = client
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({"model":"gpt-test","input":"hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::OK);
+        assert_eq!(bad_hits.lock().await.len(), 2);
+        assert_eq!(good_hits.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn error_retry_policy_does_not_bypass_client_error_threshold() {
+        let (bad_base, bad_hits) = spawn_mock(MockMode::InvalidPromptError).await;
+        let (good_base, good_hits) = spawn_mock(MockMode::ResponsesJson).await;
+        let state = test_state_with_relays(vec![
+            ("bad", bad_base.as_str(), WireApi::Responses, 10),
+            ("good", good_base.as_str(), WireApi::Responses, 0),
+        ])
+        .await;
+        set_group_failure_threshold(&state, "default", 2).await;
+        let mut upstream = upstream_by_name(&state, "bad").await;
+        upstream.error_retry_policy = ErrorRetryPolicy::All;
+        state.store.save_upstream(&upstream).await.unwrap();
+        let proxy_base = spawn_proxy(state).await;
+        let client = reqwest::Client::new();
+
+        let first = client
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({"model":"gpt-test","input":"hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            first.json::<Value>().await.unwrap()["error"]["code"],
+            "rate_limit_exceeded"
+        );
+        assert_eq!(bad_hits.lock().await.len(), 1);
+        assert_eq!(good_hits.lock().await.len(), 0);
+
+        let second = client
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({"model":"gpt-test","input":"hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::OK);
+        assert_eq!(bad_hits.lock().await.len(), 2);
+        assert_eq!(good_hits.lock().await.len(), 1);
     }
 
     #[tokio::test]
@@ -1504,6 +1637,21 @@ mod tests {
         state.store.save_schedule_group(&group).await.unwrap();
     }
 
+    async fn set_group_failure_threshold(
+        state: &AppState,
+        group_id: &str,
+        failure_threshold: i64,
+    ) {
+        let mut group = state
+            .store
+            .get_schedule_group(group_id)
+            .await
+            .unwrap()
+            .unwrap();
+        group.failure_threshold = failure_threshold;
+        state.store.save_schedule_group(&group).await.unwrap();
+    }
+
     async fn save_group_with_upstream(
         state: &AppState,
         name: &str,
@@ -1607,19 +1755,33 @@ mod tests {
             .get("anthropic-beta")
             .and_then(|value| value.to_str().ok())
             .map(str::to_string);
-        state.hits.lock().await.push(MockHit {
-            path: uri.path().to_string(),
-            authorization,
-            x_api_key,
-            anthropic_version,
-            anthropic_beta,
-            body,
-        });
+        let hit_count = {
+            let mut hits = state.hits.lock().await;
+            hits.push(MockHit {
+                path: uri.path().to_string(),
+                authorization,
+                x_api_key,
+                anthropic_version,
+                anthropic_beta,
+                body,
+            });
+            hits.len()
+        };
 
         match state.mode {
             MockMode::BalanceError => (
                 StatusCode::PAYMENT_REQUIRED,
                 axum::Json(json!({"error":{"message":"insufficient balance"}})),
+            )
+                .into_response(),
+            MockMode::ForbiddenError => (
+                StatusCode::FORBIDDEN,
+                axum::Json(json!({"error":{"message":"forbidden"}})),
+            )
+                .into_response(),
+            MockMode::InvalidPromptError => (
+                StatusCode::BAD_REQUEST,
+                axum::Json(json!({"error":{"code":"invalid_prompt"}})),
             )
                 .into_response(),
             MockMode::ModelsJson => (
@@ -1630,7 +1792,12 @@ mod tests {
                 })),
             )
                 .into_response(),
-            MockMode::ResponsesJson => (
+            MockMode::ResponsesThenForbidden if hit_count > 1 => (
+                StatusCode::FORBIDDEN,
+                axum::Json(json!({"error":{"message":"forbidden"}})),
+            )
+                .into_response(),
+            MockMode::ResponsesJson | MockMode::ResponsesThenForbidden => (
                 StatusCode::OK,
                 axum::Json(json!({
                     "id":"resp_mock",
