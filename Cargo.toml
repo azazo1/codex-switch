@@ -15,7 +15,7 @@ directories = "6"
 eframe = { version = "0.35", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
 futures-util = "0.3"
 notify-rust = "4"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "stream", "system-proxy"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "rustls-tls-webpki-roots", "stream", "system-proxy"] }
 resvg = { version = "0.47.0", default-features = false }
 rfd = "0.15"
 serde = { version = "1", features = ["derive"] }
