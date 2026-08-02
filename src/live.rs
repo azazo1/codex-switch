@@ -71,6 +71,7 @@ pub struct LiveRequestMeta {
     pub upstream_name: Option<String>,
     pub endpoint: String,
     pub model: Option<String>,
+    pub target_model: Option<String>,
     pub reasoning_effort: Option<String>,
 }
 
@@ -80,6 +81,7 @@ pub struct LiveRequestSnapshot {
     pub upstream_name: Option<String>,
     pub endpoint: String,
     pub model: Option<String>,
+    pub target_model: Option<String>,
     pub reasoning_effort: Option<String>,
     pub response_state: LiveResponseState,
     pub tail: String,
@@ -230,6 +232,7 @@ impl LiveRequestStore {
                 upstream_name: request.meta.upstream_name.clone(),
                 endpoint: request.meta.endpoint.clone(),
                 model: request.meta.model.clone(),
+                target_model: request.meta.target_model.clone(),
                 reasoning_effort: request.meta.reasoning_effort.clone(),
                 response_state: request.response_state,
                 tail: request.tail.clone(),
@@ -338,6 +341,7 @@ mod tests {
             upstream_name: Some("upstream-a".to_string()),
             endpoint: "/responses".to_string(),
             model: Some("gpt-5".to_string()),
+            target_model: None,
             reasoning_effort: None,
         }
     }

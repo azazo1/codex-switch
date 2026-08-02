@@ -155,8 +155,11 @@ impl CodexSwitchApp {
                             let upstream_name = item.upstream_name.as_deref().unwrap_or("-");
                             sized_row_label(ui, upstream_name, LIVE_UPSTREAM_WIDTH, finished)
                                 .on_hover_text(format!("{upstream_name}\nid: {}", item.id));
-                            let model = item.model.as_deref().unwrap_or("-");
-                            sized_row_label(ui, model, LIVE_MODEL_WIDTH, finished)
+                            let model = active_model_text(
+                                item.model.as_deref(),
+                                item.target_model.as_deref(),
+                            );
+                            sized_row_label(ui, &model, LIVE_MODEL_WIDTH, finished)
                                 .on_hover_text(model);
                             let reasoning = item.reasoning_effort.as_deref().unwrap_or("-");
                             sized_row_label(
@@ -428,6 +431,17 @@ fn format_started_at(item: &LiveRequestSnapshot) -> String {
         .to_string()
 }
 
+fn active_model_text(model: Option<&str>, target_model: Option<&str>) -> String {
+    match (model, target_model) {
+        (Some(request), Some(target)) if request != target => {
+            format!("{request} -> {target}")
+        }
+        (Some(request), _) => request.to_string(),
+        (None, Some(target)) => format!("- -> {target}"),
+        (None, None) => "-".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,6 +453,7 @@ mod tests {
             upstream_name: None,
             endpoint: "/responses".to_string(),
             model: Some("gpt-5".to_string()),
+            target_model: None,
             reasoning_effort: None,
             response_state: LiveResponseState::Streaming,
             tail: tail.to_string(),

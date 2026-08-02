@@ -17,6 +17,7 @@ pub(super) struct AttemptLog<'a> {
     pub(super) upstream: Option<&'a Upstream>,
     pub(super) endpoint: String,
     pub(super) model: Option<String>,
+    pub(super) target_model: Option<String>,
     pub(super) reasoning_effort: Option<String>,
     pub(super) status: StatusCode,
     pub(super) usage: TokenUsage,
@@ -33,6 +34,7 @@ pub(super) async fn record_attempt_log(log: AttemptLog<'_>) {
             upstream_name: log.upstream.map(|upstream| upstream.name.clone()),
             endpoint: log.endpoint,
             model: log.model,
+            target_model: log.target_model,
             reasoning_effort: log.reasoning_effort,
             status: i64::from(log.status.as_u16()),
             usage: log.usage,
@@ -52,6 +54,7 @@ pub(super) struct StreamLogDraft {
     upstream_name: String,
     endpoint: String,
     model: Option<String>,
+    target_model: Option<String>,
     reasoning_effort: Option<String>,
     status: StatusCode,
     started: Instant,
@@ -82,11 +85,16 @@ impl StreamLogDraft {
             upstream_name: upstream.name.clone(),
             endpoint,
             model,
+            target_model: None,
             reasoning_effort,
             status,
             started,
             inner: Arc::new(Mutex::new(StreamLogState::default())),
         }
+    }
+
+    pub(super) fn set_target_model(&mut self, model: Option<String>) {
+        self.target_model = model;
     }
 
     pub(super) fn set_first_token_ms(&self, value: i64) {
@@ -148,6 +156,7 @@ impl StreamLogDraft {
             upstream_name: Some(self.upstream_name.clone()),
             endpoint: self.endpoint.clone(),
             model: self.model.clone(),
+            target_model: self.target_model.clone(),
             reasoning_effort: self.reasoning_effort.clone(),
             status: i64::from(status.as_u16()),
             usage,

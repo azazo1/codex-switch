@@ -20,6 +20,7 @@ pub(crate) struct PreparedProtocolRequest {
     upstream_api: WireApi,
     chat_context: Option<ChatResponseContext>,
     model: Option<String>,
+    response_model: Option<String>,
 }
 
 impl PreparedProtocolRequest {
@@ -42,6 +43,7 @@ impl PreparedProtocolRequest {
                 upstream_api,
                 chat_context: None,
                 model,
+                response_model: None,
             });
         }
 
@@ -75,6 +77,7 @@ impl PreparedProtocolRequest {
             upstream_api,
             chat_context: Some(response_context),
             model,
+            response_model: None,
         })
     }
 
@@ -110,6 +113,15 @@ impl PreparedProtocolRequest {
     pub(crate) fn is_passthrough(&self) -> bool {
         self.client_api == self.upstream_api
     }
+
+    pub(crate) fn override_response_model(&mut self, model: String) {
+        self.response_model = Some(model.clone());
+        self.sse_bridge.response_model = Some(model);
+    }
+
+    pub(crate) fn response_model_override(&self) -> Option<&str> {
+        self.response_model.as_deref()
+    }
 }
 
 pub(crate) struct ProtocolSseBridge {
@@ -117,6 +129,7 @@ pub(crate) struct ProtocolSseBridge {
     encoder: ClientEncoder,
     canonical_buffer: Vec<u8>,
     passthrough: bool,
+    response_model: Option<String>,
 }
 
 enum UpstreamDecoder {
@@ -138,6 +151,7 @@ impl ProtocolSseBridge {
             encoder: encoder(api, model),
             canonical_buffer: Vec::new(),
             passthrough: true,
+            response_model: None,
         }
     }
 
@@ -152,6 +166,7 @@ impl ProtocolSseBridge {
             encoder: encoder(client_api, model),
             canonical_buffer: Vec::new(),
             passthrough: client_api == upstream_api,
+            response_model: None,
         }
     }
 
@@ -172,7 +187,10 @@ impl ProtocolSseBridge {
 
     pub(crate) fn push_block(&mut self, block: &[u8]) -> Vec<u8> {
         if self.passthrough {
-            let mut output = block.to_vec();
+            let mut output = match &self.response_model {
+                Some(model) => rewrite_sse_model(block, model),
+                None => block.to_vec(),
+            };
             output.extend_from_slice(b"\n\n");
             return output;
         }
@@ -227,7 +245,7 @@ impl ProtocolSseBridge {
     }
 
     fn encode_block(&mut self, block: &[u8]) -> Vec<u8> {
-        match &mut self.encoder {
+        let mut output = match &mut self.encoder {
             ClientEncoder::Responses => {
                 let mut output = block.to_vec();
                 output.extend_from_slice(b"\n\n");
@@ -239,8 +257,34 @@ impl ProtocolSseBridge {
             ClientEncoder::Anthropic(converter) => {
                 converter.push(&String::from_utf8_lossy(block))
             }
+        };
+        if let Some(model) = &self.response_model {
+            output = rewrite_sse_model(&output, model);
         }
+        output
     }
+}
+
+fn rewrite_sse_model(block: &[u8], model: &str) -> Vec<u8> {
+    let text = String::from_utf8_lossy(block);
+    let mut rewritten = Vec::new();
+    for line in text.split('\n') {
+        let trimmed = line.trim_end_matches('\r');
+        if let Some(data) = trimmed.strip_prefix("data:") {
+            let payload = data.trim();
+            if !payload.is_empty()
+                && payload != "[DONE]"
+                && let Ok(json) = crate::proxy::transform::rewrite_response_model(payload.as_bytes(), model)
+            {
+                let json = String::from_utf8_lossy(&json);
+                rewritten.extend_from_slice(format!("data: {json}\n").as_bytes());
+                continue;
+            }
+        }
+        rewritten.extend_from_slice(line.as_bytes());
+        rewritten.push(b'\n');
+    }
+    rewritten
 }
 
 fn decoder(api: WireApi, chat_context: Option<ChatResponseContext>) -> UpstreamDecoder {
@@ -370,5 +414,25 @@ mod tests {
         assert!(stream.contains("\"type\":\"custom_tool_call\""));
         assert!(stream.contains("response.custom_tool_call_input.delta"));
         assert!(stream.contains("stream patch"));
+    }
+
+    #[test]
+    fn passthrough_bridge_rewrites_response_model() {
+        let request = br#"{"model":"gpt-5.4","input":"hello"}"#;
+        let mut prepared = PreparedProtocolRequest::new(
+            WireApi::Responses,
+            WireApi::Responses,
+            request,
+            Some("gpt-5.4".to_string()),
+        )
+        .unwrap();
+        prepared.override_response_model("gpt-5.4".to_string());
+
+        let block = b"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"r1\",\"model\":\"deepseek-v4-flash\"}}";
+        let output = prepared.sse_bridge.push_block(block);
+        let text = String::from_utf8(output).unwrap();
+
+        assert!(text.contains("\"model\":\"gpt-5.4\""));
+        assert!(!text.contains("deepseek-v4-flash"));
     }
 }

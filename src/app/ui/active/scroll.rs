@@ -130,6 +130,7 @@ mod tests {
             upstream_name: None,
             endpoint: "/responses".to_string(),
             model: Some("gpt-5".to_string()),
+            target_model: None,
             reasoning_effort: None,
             response_state: LiveResponseState::Streaming,
             tail: tail.to_string(),

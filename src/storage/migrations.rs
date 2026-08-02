@@ -382,6 +382,11 @@ fn migrations() -> &'static [Migration] {
                 "ALTER TABLE upstreams ADD COLUMN api_key_auth_scheme TEXT NOT NULL DEFAULT 'bearer'",
             ],
         },
+        Migration {
+            version: 14,
+            name: "request_log_target_model",
+            statements: &["ALTER TABLE request_logs ADD COLUMN target_model TEXT"],
+        },
     ]
 }
 
@@ -402,7 +407,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 13);
+        assert_eq!(rows.len(), 14);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -450,6 +455,11 @@ mod tests {
             rows[12].get::<String, _>("name"),
             "upstream_api_key_auth_scheme"
         );
+        assert_eq!(rows[13].get::<i64, _>("version"), 14);
+        assert_eq!(
+            rows[13].get::<String, _>("name"),
+            "request_log_target_model"
+        );
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
             Some("127.0.0.1:15721")
@@ -478,6 +488,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 13);
+        assert_eq!(count, 14);
     }
 }

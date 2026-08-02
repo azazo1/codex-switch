@@ -472,6 +472,7 @@ pub struct RequestLog {
     pub upstream_name: Option<String>,
     pub endpoint: String,
     pub model: Option<String>,
+    pub target_model: Option<String>,
     pub reasoning_effort: Option<String>,
     pub status: i64,
     pub usage: TokenUsage,

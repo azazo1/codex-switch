@@ -16,6 +16,7 @@ pub enum RequestLogRetention {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RequestLogFilter {
     pub model: Option<String>,
+    pub target_model: Option<String>,
     pub upstream: Option<String>,
     pub reasoning_effort: Option<String>,
     pub endpoint: Option<String>,
@@ -63,16 +64,17 @@ impl Store {
 
         sqlx::query(
             "INSERT INTO request_logs (
-                ts, upstream_id, upstream_name, endpoint, model, reasoning_effort, status, input_tokens,
-                output_tokens, cache_read_tokens, cache_creation_tokens, total_tokens,
-                estimated_cost_usd, duration_ms, first_token_ms, error
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                ts, upstream_id, upstream_name, endpoint, model, target_model, reasoning_effort,
+                status, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                total_tokens, estimated_cost_usd, duration_ms, first_token_ms, error
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         )
         .bind(now.to_rfc3339())
         .bind(&log.upstream_id)
         .bind(&log.upstream_name)
         .bind(&log.endpoint)
         .bind(&log.model)
+        .bind(&log.target_model)
         .bind(&log.reasoning_effort)
         .bind(log.status)
         .bind(log.usage.input_tokens)
@@ -317,6 +319,12 @@ fn append_request_log_filters(builder: &mut QueryBuilder<'_, Sqlite>, filter: &R
     if let Some(value) = filter_text(filter.model.as_deref()) {
         begin_clause!();
         builder.push("LOWER(COALESCE(model, '')) LIKE ");
+        builder.push_bind(wildcard_like_pattern(value));
+        builder.push(" ESCAPE '\\'");
+    }
+    if let Some(value) = filter_text(filter.target_model.as_deref()) {
+        begin_clause!();
+        builder.push("LOWER(COALESCE(target_model, model, '')) LIKE ");
         builder.push_bind(wildcard_like_pattern(value));
         builder.push(" ESCAPE '\\'");
     }
@@ -590,6 +598,7 @@ fn request_log_from_row(row: sqlx::sqlite::SqliteRow) -> RequestLog {
         upstream_name: row.get("upstream_name"),
         endpoint: row.get("endpoint"),
         model: row.get("model"),
+        target_model: row.get("target_model"),
         reasoning_effort: row.get("reasoning_effort"),
         status: row.get("status"),
         usage: TokenUsage {
@@ -826,6 +835,45 @@ mod tests {
         assert_eq!(logs[0].model.as_deref(), Some("gpt-5-codex"));
     }
 
+    #[tokio::test]
+    async fn request_log_target_model_filter_supports_wildcards_and_fallback() {
+        let path =
+            std::env::temp_dir().join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
+        let store = Store::open(path).await.unwrap();
+        let mut mapped_log = test_log(Some("upstream-a"), Some("relay-a"), 5);
+        mapped_log.model = Some("gpt-5.4".to_string());
+        mapped_log.target_model = Some("deepseek-v4-flash".to_string());
+        let mut legacy_log = test_log(Some("upstream-a"), Some("relay-a"), 7);
+        legacy_log.model = Some("gpt-5.2".to_string());
+        store.insert_request_log(mapped_log).await.unwrap();
+        store.insert_request_log(legacy_log).await.unwrap();
+
+        let mapped_filter = RequestLogFilter {
+            target_model: Some("deepseek-*".to_string()),
+            ..Default::default()
+        };
+        let mapped_logs = store
+            .recent_logs_page_filtered(10, 0, &mapped_filter)
+            .await
+            .unwrap();
+        assert_eq!(mapped_logs.len(), 1);
+        assert_eq!(
+            mapped_logs[0].target_model.as_deref(),
+            Some("deepseek-v4-flash")
+        );
+
+        let fallback_filter = RequestLogFilter {
+            target_model: Some("gpt-5.2".to_string()),
+            ..Default::default()
+        };
+        let fallback_logs = store
+            .recent_logs_page_filtered(10, 0, &fallback_filter)
+            .await
+            .unwrap();
+        assert_eq!(fallback_logs.len(), 1);
+        assert_eq!(fallback_logs[0].model.as_deref(), Some("gpt-5.2"));
+    }
+
     fn test_log(
         upstream_id: Option<&str>,
         upstream_name: Option<&str>,
@@ -857,6 +905,7 @@ mod tests {
             upstream_name: upstream_name.map(str::to_string),
             endpoint: "/responses".to_string(),
             model: Some("gpt-test".to_string()),
+            target_model: None,
             reasoning_effort: None,
             status: 200,
             usage: TokenUsage {

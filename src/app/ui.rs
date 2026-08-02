@@ -89,6 +89,7 @@ enum LogRetentionChoice {
 #[derive(Debug, Clone, Default, PartialEq)]
 struct LogFilterState {
     model: Option<String>,
+    target_model: Option<String>,
     upstream: Option<String>,
     reasoning_effort: Option<String>,
     endpoint: Option<String>,
@@ -176,6 +177,7 @@ impl LogFilterState {
     fn active_count(&self) -> usize {
         let mut count = [
             self.model.is_some(),
+            self.target_model.is_some(),
             self.upstream.is_some(),
             self.reasoning_effort.is_some(),
             self.endpoint.is_some(),
@@ -221,6 +223,7 @@ impl LogFilterState {
 
         Ok(RequestLogFilter {
             model: self.model.clone(),
+            target_model: self.target_model.clone(),
             upstream: self.upstream.clone(),
             reasoning_effort: self.reasoning_effort.clone(),
             endpoint: self.endpoint.clone(),

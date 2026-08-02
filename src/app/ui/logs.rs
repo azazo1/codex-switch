@@ -127,6 +127,14 @@ impl CodexSwitchApp {
                             "全部模型",
                             "模型通配符, 如 gpt-*",
                         );
+                        editable_option_filter_row(
+                            ui,
+                            "实际模型",
+                            &mut self.log_filter_editor.target_model,
+                            &log_target_model_options(&self.logs),
+                            "全部实际模型",
+                            "实际上游模型通配符",
+                        );
                         option_filter_row(
                             ui,
                             "上游",
@@ -594,6 +602,16 @@ fn log_model_options(logs: &[RequestLog]) -> Vec<String> {
         .collect()
 }
 
+fn log_target_model_options(logs: &[RequestLog]) -> Vec<String> {
+    logs.iter()
+        .filter_map(|log| log.target_model.as_deref())
+        .filter(|value| !value.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
 fn log_upstream_options(logs: &[RequestLog], upstreams: &[Upstream]) -> Vec<String> {
     let mut values = BTreeSet::new();
     for upstream in upstreams {
@@ -762,7 +780,14 @@ fn log_cost_cell(ui: &mut egui::Ui, cost: Option<f64>) {
 }
 
 fn model_text(log: &RequestLog) -> String {
-    let mut text = log.model.clone().unwrap_or_else(|| "-".to_string());
+    let mut text = match (log.model.as_deref(), log.target_model.as_deref()) {
+        (Some(request), Some(target)) if request != target => {
+            format!("{request} -> {target}")
+        }
+        (Some(request), _) => request.to_string(),
+        (None, Some(target)) => format!("- -> {target}"),
+        (None, None) => "-".to_string(),
+    };
     if log.status >= 400 {
         text.push_str(" / 错误");
     }
@@ -777,6 +802,14 @@ fn log_hover_text(log: &RequestLog) -> String {
     let mut lines = Vec::new();
     if let Some(upstream) = &log.upstream_name {
         lines.push(format!("上游: {upstream}"));
+    }
+    if let Some(model) = &log.model {
+        lines.push(format!("请求模型: {model}"));
+    }
+    if let Some(target) = &log.target_model
+        && log.model.as_deref() != Some(target.as_str())
+    {
+        lines.push(format!("实际模型: {target}"));
     }
     lines.push(format!("endpoint: {}", log.endpoint));
     lines.push(format!("status: {}", log.status));

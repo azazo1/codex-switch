@@ -160,6 +160,7 @@ pub async fn handle_openai(
                     upstream: Some(&result.upstream),
                     endpoint,
                     model,
+                    target_model: result.target_model.clone(),
                     reasoning_effort,
                     status: result.status,
                     usage: result.usage,
@@ -179,6 +180,7 @@ pub async fn handle_openai(
                     upstream: None,
                     endpoint,
                     model,
+                    target_model: None,
                     reasoning_effort,
                     status: err.status,
                     usage: TokenUsage::default(),
@@ -205,6 +207,7 @@ struct ForwardResult {
     status: StatusCode,
     usage: TokenUsage,
     first_token_ms: Option<i64>,
+    target_model: Option<String>,
     failure_kind: Option<SchedulerFailureKind>,
     log_on_return: bool,
     response: Response,
@@ -293,6 +296,7 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
         );
     }
     let candidate_count = plan.candidates.len();
+    let attempt_target_model = plan.target_model.clone().or_else(|| request.model.clone());
     let mut last_error = None;
     for (index, upstream) in plan.candidates.iter().cloned().enumerate() {
         match forward_with_upstream(&request, upstream.clone(), plan.target_model.as_deref()).await
@@ -333,6 +337,7 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
                             upstream: Some(&upstream),
                             endpoint: request.endpoint.clone(),
                             model: request.model.clone(),
+                            target_model: attempt_target_model.clone(),
                             reasoning_effort: request.reasoning_effort.clone(),
                             status: result.status,
                             usage: result.usage.clone(),
@@ -390,6 +395,7 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
                         upstream: Some(&upstream),
                         endpoint: request.endpoint.clone(),
                         model: request.model.clone(),
+                        target_model: attempt_target_model.clone(),
                         reasoning_effort: request.reasoning_effort.clone(),
                         status: StatusCode::BAD_GATEWAY,
                         usage: TokenUsage::default(),
@@ -415,6 +421,7 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
                     upstream: Some(&upstream),
                     endpoint: request.endpoint.clone(),
                     model: request.model.clone(),
+                    target_model: attempt_target_model.clone(),
                     reasoning_effort: request.reasoning_effort.clone(),
                     status: StatusCode::BAD_GATEWAY,
                     usage: TokenUsage::default(),
@@ -461,6 +468,12 @@ async fn forward_with_upstream(
     } else {
         None
     };
+    if let Some(prepared) = protocol_request.as_mut()
+        && let Some(client_model) = request.model.clone()
+        && target_model.is_some_and(|target| target != client_model.as_str())
+    {
+        prepared.override_response_model(client_model);
+    }
     if let Some(prepared) = &protocol_request {
         target_body = prepared.body.clone();
     }
@@ -500,6 +513,7 @@ async fn forward_with_upstream(
         upstream_name: Some(upstream.name.clone()),
         endpoint: request.endpoint.clone(),
         model: request.model.clone(),
+        target_model: effective_model.clone(),
         reasoning_effort: request.reasoning_effort.clone(),
     });
     request.state.events.bump_live_streams();
@@ -536,7 +550,7 @@ async fn forward_with_upstream(
             request,
             upstream: upstream.clone(),
             keepalive_body,
-            effective_model,
+            effective_model: effective_model.clone(),
             status,
             response,
             protocol_bridge: protocol_request
@@ -552,6 +566,7 @@ async fn forward_with_upstream(
             status,
             usage: TokenUsage::default(),
             first_token_ms: None,
+            target_model: effective_model,
             failure_kind,
             log_on_return: false,
             response: build_stream_response(status, response_headers, stream),
@@ -585,6 +600,24 @@ async fn forward_with_upstream(
         } else {
             bytes.to_vec()
         };
+        if status.is_success()
+            && !request.endpoint_kind.is_count_tokens()
+            && let Some(model) = protocol_request
+                .as_ref()
+                .and_then(PreparedProtocolRequest::response_model_override)
+        {
+            match transform::rewrite_response_model(&response_body, model) {
+                Ok(rewritten) => response_body = rewritten,
+                Err(error) => {
+                    tracing::warn!(
+                        request_id = %request.request_id,
+                        model,
+                        error = %error,
+                        "failed to rewrite response model"
+                    );
+                }
+            }
+        }
         let mut client_status = status;
         if let Some(rewritten) = error_policy::rewrite_json_response(
             status,
@@ -614,7 +647,7 @@ async fn forward_with_upstream(
             request.state,
             &upstream,
             &request.endpoint,
-            effective_model,
+            effective_model.clone(),
             keepalive_body,
             status,
             &usage,
@@ -625,6 +658,7 @@ async fn forward_with_upstream(
             status,
             usage,
             first_token_ms: None,
+            target_model: effective_model,
             failure_kind,
             log_on_return: true,
             response: build_response(client_status, response_headers, response_body),
@@ -759,12 +793,13 @@ fn build_live_response_stream(
     let request_id = request.request_id.clone();
     let endpoint = request.endpoint.clone();
     let model = request.model.clone();
+    let target_model = effective_model.clone();
     let reasoning_effort = request.reasoning_effort.clone();
     let started = request.started;
     let convert_protocol = protocol_bridge
         .as_ref()
         .is_some_and(|bridge| !bridge.is_passthrough());
-    let log_draft = StreamLogDraft::new(
+    let mut log_draft = StreamLogDraft::new(
         state.clone(),
         &upstream,
         endpoint.clone(),
@@ -773,6 +808,7 @@ fn build_live_response_stream(
         status,
         started,
     );
+    log_draft.set_target_model(target_model);
     let live_guard = LiveRequestGuard::from_active(active_guard, log_draft.clone());
     stream! {
         let mut live_guard = live_guard;

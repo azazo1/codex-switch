@@ -23,6 +23,35 @@ pub fn rewrite_model(body: &[u8], model: &str) -> anyhow::Result<Vec<u8>> {
     Ok(serde_json::to_vec(&value)?)
 }
 
+pub fn rewrite_response_model(body: &[u8], model: &str) -> anyhow::Result<Vec<u8>> {
+    let mut value: Value = serde_json::from_slice(body)?;
+    rewrite_response_model_value(&mut value, model);
+    Ok(serde_json::to_vec(&value)?)
+}
+
+fn rewrite_response_model_value(value: &mut Value, model: &str) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    if let Some(current) = object.get_mut("model")
+        && current.is_string()
+    {
+        *current = Value::String(model.to_string());
+    }
+    if let Some(response) = object.get_mut("response").and_then(Value::as_object_mut)
+        && let Some(current) = response.get_mut("model")
+        && current.is_string()
+    {
+        *current = Value::String(model.to_string());
+    }
+    if let Some(message) = object.get_mut("message").and_then(Value::as_object_mut)
+        && let Some(current) = message.get_mut("model")
+        && current.is_string()
+    {
+        *current = Value::String(model.to_string());
+    }
+}
+
 pub fn responses_subpath_from_uri(path: &str) -> String {
     for marker in [
         "/v1/responses",
@@ -102,5 +131,15 @@ mod tests {
         .unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["model"], "target-model");
+    }
+
+    #[test]
+    fn rewrites_response_models() {
+        let body = br#"{"type":"response.completed","model":"deepseek-v4-flash","response":{"id":"r1","model":"deepseek-v4-flash","output":[]},"message":{"id":"m1","model":"deepseek-v4-flash"}}"#;
+        let rewritten = rewrite_response_model(body, "gpt-5.4").unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&rewritten).unwrap();
+        assert_eq!(value["model"], "gpt-5.4");
+        assert_eq!(value["response"]["model"], "gpt-5.4");
+        assert_eq!(value["message"]["model"], "gpt-5.4");
     }
 }

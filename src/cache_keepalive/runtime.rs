@@ -534,6 +534,7 @@ impl CacheKeepaliveRuntime {
             upstream_name: Some(session.upstream.name.clone()),
             endpoint: INTERNAL_ENDPOINT.to_string(),
             model: Some(session.model.clone()),
+            target_model: None,
             reasoning_effort: None,
             status: i64::from(status.as_u16()),
             usage,
