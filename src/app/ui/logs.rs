@@ -782,13 +782,18 @@ fn log_cost_cell(ui: &mut egui::Ui, cost: Option<f64>) {
 fn model_text(log: &RequestLog) -> String {
     let mut text = match (log.model.as_deref(), log.target_model.as_deref()) {
         (Some(request), Some(target)) if request != target => {
-            format!("{request} -> {target}")
+            let first = if log.status >= 400 {
+                format!("{request} / 错误")
+            } else {
+                request.to_string()
+            };
+            format!("{first}\n→ {target}")
         }
         (Some(request), _) => request.to_string(),
-        (None, Some(target)) => format!("- -> {target}"),
+        (None, Some(target)) => format!("-\n→ {target}"),
         (None, None) => "-".to_string(),
     };
-    if log.status >= 400 {
+    if log.status >= 400 && !text.contains('\n') {
         text.push_str(" / 错误");
     }
     text

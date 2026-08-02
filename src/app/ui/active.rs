@@ -159,8 +159,18 @@ impl CodexSwitchApp {
                                 item.model.as_deref(),
                                 item.target_model.as_deref(),
                             );
-                            sized_row_label(ui, &model, LIVE_MODEL_WIDTH, finished)
+                            if model.contains('\n') {
+                                ui.vertical(|ui| {
+                                    for line in model.lines() {
+                                        sized_row_label(ui, line, LIVE_MODEL_WIDTH, finished);
+                                    }
+                                })
+                                .response
                                 .on_hover_text(model);
+                            } else {
+                                sized_row_label(ui, &model, LIVE_MODEL_WIDTH, finished)
+                                    .on_hover_text(model);
+                            }
                             let reasoning = item.reasoning_effort.as_deref().unwrap_or("-");
                             sized_row_label(
                                 ui,
@@ -434,10 +444,10 @@ fn format_started_at(item: &LiveRequestSnapshot) -> String {
 fn active_model_text(model: Option<&str>, target_model: Option<&str>) -> String {
     match (model, target_model) {
         (Some(request), Some(target)) if request != target => {
-            format!("{request} -> {target}")
+            format!("{request}\n{target}")
         }
         (Some(request), _) => request.to_string(),
-        (None, Some(target)) => format!("- -> {target}"),
+        (None, Some(target)) => format!("-\n{target}"),
         (None, None) => "-".to_string(),
     }
 }
