@@ -943,6 +943,16 @@ fn build_live_response_stream(
                     );
                     yield Ok(Bytes::from(output.bytes));
                 }
+            } else if protocol_bridge.is_some() {
+                if !converted.is_empty() {
+                    debug::log_body(
+                        "client_stream_chunk",
+                        &request_id,
+                        &endpoint,
+                        &converted,
+                    );
+                    yield Ok(Bytes::from(converted));
+                }
             } else {
                 debug::log_body(
                     "client_stream_chunk",
@@ -964,7 +974,7 @@ fn build_live_response_stream(
                 &mut sse_buffer,
             );
             log_draft.merge_usage(&usage);
-            if convert_protocol && !converted.is_empty() {
+            if (convert_protocol || protocol_bridge.is_some()) && !converted.is_empty() {
                 debug::log_body(
                     "client_stream_chunk",
                     &request_id,

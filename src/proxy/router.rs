@@ -735,6 +735,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mapped_responses_sse_restores_client_model() {
+        let (mock_base, hits) = spawn_mock(MockMode::ResponsesSse).await;
+        let state = test_state(&mock_base, WireApi::Responses).await;
+        set_group_mode(&state, "default", ScheduleMode::ModelMapping).await;
+        let upstream = upstream_by_name(&state, "mock").await;
+        let mut rule = ScheduleRouteRule::new("default".to_string());
+        rule.name = "mapped".to_string();
+        rule.pattern = "gpt-test".to_string();
+        rule.target_kind = ScheduleRouteTargetKind::Upstream;
+        rule.target_upstream_id = Some(upstream.id.clone());
+        rule.target_model = Some("deepseek-v4-flash".to_string());
+        state.store.save_schedule_route_rule(&rule).await.unwrap();
+        let proxy_base = spawn_proxy(state).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({"model":"gpt-test","input":"hello","stream":true}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let mut body = String::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            body.push_str(&String::from_utf8_lossy(&chunk.unwrap()));
+        }
+        assert!(body.contains("\"model\":\"gpt-test\""));
+        assert!(!body.contains("\"model\":\"deepseek-v4-flash\""));
+        let hits = hits.lock().await;
+        assert_eq!(hits[0].body["model"], "deepseek-v4-flash");
+    }
+
+    #[tokio::test]
     async fn failover_group_retries_balance_failure() {
         let (bad_base, bad_hits) = spawn_mock(MockMode::BalanceError).await;
         let (good_base, good_hits) = spawn_mock(MockMode::ResponsesJson).await;
@@ -1811,11 +1846,11 @@ mod tests {
             MockMode::ResponsesSse => {
                 let stream = async_stream::stream! {
                     yield Ok::<_, std::convert::Infallible>(Bytes::from_static(
-                        b"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_mock\",\"status\":\"in_progress\"}}\n\n",
+                        b"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_mock\",\"model\":\"deepseek-v4-flash\",\"status\":\"in_progress\"}}\n\n",
                     ));
                     tokio::time::sleep(Duration::from_millis(10)).await;
                     yield Ok::<_, std::convert::Infallible>(Bytes::from_static(
-                        b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_mock\",\"status\":\"completed\",\"usage\":{\"input_tokens\":4096,\"output_tokens\":1,\"total_tokens\":4097,\"input_tokens_details\":{\"cached_tokens\":4096}}}}\n\n",
+                        b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_mock\",\"model\":\"deepseek-v4-flash\",\"status\":\"completed\",\"usage\":{\"input_tokens\":4096,\"output_tokens\":1,\"total_tokens\":4097,\"input_tokens_details\":{\"cached_tokens\":4096}}}}\n\n",
                     ));
                     tokio::time::sleep(Duration::from_millis(200)).await;
                 };
