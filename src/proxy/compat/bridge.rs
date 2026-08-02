@@ -6,6 +6,7 @@ use super::{
     responses_response_to_chat_json, responses_to_anthropic_request_json,
     responses_to_anthropic_response_json, responses_to_chat_json,
 };
+use super::namespace::NamespaceToolMap;
 use crate::core::models::WireApi;
 use serde_json::Value;
 
@@ -36,9 +37,15 @@ impl PreparedProtocolRequest {
             } else {
                 body.to_vec()
             };
+            let namespace_tools =
+                NamespaceToolMap::from_request(&serde_json::from_slice(&body).unwrap_or(Value::Null));
             return Ok(Self {
                 body,
-                sse_bridge: ProtocolSseBridge::passthrough(client_api, model.clone()),
+                sse_bridge: ProtocolSseBridge::passthrough(
+                    client_api,
+                    model.clone(),
+                    namespace_tools,
+                ),
                 client_api,
                 upstream_api,
                 chat_context: None,
@@ -55,6 +62,7 @@ impl PreparedProtocolRequest {
         let canonical_value = serde_json::from_slice::<Value>(&canonical)
             .map_err(|error| ProtocolConversionError(error.to_string()))?;
         let mut response_context = ChatResponseContext::from_responses_request(&canonical_value);
+        let namespace_tools = NamespaceToolMap::from_request(&canonical_value);
         let body = match upstream_api {
             WireApi::Responses => canonical,
             WireApi::ChatCompletions => {
@@ -69,6 +77,7 @@ impl PreparedProtocolRequest {
             upstream_api,
             Some(response_context.clone()),
             model.clone(),
+            namespace_tools,
         );
         Ok(Self {
             body,
@@ -86,7 +95,9 @@ impl PreparedProtocolRequest {
         value: &Value,
     ) -> Result<Value, ProtocolConversionError> {
         if self.client_api == self.upstream_api {
-            return Ok(value.clone());
+            let mut value = value.clone();
+            self.sse_bridge.restore_response_namespaces(&mut value);
+            return Ok(value);
         }
         let canonical = match self.upstream_api {
             WireApi::Responses => value.clone(),
@@ -130,6 +141,7 @@ pub(crate) struct ProtocolSseBridge {
     canonical_buffer: Vec<u8>,
     passthrough: bool,
     response_model: Option<String>,
+    namespace_tools: NamespaceToolMap,
 }
 
 enum UpstreamDecoder {
@@ -145,13 +157,14 @@ enum ClientEncoder {
 }
 
 impl ProtocolSseBridge {
-    fn passthrough(api: WireApi, model: Option<String>) -> Self {
+    fn passthrough(api: WireApi, model: Option<String>, namespace_tools: NamespaceToolMap) -> Self {
         Self {
             decoder: decoder(api, None),
             encoder: encoder(api, model),
             canonical_buffer: Vec::new(),
             passthrough: true,
             response_model: None,
+            namespace_tools,
         }
     }
 
@@ -160,6 +173,7 @@ impl ProtocolSseBridge {
         upstream_api: WireApi,
         chat_context: Option<ChatResponseContext>,
         model: Option<String>,
+        namespace_tools: NamespaceToolMap,
     ) -> Self {
         Self {
             decoder: decoder(upstream_api, chat_context),
@@ -167,6 +181,7 @@ impl ProtocolSseBridge {
             canonical_buffer: Vec::new(),
             passthrough: client_api == upstream_api,
             response_model: None,
+            namespace_tools,
         }
     }
 
@@ -191,6 +206,7 @@ impl ProtocolSseBridge {
                 Some(model) => rewrite_sse_model(block, model),
                 None => block.to_vec(),
             };
+            output = self.namespace_tools.rewrite_sse_block(&output);
             output.extend_from_slice(b"\n\n");
             return output;
         }
@@ -205,6 +221,10 @@ impl ProtocolSseBridge {
             UpstreamDecoder::Anthropic(converter) => converter.push(&text),
         };
         self.encode_canonical(&canonical)
+    }
+
+    fn restore_response_namespaces(&self, value: &mut Value) -> bool {
+        self.namespace_tools.restore_response_value(value)
     }
 
     pub(crate) fn finish(&mut self) -> Vec<u8> {

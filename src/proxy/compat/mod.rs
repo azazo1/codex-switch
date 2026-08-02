@@ -1,6 +1,7 @@
 mod anthropic;
 mod bridge;
 mod chat_completions;
+mod namespace;
 
 pub(crate) use anthropic::{
     AnthropicToResponsesSseConverter, ResponsesToAnthropicSseConverter,

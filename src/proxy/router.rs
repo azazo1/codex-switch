@@ -220,6 +220,7 @@ mod tests {
         ResponsesJson,
         ResponsesThenForbidden,
         ResponsesSse,
+        ResponsesNamespaceSse,
         ChatJson,
         ChatSse,
         ChatToolSse,
@@ -765,6 +766,42 @@ mod tests {
         }
         assert!(body.contains("\"model\":\"gpt-test\""));
         assert!(!body.contains("\"model\":\"deepseek-v4-flash\""));
+        let hits = hits.lock().await;
+        assert_eq!(hits[0].body["model"], "deepseek-v4-flash");
+    }
+
+    #[tokio::test]
+    async fn mapped_responses_sse_restores_namespaced_function_call() {
+        let (mock_base, hits) = spawn_mock(MockMode::ResponsesNamespaceSse).await;
+        let state = test_state(&mock_base, WireApi::Responses).await;
+        set_group_mode(&state, "default", ScheduleMode::ModelMapping).await;
+        let upstream = upstream_by_name(&state, "mock").await;
+        let mut rule = ScheduleRouteRule::new("default".to_string());
+        rule.name = "mapped".to_string();
+        rule.pattern = "gpt-test".to_string();
+        rule.target_kind = ScheduleRouteTargetKind::Upstream;
+        rule.target_upstream_id = Some(upstream.id.clone());
+        rule.target_model = Some("deepseek-v4-flash".to_string());
+        state.store.save_schedule_route_rule(&rule).await.unwrap();
+        let proxy_base = spawn_proxy(state).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({"model":"gpt-test","input":"hello","stream":true}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let mut body = String::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            body.push_str(&String::from_utf8_lossy(&chunk.unwrap()));
+        }
+        assert!(body.contains("\"name\":\"js\""));
+        assert!(body.contains("\"namespace\":\"mcp__node_repl\""));
+        assert!(!body.contains("\"name\":\"mcp__node_repl__js\""));
         let hits = hits.lock().await;
         assert_eq!(hits[0].body["model"], "deepseek-v4-flash");
     }
@@ -1853,6 +1890,24 @@ mod tests {
                         b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_mock\",\"model\":\"deepseek-v4-flash\",\"status\":\"completed\",\"usage\":{\"input_tokens\":4096,\"output_tokens\":1,\"total_tokens\":4097,\"input_tokens_details\":{\"cached_tokens\":4096}}}}\n\n",
                     ));
                     tokio::time::sleep(Duration::from_millis(200)).await;
+                };
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, "text/event-stream")
+                    .body(Body::from_stream(stream))
+                    .unwrap()
+            }
+            MockMode::ResponsesNamespaceSse => {
+                let stream = async_stream::stream! {
+                    yield Ok::<_, std::convert::Infallible>(Bytes::from_static(
+                        b"event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"function_call\",\"id\":\"fc_1\",\"status\":\"in_progress\",\"arguments\":\"\",\"call_id\":\"call_1\",\"name\":\"mcp__node_repl__js\"}}\n\n",
+                    ));
+                    yield Ok::<_, std::convert::Infallible>(Bytes::from_static(
+                        b"event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"id\":\"fc_1\",\"status\":\"completed\",\"arguments\":\"{\\\"code\\\":\\\"nodeRepl.write(1)\\\"}\",\"call_id\":\"call_1\",\"name\":\"mcp__node_repl__js\"}}\n\n",
+                    ));
+                    yield Ok::<_, std::convert::Infallible>(Bytes::from_static(
+                        b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_mock\",\"model\":\"deepseek-v4-flash\",\"status\":\"completed\",\"output\":[{\"type\":\"function_call\",\"id\":\"fc_1\",\"status\":\"completed\",\"arguments\":\"{\\\"code\\\":\\\"nodeRepl.write(1)\\\"}\",\"call_id\":\"call_1\",\"name\":\"mcp__node_repl__js\"}]}}\n\n",
+                    ));
                 };
                 Response::builder()
                     .status(StatusCode::OK)
