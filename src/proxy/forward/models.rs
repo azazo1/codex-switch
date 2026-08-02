@@ -402,7 +402,7 @@ fn reverse_route_rule_models(items: Vec<Value>, rule: &ScheduleRouteRule) -> Vec
         .filter_map(|item| {
             let downstream_model = item.get("id").and_then(Value::as_str)?.to_string();
             let visible_model = reverse_route_rule_model(rule, &downstream_model)?;
-            Some(remap_model_item(item, &visible_model, &downstream_model))
+            Some(remap_model_item(item, &visible_model))
         })
         .collect()
 }
@@ -425,12 +425,9 @@ fn reverse_route_rule_model(rule: &ScheduleRouteRule, downstream_model: &str) ->
     glob_captures(pattern, downstream_model).map(|_| downstream_model.to_string())
 }
 
-fn remap_model_item(item: Value, visible_model: &str, downstream_model: &str) -> Value {
+fn remap_model_item(item: Value, visible_model: &str) -> Value {
     let mut model = item.as_object().cloned().unwrap_or_default();
     model.insert("id".to_string(), json!(visible_model));
-    if visible_model != downstream_model {
-        model.insert("target_model".to_string(), json!(downstream_model));
-    }
     Value::Object(model)
 }
 
@@ -515,7 +512,7 @@ mod tests {
         );
 
         assert_eq!(items[0]["id"], "glm/glm-4.5");
-        assert_eq!(items[0]["target_model"], "glm-4.5");
+        assert!(items[0].get("target_model").is_none());
         assert_eq!(items[0]["owned_by"], "mock");
     }
 
