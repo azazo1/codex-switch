@@ -17,6 +17,7 @@ Codex OAuth 的完整流程见[OAuth 使用指南](oauth-guide.md). 本文重点
 | Wire API | 上游原生使用 Responses, Chat Completions 或 Anthropic Messages |
 | API Key 认证 | 使用 Bearer 或 `x-api-key` |
 | 支持 compact | 该上游能否处理 Responses compact 请求 |
+| 过滤 server_tool | 仅 Chat Completions 上游显示, 开启后丢弃非 function server tool |
 
 Base URL 可以填写站点根地址或以 `/v1` 结尾的地址. 构建上游端点时, Codex Switch 会在需要时补上 `/v1`.
 
@@ -33,6 +34,22 @@ Base URL 可以填写站点根地址或以 `/v1` 结尾的地址. 构建上游�
 三种文本 Wire API 可以互相转换. 同协议请求直通, 跨协议请求通过 Responses 规范结构桥接. Anthropic 模式会强制关闭 compact, 但仍可以启用缓存保持.
 
 Anthropic 上游默认使用 `x-api-key`, 并发送 `anthropic-version: 2023-06-01`. 兼容中转需要 Bearer 时可以在新增表单或编辑器中修改认证方式. 同协议直通会保留客户端 `anthropic-version` 和 `anthropic-beta`, 跨协议不会盲目转发 beta.
+
+Chat Completions 上游可以额外开启 `过滤 server_tool`. 开启后, Codex Switch 会丢弃 `web_search` 和 `web_search_preview` 等非 function 工具, 并清理引用已删除工具的 `tool_choice`. 这个选项适合 OpenCode Go 等只接受 function 工具的兼容端点. 默认关闭, 以保留支持 server tool 的 Chat 上游原有行为.
+
+## 接入 OpenCode Go
+
+OpenCode Go 提供 OpenAI Chat Completions 兼容接口, 可作为普通 Relay API Key 上游接入:
+
+| 字段 | 建议值 |
+| --- | --- |
+| Base URL | `https://opencode.ai/zen/go/v1` |
+| API Key | OpenCode Go 订阅密钥 |
+| Wire API | `Chat Completions` |
+| 过滤 server_tool | 开启 |
+| 支持 compact | 按实际模型和请求验证后再开启 |
+
+Codex 客户端应使用 Codex Switch 的本地 Base URL 和本地访问 key, 而不是直接配置 OpenCode Go 为 Codex provider.
 
 当前转换覆盖 Codex 常用的以下语义:
 

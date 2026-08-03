@@ -40,10 +40,10 @@ impl Store {
     pub async fn save_upstream(&self, upstream: &Upstream) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO upstreams (
-                id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, error_retry_policy,
+                id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, error_retry_policy,
                 enabled, priority, weight, proxy_url, balance_provider, chatgpt_account_id, email,
                 plan_type, token_expires_at, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
              ON CONFLICT(id) DO UPDATE SET
                 kind = excluded.kind,
                 name = excluded.name,
@@ -51,6 +51,7 @@ impl Store {
                 wire_api = excluded.wire_api,
                 api_key_auth_scheme = excluded.api_key_auth_scheme,
                 supports_compact = excluded.supports_compact,
+                filter_chat_server_tools = excluded.filter_chat_server_tools,
                 error_retry_policy = excluded.error_retry_policy,
                 enabled = excluded.enabled,
                 priority = excluded.priority,
@@ -70,6 +71,7 @@ impl Store {
         .bind(upstream.wire_api.as_str())
         .bind(upstream.api_key_auth_scheme.as_str())
         .bind(i64::from(upstream.supports_compact))
+        .bind(i64::from(upstream.filter_chat_server_tools))
         .bind(upstream.error_retry_policy.as_str())
         .bind(i64::from(upstream.enabled))
         .bind(upstream.priority)
@@ -254,10 +256,10 @@ async fn insert_upstream(
 ) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO upstreams (
-            id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, error_retry_policy,
+            id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, error_retry_policy,
             enabled, priority, weight, proxy_url, balance_provider, chatgpt_account_id, email,
             plan_type, token_expires_at, created_at, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
     )
     .bind(&upstream.id)
     .bind(upstream.kind.as_str())
@@ -266,6 +268,7 @@ async fn insert_upstream(
     .bind(upstream.wire_api.as_str())
     .bind(upstream.api_key_auth_scheme.as_str())
     .bind(i64::from(upstream.supports_compact))
+    .bind(i64::from(upstream.filter_chat_server_tools))
     .bind(upstream.error_retry_policy.as_str())
     .bind(i64::from(upstream.enabled))
     .bind(upstream.priority)
@@ -318,6 +321,7 @@ pub(super) fn row_to_upstream(row: sqlx::sqlite::SqliteRow) -> anyhow::Result<Up
             &row.get::<String, _>("api_key_auth_scheme"),
         ),
         supports_compact: row.get::<i64, _>("supports_compact") != 0,
+        filter_chat_server_tools: row.get::<i64, _>("filter_chat_server_tools") != 0,
         error_retry_policy: ErrorRetryPolicy::from_str(
             &row.get::<String, _>("error_retry_policy"),
         ),
@@ -365,5 +369,27 @@ mod tests {
 
         assert_eq!(saved.error_retry_policy, ErrorRetryPolicy::All);
         assert_eq!(saved.api_key_auth_scheme, ApiKeyAuthScheme::XApiKey);
+    }
+
+    #[tokio::test]
+    async fn persists_chat_server_tool_filter() {
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-upstream-filter-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let store = Store::open(path).await.unwrap();
+        let mut upstream = Upstream::new_relay(
+            "opencode".to_string(),
+            "https://opencode.ai/zen/go/v1".to_string(),
+            WireApi::ChatCompletions,
+            false,
+            BalanceProvider::Unsupported,
+        );
+        upstream.filter_chat_server_tools = true;
+
+        store.save_upstream(&upstream).await.unwrap();
+        let saved = store.get_upstream(&upstream.id).await.unwrap().unwrap();
+
+        assert!(saved.filter_chat_server_tools);
     }
 }

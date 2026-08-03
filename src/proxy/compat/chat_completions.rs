@@ -124,6 +124,58 @@ pub(crate) fn normalize_chat_request_json(body: &[u8]) -> anyhow::Result<Vec<u8>
     Ok(serde_json::to_vec(&value)?)
 }
 
+pub(crate) fn filter_chat_server_tools(body: &[u8]) -> anyhow::Result<(Vec<u8>, usize)> {
+    let mut value: Value = serde_json::from_slice(body)?;
+    let Some(object) = value.as_object_mut() else {
+        return Ok((body.to_vec(), 0));
+    };
+    let Some(tool_values) = object.get("tools").and_then(Value::as_array).cloned() else {
+        return Ok((body.to_vec(), 0));
+    };
+    let original_len = tool_values.len();
+    let function_tools = tool_values
+        .into_iter()
+        .filter(|tool| {
+            tool.get("type").and_then(Value::as_str).unwrap_or("function") == "function"
+        })
+        .collect::<Vec<_>>();
+    let dropped = original_len - function_tools.len();
+    if dropped == 0 {
+        return Ok((body.to_vec(), 0));
+    }
+    if function_tools.is_empty() {
+        object.remove("tools");
+        object.remove("tool_choice");
+        object.remove("parallel_tool_calls");
+    } else {
+        object.insert("tools".to_string(), Value::Array(function_tools.clone()));
+        if !chat_tool_choice_keeps_function(object.get("tool_choice"), &function_tools) {
+            object.remove("tool_choice");
+        }
+    }
+    Ok((serde_json::to_vec(&value)?, dropped))
+}
+
+fn chat_tool_choice_keeps_function(choice: Option<&Value>, tools: &[Value]) -> bool {
+    match choice {
+        None => true,
+        Some(Value::String(value)) => matches!(value.as_str(), "auto" | "none" | "required"),
+        Some(Value::Object(object)) => {
+            object.get("type").and_then(Value::as_str) == Some("function")
+                && object
+                    .get("function")
+                    .and_then(|function| function.get("name"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|name| {
+                        tools.iter().any(|tool| {
+                            tool.pointer("/function/name").and_then(Value::as_str) == Some(name)
+                        })
+                    })
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn responses_to_chat_json(body: &[u8]) -> anyhow::Result<ConvertedChatRequest> {
     let value: Value = serde_json::from_slice(body)?;
     let object = value

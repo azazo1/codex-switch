@@ -72,6 +72,15 @@ impl CodexSwitchApp {
             ui.add_enabled_ui(self.relay_wire_api != WireApi::AnthropicMessages, |ui| {
                 ui.checkbox(&mut self.relay_supports_compact, "支持 compact");
             });
+            ui.add_enabled_ui(self.relay_wire_api == WireApi::ChatCompletions, |ui| {
+                ui.checkbox(
+                    &mut self.relay_filter_chat_server_tools,
+                    "过滤 server_tool",
+                )
+                .on_hover_text(
+                    "丢弃 web_search 等非 function 工具, 适合 OpenCode 等仅支持 function 的 Chat 上游.",
+                );
+            });
             if ui.button("添加").clicked() {
                 self.add_relay();
             }

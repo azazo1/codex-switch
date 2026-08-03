@@ -370,6 +370,18 @@ impl UpstreamEditor {
                     ui.checkbox(&mut self.upstream.supports_compact, "支持 compact");
                 },
             );
+            ui.add_enabled_ui(
+                self.upstream.wire_api == WireApi::ChatCompletions,
+                |ui| {
+                    ui.checkbox(
+                        &mut self.upstream.filter_chat_server_tools,
+                        "过滤 server_tool",
+                    )
+                    .on_hover_text(
+                        "丢弃 web_search 等非 function 工具, 适合 OpenCode 等仅支持 function 的 Chat 上游.",
+                    );
+                },
+            );
         });
         provider_combo(ui, &mut self.upstream.balance_provider);
         if self.upstream.balance_provider == BalanceProvider::Auto

@@ -191,6 +191,7 @@ pub struct Upstream {
     pub wire_api: WireApi,
     pub api_key_auth_scheme: ApiKeyAuthScheme,
     pub supports_compact: bool,
+    pub filter_chat_server_tools: bool,
     pub error_retry_policy: ErrorRetryPolicy,
     pub enabled: bool,
     pub priority: i64,
@@ -226,6 +227,7 @@ impl Upstream {
                 ApiKeyAuthScheme::Bearer
             },
             supports_compact,
+            filter_chat_server_tools: false,
             error_retry_policy: ErrorRetryPolicy::Off,
             enabled: true,
             priority: 0,
@@ -257,6 +259,7 @@ impl Upstream {
             wire_api: WireApi::Responses,
             api_key_auth_scheme: ApiKeyAuthScheme::Bearer,
             supports_compact: true,
+            filter_chat_server_tools: false,
             error_retry_policy: ErrorRetryPolicy::Off,
             enabled: true,
             priority: 10,

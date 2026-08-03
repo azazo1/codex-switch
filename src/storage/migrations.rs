@@ -387,6 +387,13 @@ fn migrations() -> &'static [Migration] {
             name: "request_log_target_model",
             statements: &["ALTER TABLE request_logs ADD COLUMN target_model TEXT"],
         },
+        Migration {
+            version: 15,
+            name: "upstream_filter_chat_server_tools",
+            statements: &[
+                "ALTER TABLE upstreams ADD COLUMN filter_chat_server_tools INTEGER NOT NULL DEFAULT 0",
+            ],
+        },
     ]
 }
 
@@ -407,7 +414,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 14);
+        assert_eq!(rows.len(), 15);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -460,6 +467,11 @@ mod tests {
             rows[13].get::<String, _>("name"),
             "request_log_target_model"
         );
+        assert_eq!(rows[14].get::<i64, _>("version"), 15);
+        assert_eq!(
+            rows[14].get::<String, _>("name"),
+            "upstream_filter_chat_server_tools"
+        );
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
             Some("127.0.0.1:15721")
@@ -488,6 +500,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 14);
+        assert_eq!(count, 15);
     }
 }

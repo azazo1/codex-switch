@@ -430,6 +430,7 @@ pub struct CodexSwitchApp {
     relay_wire_api: WireApi,
     relay_api_key_auth_scheme: ApiKeyAuthScheme,
     relay_supports_compact: bool,
+    relay_filter_chat_server_tools: bool,
     quota_snapshots: Vec<(String, Option<QuotaSnapshot>)>,
     balance_snapshots: Vec<(String, Option<BalanceSnapshot>)>,
     upstream_editor: Option<UpstreamEditor>,
@@ -532,6 +533,7 @@ impl CodexSwitchApp {
             relay_wire_api: WireApi::Responses,
             relay_api_key_auth_scheme: ApiKeyAuthScheme::Bearer,
             relay_supports_compact: true,
+            relay_filter_chat_server_tools: false,
             quota_snapshots: Vec::new(),
             balance_snapshots: Vec::new(),
             upstream_editor: None,
@@ -914,6 +916,7 @@ impl CodexSwitchApp {
             provider,
         );
         upstream.api_key_auth_scheme = self.relay_api_key_auth_scheme;
+        upstream.filter_chat_server_tools = self.relay_filter_chat_server_tools;
         if upstream.wire_api == WireApi::AnthropicMessages {
             upstream.supports_compact = false;
         }

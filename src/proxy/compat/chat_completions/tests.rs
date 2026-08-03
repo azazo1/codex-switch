@@ -201,6 +201,52 @@ fn drops_tool_controls_when_no_tools_are_available() {
 }
 
 #[test]
+fn filters_non_function_chat_tools_but_keeps_function_tools() {
+    let body = br#"{"model":"chat-model","messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"read_file"}},{"type":"web_search"},{"type":"web_search_preview"}],"tool_choice":"auto","parallel_tool_calls":true}"#;
+    let (filtered, dropped) = filter_chat_server_tools(body).unwrap();
+    let value: Value = serde_json::from_slice(&filtered).unwrap();
+
+    assert_eq!(dropped, 2);
+    assert_eq!(value["tools"].as_array().unwrap().len(), 1);
+    assert_eq!(value["tools"][0]["type"], "function");
+    assert_eq!(value["tool_choice"], "auto");
+    assert_eq!(value["parallel_tool_calls"], true);
+}
+
+#[test]
+fn removes_tool_controls_when_all_chat_tools_are_server_tools() {
+    let body = br#"{"model":"chat-model","messages":[{"role":"user","content":"hello"}],"tools":[{"type":"web_search"}],"tool_choice":{"type":"function","function":{"name":"web_search"}},"parallel_tool_calls":false}"#;
+    let (filtered, dropped) = filter_chat_server_tools(body).unwrap();
+    let value: Value = serde_json::from_slice(&filtered).unwrap();
+
+    assert_eq!(dropped, 1);
+    assert!(value.get("tools").is_none());
+    assert!(value.get("tool_choice").is_none());
+    assert!(value.get("parallel_tool_calls").is_none());
+}
+
+#[test]
+fn removes_tool_choice_referencing_filtered_tool_when_function_tools_remain() {
+    let body = br#"{"model":"chat-model","messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"read_file"}},{"type":"web_search"}],"tool_choice":{"type":"function","function":{"name":"web_search"}},"parallel_tool_calls":false}"#;
+    let (filtered, dropped) = filter_chat_server_tools(body).unwrap();
+    let value: Value = serde_json::from_slice(&filtered).unwrap();
+
+    assert_eq!(dropped, 1);
+    assert_eq!(value["tools"].as_array().unwrap().len(), 1);
+    assert!(value.get("tool_choice").is_none());
+    assert_eq!(value["parallel_tool_calls"], false);
+}
+
+#[test]
+fn leaves_chat_requests_without_server_tools_unchanged() {
+    let body = br#"{"model":"chat-model","messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"read_file"}}]}"#;
+    let (filtered, dropped) = filter_chat_server_tools(body).unwrap();
+
+    assert_eq!(dropped, 0);
+    assert_eq!(filtered, body);
+}
+
+#[test]
 fn restores_custom_namespace_and_tool_search_non_streaming_calls() {
     let mut request = additional_tools_request();
     request["tools"] = json!([{"type":"tool_search"}]);

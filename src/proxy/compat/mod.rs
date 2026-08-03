@@ -11,7 +11,7 @@ pub(crate) use anthropic::{
 };
 pub(crate) use chat_completions::{
     ChatResponseContext, ChatSseConverter, ResponsesToChatSseConverter,
-    chat_to_responses_json, chat_to_responses_request_json, normalize_chat_request_json,
-    responses_response_to_chat_json, responses_to_chat_json,
+    chat_to_responses_json, chat_to_responses_request_json, filter_chat_server_tools,
+    normalize_chat_request_json, responses_response_to_chat_json, responses_to_chat_json,
 };
 pub(crate) use bridge::{PreparedProtocolRequest, ProtocolConversionError, ProtocolSseBridge};

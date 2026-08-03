@@ -72,6 +72,8 @@ API Key 上游可以声明 `Responses`, `Chat Completions` 或 `Anthropic Messag
 
 转换覆盖文本, base64/URL 图片, system/developer 指令, function/custom/namespace tools, tool call/result, tool choice, web search, reasoning/thinking, 输出 token 上限, sampling 参数, usage 和 SSE 生命周期. 同协议请求保持直通, 因此 provider 私有字段, Anthropic `cache_control`, thinking signature 和 `anthropic-beta` 可以原样保留.
 
+对仅支持 function 工具的 Chat Completions 上游, 可在上游编辑界面开启 `过滤 server_tool`. 开启后, 转 Chat Completions 时会丢弃 `web_search`/`web_search_preview` 等 server tool, 并移除引用已删除工具的 `tool_choice`.
+
 跨协议时, document/PDF, audio 和未知 server tool 会返回客户端协议对应的 `400 invalid_request_error`. thinking signature 不会跨协议转发. `anthropic-beta` 只在 Anthropic 同协议直通时发送给上游.
 
 Images 不会选择 Anthropic 上游. Responses compact 也不会选择 Anthropic 上游.

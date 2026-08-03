@@ -480,6 +480,18 @@ async fn forward_with_upstream(
     if upstream.kind == UpstreamKind::CodexOauth && !request.endpoint_kind.is_count_tokens() {
         target_body = transform::normalize_oauth_body(&target_body, request.compact)?;
     }
+    if upstream.wire_api == WireApi::ChatCompletions && upstream.filter_chat_server_tools {
+        let (filtered, dropped) = compat::filter_chat_server_tools(&target_body)?;
+        if dropped > 0 {
+            tracing::info!(
+                upstream_id = %upstream.id,
+                upstream_name = %upstream.name,
+                dropped,
+                "filtered unsupported chat server tools for upstream"
+            );
+        }
+        target_body = filtered;
+    }
     let target_url = target_url(request, &upstream, upstream_wire_api);
     debug::log_body(
         "upstream_request",

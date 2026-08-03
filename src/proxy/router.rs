@@ -1327,6 +1327,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chat_upstream_can_filter_server_tools() {
+        let (mock_base, hits) = spawn_mock(MockMode::ChatJson).await;
+        let state = test_state(&mock_base, WireApi::ChatCompletions).await;
+        let mut upstream = state.store.list_upstreams().await.unwrap().remove(0);
+        upstream.filter_chat_server_tools = true;
+        state.store.save_upstream(&upstream).await.unwrap();
+        let proxy_base = spawn_proxy(state).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({
+                "model":"test-model",
+                "input":"hello",
+                "stream":false,
+                "tools":[
+                    {"type":"function","name":"read_file","parameters":{"type":"object"}},
+                    {"type":"web_search"},
+                    {"type":"web_search_preview"}
+                ]
+            }))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let hits = hits.lock().await;
+        assert_eq!(hits.len(), 1);
+        let tools = hits[0].body["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["type"], "function");
+    }
+
+    #[tokio::test]
     async fn text_protocol_matrix_converts_fragmented_streams() {
         let upstreams = [
             (WireApi::Responses, MockMode::ResponsesSse),
