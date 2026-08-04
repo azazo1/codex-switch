@@ -280,6 +280,10 @@ fn response_function_tool_to_chat(tool: &Value, chat_name: &str) -> Option<Value
         let mut function = function.clone();
         let object = function.as_object_mut()?;
         object.insert("name".to_string(), json!(chat_name));
+        object.insert(
+            "parameters".to_string(),
+            normalize_chat_parameters(object.get("parameters")),
+        );
         if let Some(strict) = tool.get("strict") {
             object
                 .entry("strict".to_string())
@@ -290,12 +294,22 @@ fn response_function_tool_to_chat(tool: &Value, chat_name: &str) -> Option<Value
     let mut function = json!({
         "name":chat_name,
         "description":tool.get("description").cloned().unwrap_or(Value::Null),
-        "parameters":tool.get("parameters").cloned().unwrap_or_else(|| json!({}))
+        "parameters":normalize_chat_parameters(tool.get("parameters"))
     });
     if let Some(strict) = tool.get("strict") {
         function["strict"] = strict.clone();
     }
     Some(json!({"type":"function","function":function}))
+}
+
+fn normalize_chat_parameters(value: Option<&Value>) -> Value {
+    let mut schema = value
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    schema.insert("type".to_string(), json!("object"));
+    schema.entry("properties".to_string()).or_insert_with(|| json!({}));
+    Value::Object(schema)
 }
 
 fn custom_tool_description(tool: &Value) -> String {

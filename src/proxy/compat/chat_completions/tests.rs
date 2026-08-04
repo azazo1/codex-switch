@@ -201,6 +201,48 @@ fn drops_tool_controls_when_no_tools_are_available() {
 }
 
 #[test]
+fn normalizes_chat_tool_parameters_without_root_type() {
+    let request = json!({
+        "model":"chat-model",
+        "tools":[{
+            "type":"function",
+            "name":"automation_update",
+            "description":"Manage automations",
+            "parameters":{
+                "$schema":"https://json-schema.org/draft/2020-12/schema",
+                "oneOf":[{
+                    "type":"object",
+                    "properties":{"mode":{"type":"string","const":"view"}}
+                }],
+                "$defs":{"__schema0":{"type":"string"}}
+            }
+        }]
+    });
+    let converted = responses_to_chat_json(&serde_json::to_vec(&request).unwrap()).unwrap();
+    let body: Value = serde_json::from_slice(&converted.body).unwrap();
+    let parameters = &body["tools"][0]["function"]["parameters"];
+
+    assert_eq!(parameters["type"], "object");
+    assert_eq!(parameters["oneOf"][0]["type"], "object");
+    assert!(parameters["$defs"].is_object());
+}
+
+#[test]
+fn fills_missing_chat_tool_parameters() {
+    let request = json!({
+        "model":"chat-model",
+        "tools":[{"type":"function","name":"read_file"}]
+    });
+    let converted = responses_to_chat_json(&serde_json::to_vec(&request).unwrap()).unwrap();
+    let body: Value = serde_json::from_slice(&converted.body).unwrap();
+
+    assert_eq!(
+        body["tools"][0]["function"]["parameters"],
+        json!({"type":"object","properties":{}})
+    );
+}
+
+#[test]
 fn filters_non_function_chat_tools_but_keeps_function_tools() {
     let body = br#"{"model":"chat-model","messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"read_file"}},{"type":"web_search"},{"type":"web_search_preview"}],"tool_choice":"auto","parallel_tool_calls":true}"#;
     let (filtered, dropped) = filter_chat_server_tools(body).unwrap();
