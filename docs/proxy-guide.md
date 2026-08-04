@@ -46,6 +46,18 @@ x-api-key: <仪表盘本地访问 key>
 
 缺失或错误的 key 返回 `401` 和 `authentication_error`. 这个 key 只负责保护本地代理, 不会转发给上游. Relay 上游使用各自保存的 API Key, OAuth 上游使用自动维护的 access token.
 
+## 临时 Key
+
+顶部的 `临时 Key` 页面可以创建格式为 `cs-tmp-<uuid>` 的临时本地访问 key. 主 key 不受影响且仍然无限. 每个临时 key 可以勾选以下限制:
+
+- 成功请求次数上限: 只统计成功返回 `2xx` 的请求, 失败和重试不消耗次数.
+- 总 token 用量上限: 按 input, output, cache_read 和 cache_creation token 总和计算.
+- 固定时长过期: 创建时输入数字并选择分钟, 小时或天, 从创建时刻开始倒计时.
+
+无效, 禁用或过期的临时 key 返回 `401` 和 `authentication_error`. 达到次数或 token 上限的 key 返回 `429` 和 `rate_limit_error`. 临时 key 与主 key 一样可以通过 Bearer 或 `x-api-key` 发送, 且不会被转发给上游.
+
+由于 token 上限在请求完成后累计, 单个请求可能超过剩余额度, 但该 key 会在后续请求中被拒绝. 并发请求也可能让最后一小批成功请求略超次数上限.
+
 ## 模型列表
 
 `GET /v1/models` 会遍历当前调度路径可达的上游:

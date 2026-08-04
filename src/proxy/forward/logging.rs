@@ -4,10 +4,25 @@ use axum::http::StatusCode;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-pub(super) async fn record_request_log(state: &AppState, log: RequestLog) {
+pub(super) async fn record_request_log(
+    state: &AppState,
+    log: RequestLog,
+    temporary_key_id: Option<String>,
+) {
+    let success = (200..300).contains(&log.status) && log.error.is_none();
+    let usage = log.usage.clone();
     match state.store.insert_request_log(log).await {
         Ok(()) => state.events.bump_request_logs(),
         Err(err) => tracing::warn!(error = %err, "failed to record request log"),
+    }
+    if success
+        && let Some(id) = temporary_key_id
+        && let Err(err) = state
+            .store
+            .record_temporary_access_key_success(&id, &usage)
+            .await
+    {
+        tracing::warn!(error = %err, "failed to record temporary access key success");
     }
 }
 
@@ -23,6 +38,7 @@ pub(super) struct AttemptLog<'a> {
     pub(super) usage: TokenUsage,
     pub(super) first_token_ms: Option<i64>,
     pub(super) error: Option<String>,
+    pub(super) temporary_key_id: Option<String>,
 }
 
 pub(super) async fn record_attempt_log(log: AttemptLog<'_>) {
@@ -43,6 +59,7 @@ pub(super) async fn record_attempt_log(log: AttemptLog<'_>) {
             first_token_ms: log.first_token_ms,
             error: log.error,
         },
+        log.temporary_key_id.clone(),
     )
     .await;
 }
@@ -58,6 +75,7 @@ pub(super) struct StreamLogDraft {
     reasoning_effort: Option<String>,
     status: StatusCode,
     started: Instant,
+    temporary_key_id: Option<String>,
     inner: Arc<Mutex<StreamLogState>>,
 }
 
@@ -89,8 +107,13 @@ impl StreamLogDraft {
             reasoning_effort,
             status,
             started,
+            temporary_key_id: None,
             inner: Arc::new(Mutex::new(StreamLogState::default())),
         }
+    }
+
+    pub(super) fn set_temporary_key_id(&mut self, temporary_key_id: Option<String>) {
+        self.temporary_key_id = temporary_key_id;
     }
 
     pub(super) fn set_target_model(&mut self, model: Option<String>) {
@@ -117,14 +140,14 @@ impl StreamLogDraft {
         let Some(log) = self.take_log(self.status, error) else {
             return;
         };
-        record_request_log(&self.state, log).await;
+        record_request_log(&self.state, log, self.temporary_key_id.clone()).await;
     }
 
     pub(super) async fn record_with_status(&self, status: StatusCode, error: Option<String>) {
         let Some(log) = self.take_log(status, error) else {
             return;
         };
-        record_request_log(&self.state, log).await;
+        record_request_log(&self.state, log, self.temporary_key_id.clone()).await;
     }
 
     pub(super) fn record_on_drop(&self) {
@@ -133,7 +156,7 @@ impl StreamLogDraft {
         };
         let state = self.state.clone();
         tokio::spawn(async move {
-            record_request_log(&state, log).await;
+            record_request_log(&state, log, None).await;
         });
     }
 

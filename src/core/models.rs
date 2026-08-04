@@ -485,6 +485,49 @@ pub struct RequestLog {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct TemporaryAccessKey {
+    pub id: String,
+    pub name: String,
+    pub key_value: String,
+    pub enabled: bool,
+    pub request_limit: Option<i64>,
+    pub token_limit: Option<i64>,
+    pub expires_at: Option<i64>,
+    pub requests_used: i64,
+    pub tokens_used: i64,
+    pub last_used_at: Option<i64>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl TemporaryAccessKey {
+    pub fn new(
+        id: String,
+        name: String,
+        key_value: String,
+        request_limit: Option<i64>,
+        token_limit: Option<i64>,
+        expires_at: Option<i64>,
+    ) -> Self {
+        let now = Utc::now();
+        Self {
+            id,
+            name,
+            key_value,
+            enabled: true,
+            request_limit,
+            token_limit,
+            expires_at,
+            requests_used: 0,
+            tokens_used: 0,
+            last_used_at: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DashboardStats {
     pub total_requests: i64,

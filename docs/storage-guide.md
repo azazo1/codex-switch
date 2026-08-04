@@ -20,7 +20,7 @@ Codex Switch 使用一个本地 SQLite 数据库保存设置和历史数据. 实
 
 - 上游信息和启用状态.
 - Relay API Key, OAuth token 和 NewApi 凭据.
-- 监听地址, 本地访问 key 和当前调度组.
+- 监听地址, 本地访问 key, 临时 key 和当前调度组.
 - 调度组, 成员关系和模型路由规则.
 - 请求日志和用量汇总.
 - Codex 额度和 Relay 余额快照.
@@ -31,7 +31,7 @@ Codex Switch 使用一个本地 SQLite 数据库保存设置和历史数据. 实
 
 ## 凭据风险
 
-Relay, OAuth 和 NewApi 上游凭据当前以明文保存在 SQLite `credentials` 表中. 本地访问 key 也以明文保存在 `settings` 表中. 整个数据库都没有加密, 系统钥匙串或单独的主密码.
+Relay, OAuth 和 NewApi 上游凭据当前以明文保存在 SQLite `credentials` 表中. 本地访问 key 以明文保存在 `settings` 表中, 临时 key 以明文保存在 `temporary_access_keys` 表中. 整个数据库都没有加密, 系统钥匙串或单独的主密码.
 
 数据库文件和它的备份应按密钥文件保护:
 

@@ -201,7 +201,7 @@ mod tests {
     use crate::core::models::{
         ApiKeyAuthScheme, BalanceProvider, CacheKeepaliveMode, ErrorRetryPolicy, ScheduleGroup,
         ScheduleGroupMember, ScheduleMode, ScheduleRouteRule, ScheduleRouteTargetKind, Upstream,
-        UpstreamCacheKeepaliveSettings, WireApi,
+        TemporaryAccessKey, UpstreamCacheKeepaliveSettings, WireApi,
     };
     use crate::storage::{Store, credentials::CredentialStore};
     use axum::{body::Body, http::header, routing::get};
@@ -268,6 +268,232 @@ mod tests {
         let hits = hits.lock().await;
         assert_eq!(hits[0].path, "/v1/models");
         assert_eq!(hits[0].authorization.as_deref(), Some("Bearer sk-test"));
+    }
+
+    #[tokio::test]
+    async fn temporary_key_counts_successful_requests_and_tokens() {
+        let (mock_base, hits) = spawn_mock(MockMode::ResponsesJson).await;
+        let state = test_state(&mock_base, WireApi::Responses).await;
+        state
+            .store
+            .create_temporary_access_key(&TemporaryAccessKey::new(
+                "temp-one".to_string(),
+                "shared".to_string(),
+                "cs-tmp-one".to_string(),
+                Some(1),
+                Some(1000),
+                None,
+            ))
+            .await
+            .unwrap();
+        let proxy_base = spawn_proxy(state.clone()).await;
+        let client = reqwest::Client::new();
+
+        let response = client
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("cs-tmp-one")
+            .json(&json!({"model":"gpt-test","input":"hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        wait_for_log_count(&state, 1).await;
+        let stored = state
+            .store
+            .find_temporary_access_key("cs-tmp-one")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.requests_used, 1);
+        assert_eq!(stored.tokens_used, 5);
+
+        let response = client
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("cs-tmp-one")
+            .json(&json!({"model":"gpt-test","input":"hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        let value = response.json::<Value>().await.unwrap();
+        assert_eq!(value["error"]["type"], "rate_limit_error");
+        assert_eq!(hits.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn temporary_key_token_limit_rejects_next_request() {
+        let (mock_base, hits) = spawn_mock(MockMode::ResponsesJson).await;
+        let state = test_state(&mock_base, WireApi::Responses).await;
+        state
+            .store
+            .create_temporary_access_key(&TemporaryAccessKey::new(
+                "temp-token".to_string(),
+                String::new(),
+                "cs-tmp-token".to_string(),
+                None,
+                Some(4),
+                None,
+            ))
+            .await
+            .unwrap();
+        let proxy_base = spawn_proxy(state.clone()).await;
+        let client = reqwest::Client::new();
+
+        let response = client
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("cs-tmp-token")
+            .json(&json!({"model":"gpt-test","input":"hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        wait_for_log_count(&state, 1).await;
+        let stored = state
+            .store
+            .find_temporary_access_key("cs-tmp-token")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.tokens_used, 5);
+
+        let response = client
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("cs-tmp-token")
+            .json(&json!({"model":"gpt-test","input":"hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        let value = response.json::<Value>().await.unwrap();
+        assert_eq!(value["error"]["type"], "rate_limit_error");
+        assert_eq!(hits.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn temporary_key_rejects_disabled_expired_and_unknown_keys() {
+        let (mock_base, hits) = spawn_mock(MockMode::ResponsesJson).await;
+        let state = test_state(&mock_base, WireApi::Responses).await;
+        state
+            .store
+            .create_temporary_access_key(&TemporaryAccessKey::new(
+                "temp-disabled".to_string(),
+                String::new(),
+                "cs-tmp-disabled".to_string(),
+                None,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        state
+            .store
+            .create_temporary_access_key(&TemporaryAccessKey::new(
+                "temp-expired".to_string(),
+                String::new(),
+                "cs-tmp-expired".to_string(),
+                None,
+                None,
+                Some(chrono::Utc::now().timestamp() - 10),
+            ))
+            .await
+            .unwrap();
+        state
+            .store
+            .set_temporary_access_key_enabled("temp-disabled", false)
+            .await
+            .unwrap();
+        let proxy_base = spawn_proxy(state).await;
+        let client = reqwest::Client::new();
+
+        for key in ["cs-tmp-disabled", "cs-tmp-expired", "cs-tmp-unknown"] {
+            let response = client
+                .post(format!("{proxy_base}/v1/responses"))
+                .bearer_auth(key)
+                .json(&json!({"model":"gpt-test","input":"hello"}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            let value = response.json::<Value>().await.unwrap();
+            assert_eq!(value["error"]["type"], "authentication_error");
+        }
+        assert_eq!(hits.lock().await.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn primary_local_key_does_not_consume_temporary_quota() {
+        let (mock_base, _) = spawn_mock(MockMode::ResponsesJson).await;
+        let state = test_state(&mock_base, WireApi::Responses).await;
+        state
+            .store
+            .create_temporary_access_key(&TemporaryAccessKey::new(
+                "temp-primary".to_string(),
+                String::new(),
+                "cs-tmp-primary".to_string(),
+                Some(1),
+                Some(10),
+                None,
+            ))
+            .await
+            .unwrap();
+        let proxy_base = spawn_proxy(state.clone()).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({"model":"gpt-test","input":"hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        wait_for_log_count(&state, 1).await;
+        let stored = state
+            .store
+            .find_temporary_access_key("cs-tmp-primary")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.requests_used, 0);
+        assert_eq!(stored.tokens_used, 0);
+    }
+
+    #[tokio::test]
+    async fn successful_models_request_consumes_temporary_request_count() {
+        let (mock_base, _) = spawn_mock(MockMode::ModelsJson).await;
+        let state = test_state(&mock_base, WireApi::Responses).await;
+        state
+            .store
+            .create_temporary_access_key(&TemporaryAccessKey::new(
+                "temp-models".to_string(),
+                String::new(),
+                "cs-tmp-models".to_string(),
+                Some(1),
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        let proxy_base = spawn_proxy(state.clone()).await;
+
+        let response = reqwest::Client::new()
+            .get(format!("{proxy_base}/v1/models"))
+            .bearer_auth("cs-tmp-models")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let stored = state
+            .store
+            .find_temporary_access_key("cs-tmp-models")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.requests_used, 1);
+        assert_eq!(stored.tokens_used, 0);
     }
 
     #[tokio::test]

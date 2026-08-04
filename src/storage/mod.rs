@@ -7,6 +7,7 @@ mod query_pricing;
 mod query_scheduler;
 mod query_settings;
 mod query_snapshots;
+mod query_temp_keys;
 mod query_upstreams;
 mod store;
 

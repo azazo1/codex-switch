@@ -5,8 +5,8 @@ use crate::cache_keepalive::CacheKeepaliveSessionSnapshot;
 use crate::core::models::{
     ApiKeyAuthScheme, BalanceProvider, BalanceSnapshot, DashboardStats, DatabaseInfo, ProviderStats,
     QuotaSnapshot, RequestLog, ScheduleGroup, ScheduleGroupChild, ScheduleGroupMember,
-    ScheduleRouteRule, Upstream, UpstreamBalanceAlertSettings, UpstreamCacheKeepaliveSettings,
-    WireApi,
+    ScheduleRouteRule, TemporaryAccessKey, Upstream, UpstreamBalanceAlertSettings,
+    UpstreamCacheKeepaliveSettings, WireApi,
 };
 use crate::live::{LiveOutputSettings, LiveRequestSnapshot};
 use crate::pricing;
@@ -38,6 +38,7 @@ mod logs;
 mod oauth;
 mod quota;
 mod scheduler;
+mod temp_keys;
 mod token_amount;
 mod tokens;
 mod upstream_editor;
@@ -50,6 +51,7 @@ enum Tab {
     Scheduler,
     CacheKeepalive,
     ActiveConnections,
+    TempKeys,
     Logs,
 }
 
@@ -63,6 +65,7 @@ enum ScheduleRuleOwner {
 enum DeleteAction {
     Upstream(String),
     ScheduleGroup(String),
+    TemporaryAccessKey(String),
     ScheduleRouteRule {
         owner: ScheduleRuleOwner,
         id: String,
@@ -434,6 +437,8 @@ pub struct CodexSwitchApp {
     quota_snapshots: Vec<(String, Option<QuotaSnapshot>)>,
     balance_snapshots: Vec<(String, Option<BalanceSnapshot>)>,
     upstream_editor: Option<UpstreamEditor>,
+    temporary_access_keys: Vec<TemporaryAccessKey>,
+    temp_keys_ui: temp_keys::TempKeysUiState,
 }
 
 impl CodexSwitchApp {
@@ -537,6 +542,8 @@ impl CodexSwitchApp {
             quota_snapshots: Vec::new(),
             balance_snapshots: Vec::new(),
             upstream_editor: None,
+            temporary_access_keys: Vec::new(),
+            temp_keys_ui: temp_keys::TempKeysUiState::default(),
         };
         app.refresh_all();
         app.fetch_price_cache_once();
@@ -785,6 +792,10 @@ impl CodexSwitchApp {
                 self.balance_snapshots = data.balance_snapshots;
                 self.last_seen_balance_snapshot_version =
                     self.state.events.balance_snapshot_version();
+                self.temporary_access_keys = self
+                    .runtime
+                    .block_on(self.state.store.list_temporary_access_keys())
+                    .unwrap_or_default();
             }
             Err(err) => {
                 self.status = format!("刷新失败: {err}");
@@ -1027,6 +1038,7 @@ impl eframe::App for CodexSwitchApp {
         egui::Panel::top("top").show(ui, |ui| {
             ui.horizontal(|ui| {
                 tab_button(ui, &mut self.tab, Tab::Dashboard, "仪表盘");
+                tab_button(ui, &mut self.tab, Tab::TempKeys, "临时 Key");
                 tab_button(ui, &mut self.tab, Tab::Upstreams, "上游");
                 tab_button(ui, &mut self.tab, Tab::Scheduler, "调度组");
                 tab_button(
@@ -1070,6 +1082,7 @@ impl eframe::App for CodexSwitchApp {
             Tab::Scheduler => self.scheduler_ui(ui),
             Tab::CacheKeepalive => self.cache_keepalive_ui(ui),
             Tab::ActiveConnections => self.active_connections_ui(ui),
+            Tab::TempKeys => self.temp_keys_ui(ui),
             Tab::Logs => self.logs_ui(ui),
         });
         self.delete_confirmation_window(&ctx);
@@ -1126,6 +1139,7 @@ impl CodexSwitchApp {
         match action {
             DeleteAction::Upstream(id) => self.delete_upstream(&id),
             DeleteAction::ScheduleGroup(id) => self.delete_schedule_group(&id),
+            DeleteAction::TemporaryAccessKey(id) => self.delete_temporary_access_key(&id),
             DeleteAction::ScheduleRouteRule { owner, id } => {
                 let editor = match owner {
                     ScheduleRuleOwner::NewGroup => Some(&mut self.new_schedule_group),

@@ -9,7 +9,7 @@ use crate::quota;
 use crate::scheduler::{self, SchedulerFailureKind};
 use crate::usage;
 use async_stream::stream;
-use auth::validate_local_access;
+use auth::{LocalAccess, validate_local_access};
 use axum::{
     body::Bytes,
     http::{HeaderMap, Method, StatusCode, Uri},
@@ -83,11 +83,23 @@ impl OpenAiEndpoint {
 
 pub async fn handle_models(state: AppState, headers: HeaderMap, uri: Uri, model_id: Option<String>) -> Response {
     let anthropic = headers.contains_key("anthropic-version");
-    if let Err(response) = validate_local_access(&state, &headers, anthropic).await {
-        return response;
-    }
+    let temporary_key_id = match validate_local_access(&state, &headers, anthropic).await {
+        Ok(LocalAccess::Primary) => None,
+        Ok(LocalAccess::Temporary { id }) => Some(id),
+        Err(response) => return response,
+    };
     match models::query_models(&state, &headers, &uri, model_id.as_deref()).await {
-        Ok(value) => (StatusCode::OK, axum::Json(value)).into_response(),
+        Ok(value) => {
+            if let Some(id) = temporary_key_id
+                && let Err(err) = state
+                    .store
+                    .record_temporary_access_key_success(&id, &TokenUsage::default())
+                    .await
+            {
+                tracing::warn!(error = %err, "failed to record temporary access key model usage");
+            }
+            (StatusCode::OK, axum::Json(value)).into_response()
+        }
         Err(err) if err.downcast_ref::<models::ModelNotFound>().is_some() => (
             StatusCode::NOT_FOUND,
             axum::Json(internal_error_value(
@@ -118,15 +130,17 @@ pub async fn handle_openai(
     subpath: Option<String>,
     endpoint_kind: OpenAiEndpoint,
 ) -> Response {
-    if let Err(response) = validate_local_access(
+    let temporary_key_id = match validate_local_access(
         &state,
         &headers,
         endpoint_kind.client_wire_api() == Some(WireApi::AnthropicMessages),
     )
     .await
     {
-        return response;
-    }
+        Ok(LocalAccess::Primary) => None,
+        Ok(LocalAccess::Temporary { id }) => Some(id),
+        Err(response) => return response,
+    };
     let started = Instant::now();
     let endpoint = endpoint_kind.endpoint(&uri, subpath);
     let model = usage::extract_model(&body);
@@ -148,6 +162,7 @@ pub async fn handle_openai(
         reasoning_effort: reasoning_effort.clone(),
         endpoint_kind,
         compact,
+        temporary_key_id: temporary_key_id.clone(),
     };
     let result = forward_inner(request).await;
 
@@ -166,6 +181,7 @@ pub async fn handle_openai(
                     usage: result.usage,
                     first_token_ms: result.first_token_ms,
                     error: None,
+                    temporary_key_id: temporary_key_id.clone(),
                 })
                 .await;
             }
@@ -186,6 +202,7 @@ pub async fn handle_openai(
                     usage: TokenUsage::default(),
                     first_token_ms: None,
                     error: Some(message.clone()),
+                    temporary_key_id,
                 })
                 .await;
             }
@@ -264,6 +281,7 @@ struct ForwardRequest<'a> {
     reasoning_effort: Option<String>,
     endpoint_kind: OpenAiEndpoint,
     compact: bool,
+    temporary_key_id: Option<String>,
 }
 
 async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, ForwardFailure> {
@@ -343,6 +361,7 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
                             usage: result.usage.clone(),
                             first_token_ms: result.first_token_ms,
                             error: Some(format!("scheduler retry: {failure:?}")),
+                            temporary_key_id: request.temporary_key_id.clone(),
                         })
                         .await;
                         tracing::warn!(
@@ -401,6 +420,7 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
                         usage: TokenUsage::default(),
                         first_token_ms: None,
                         error: Some(error_message.clone()),
+                        temporary_key_id: request.temporary_key_id.clone(),
                     })
                     .await;
                     tracing::warn!(
@@ -427,6 +447,7 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
                     usage: TokenUsage::default(),
                     first_token_ms: None,
                     error: Some(error_message),
+                    temporary_key_id: request.temporary_key_id.clone(),
                 })
                 .await;
                 return Err(ForwardFailure::logged(err));
@@ -571,6 +592,7 @@ async fn forward_with_upstream(
                 .filter(|_| status.is_success()),
             active_guard,
             terminate_rx,
+            temporary_key_id: request.temporary_key_id.clone(),
         });
         let failure_kind = scheduler::classify_response(status, &[]);
         Ok(ForwardResult {
@@ -785,6 +807,7 @@ struct LiveResponseStreamInput<'a> {
     protocol_bridge: Option<ProtocolSseBridge>,
     active_guard: ActiveRequestGuard,
     terminate_rx: watch::Receiver<bool>,
+    temporary_key_id: Option<String>,
 }
 
 fn build_live_response_stream(
@@ -800,6 +823,7 @@ fn build_live_response_stream(
         protocol_bridge,
         active_guard,
         mut terminate_rx,
+        temporary_key_id,
     } = input;
     let state = request.state.clone();
     let request_id = request.request_id.clone();
@@ -820,6 +844,7 @@ fn build_live_response_stream(
         status,
         started,
     );
+    log_draft.set_temporary_key_id(temporary_key_id);
     log_draft.set_target_model(target_model);
     let live_guard = LiveRequestGuard::from_active(active_guard, log_draft.clone());
     stream! {

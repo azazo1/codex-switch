@@ -7,6 +7,7 @@ Codex Switch 是一个本地桌面中转工具. 它提供 OpenAI 和 Anthropic �
 ## 主要能力
 
 - 管理 Responses, Chat Completions 和 Anthropic Messages API Key 上游以及 Codex OAuth 账号.
+- 创建带成功请求次数, token 用量和过期时间限制的临时本地访问 key.
 - 代理 Responses, Chat Completions, Anthropic Messages, Images 和 Models 请求, 并双向转换文本, 图片, 工具调用, reasoning/thinking 和流式事件.
 - 使用固定, 随机, 加权轮询, 失败切换或模型映射选择上游.
 - 查看活跃请求, 流式输出尾部, token 用量, 首 token 延迟和请求耗时.
@@ -78,7 +79,7 @@ Linux 构建依赖和 macOS 打包方式见[构建与发布指南](docs/build-re
 ## 安全说明
 
 - 默认回环监听适合本机使用. 服务本身不提供 TLS, 不应直接暴露到公网.
-- API Key, OAuth token, NewApi 凭据和本地访问 key 当前都以明文保存在本地 SQLite 中. 数据库和备份应按密钥文件保护.
+- API Key, OAuth token, NewApi 凭据, 本地访问 key 和临时 key 当前都以明文保存在本地 SQLite 中. 数据库和备份应按密钥文件保护.
 - 本地访问 key 刷新后立即生效, 使用旧 key 的客户端会返回 `401`.
 - 请求日志不保存 prompt 或完整响应正文, 但会保存模型, endpoint, 错误文本, token 和耗时等元数据.
 - macOS 和 Windows 发布产物当前都未进行代码签名.

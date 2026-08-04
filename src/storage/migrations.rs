@@ -394,6 +394,27 @@ fn migrations() -> &'static [Migration] {
                 "ALTER TABLE upstreams ADD COLUMN filter_chat_server_tools INTEGER NOT NULL DEFAULT 0",
             ],
         },
+        Migration {
+            version: 16,
+            name: "temporary_access_keys",
+            statements: &[
+                "CREATE TABLE IF NOT EXISTS temporary_access_keys (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL DEFAULT '',
+                key_value TEXT NOT NULL UNIQUE,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                request_limit INTEGER,
+                token_limit INTEGER,
+                expires_at INTEGER,
+                requests_used INTEGER NOT NULL DEFAULT 0,
+                tokens_used INTEGER NOT NULL DEFAULT 0,
+                last_used_at INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+                "CREATE INDEX IF NOT EXISTS idx_temporary_access_keys_key_value ON temporary_access_keys(key_value)",
+            ],
+        },
     ]
 }
 
@@ -414,7 +435,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 15);
+        assert_eq!(rows.len(), 16);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -472,6 +493,11 @@ mod tests {
             rows[14].get::<String, _>("name"),
             "upstream_filter_chat_server_tools"
         );
+        assert_eq!(rows[15].get::<i64, _>("version"), 16);
+        assert_eq!(
+            rows[15].get::<String, _>("name"),
+            "temporary_access_keys"
+        );
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
             Some("127.0.0.1:15721")
@@ -500,6 +526,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 15);
+        assert_eq!(count, 16);
     }
 }
