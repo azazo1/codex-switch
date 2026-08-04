@@ -71,8 +71,8 @@ Token 范围支持 `K`, `M`, `B` 和小数, 例如 `1.5M`. 最小值大于最大
 
 ## Tracing 运行日志
 
-Windows GUI 没有控制台, tracing 默认以 `info` 级别追加到数据目录中的 `codex-switch.log`. 当前没有文件轮转.
+普通模式会在数据目录持续写入 `codex-switch.log`. 日志按每日和配置的单文件大小轮转, 并保留最近配置数量的轮转文件.
 
-Linux 和 macOS 默认把 tracing 写到标准错误. 从桌面图标启动时, 不保证存在可回看的日志文件. 从终端运行可以直接查看输出.
+仪表盘的 `调试日志` 区域可以开启完整调试日志, 记录完整代理 body, 也可以调整轮转大小和轮转文件数. 非 Windows 仍会保留标准错误输出.
 
-可以在启动进程前设置 `RUST_LOG` 调整日志级别. 数据目录位置见[存储与备份指南](storage-guide.md).
+可以在启动进程前设置 `RUST_LOG` 调整日志级别, 也可以设置 `CODEX_SWITCH_LOG_FILE` 和 `CODEX_SWITCH_LOG_BODIES` 覆盖 GUI 设置. 数据目录位置见[存储与备份指南](storage-guide.md).

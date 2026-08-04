@@ -423,6 +423,10 @@ pub struct CodexSwitchApp {
     price_cache_age_seconds: Option<i64>,
     database_info: DatabaseInfo,
     token_display_mode: tokens::TokenDisplayMode,
+    debug_log_enabled: bool,
+    debug_log_path: String,
+    log_rotation_size_mb: u64,
+    log_max_files: usize,
     oauth_ui: oauth::OAuthUiState,
     quota_query_pending: bool,
     balance_query_pending_ids: BTreeSet<String>,
@@ -458,6 +462,12 @@ impl CodexSwitchApp {
             .flatten()
             .unwrap_or_default();
         let live_output_settings = LiveOutputSettings::default();
+        let rotation_config = runtime
+            .block_on(crate::logging::LogRotationConfig::load(&state.store))
+            .unwrap_or_default();
+        let debug_log_path = crate::logging::log_file_path()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
         let last_seen_request_log_version = state.events.request_log_version();
         let last_seen_live_stream_version = state.events.live_stream_version();
         let last_seen_cache_keepalive_version = state.events.cache_keepalive_version();
@@ -528,6 +538,10 @@ impl CodexSwitchApp {
             price_cache_age_seconds: None,
             database_info: DatabaseInfo::default(),
             token_display_mode: tokens::TokenDisplayMode::Human,
+            debug_log_enabled: rotation_config.enabled,
+            debug_log_path,
+            log_rotation_size_mb: rotation_config.size_mb,
+            log_max_files: rotation_config.max_files,
             oauth_ui: oauth::OAuthUiState::default(),
             quota_query_pending: false,
             balance_query_pending_ids: BTreeSet::new(),
@@ -545,6 +559,7 @@ impl CodexSwitchApp {
             temporary_access_keys: Vec::new(),
             temp_keys_ui: temp_keys::TempKeysUiState::default(),
         };
+        let _ = crate::logging::set_debug_log_enabled(app.debug_log_enabled);
         app.refresh_all();
         app.fetch_price_cache_once();
         app

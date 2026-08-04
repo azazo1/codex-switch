@@ -62,7 +62,7 @@ Invoke-RestMethod -Uri "http://127.0.0.1:15721/v1/models" -Headers $headers
 | 请求记录和筛选 | [日志使用指南](docs/logs-guide.md) |
 | SQLite, 凭据和备份 | [存储与备份指南](docs/storage-guide.md) |
 | 本地构建和 GitHub Release | [构建与发布指南](docs/build-release-guide.md) |
-| 隔离数据库和完整代理日志 | [隔离调试指南](docs/debug-guide.md) |
+| 隔离调试和普通模式调试日志 | [隔离调试指南](docs/debug-guide.md) |
 
 ## 本地开发
 

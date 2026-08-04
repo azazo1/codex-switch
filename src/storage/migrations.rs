@@ -64,6 +64,15 @@ impl Store {
         {
             self.set_setting("scheduler_route_max_hops", "8").await?;
         }
+        if self.get_setting("debug_log_enabled").await?.is_none() {
+            self.set_setting("debug_log_enabled", "false").await?;
+        }
+        if self.get_setting("log_rotation_size_mb").await?.is_none() {
+            self.set_setting("log_rotation_size_mb", "20").await?;
+        }
+        if self.get_setting("log_max_files").await?.is_none() {
+            self.set_setting("log_max_files", "10").await?;
+        }
         self.ensure_default_schedule_group().await?;
         Ok(())
     }

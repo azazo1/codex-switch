@@ -9,6 +9,15 @@ pub(super) fn reasoning_from_response_item(item: &Value) -> Option<String> {
     {
         return Some(decoded);
     }
+    if let Some(parts) = item.get("content").and_then(Value::as_array) {
+        let text = parts
+            .iter()
+            .filter_map(|part| part.get("text").and_then(Value::as_str))
+            .collect::<String>();
+        if !text.is_empty() {
+            return Some(text);
+        }
+    }
     item.get("summary")
         .and_then(Value::as_array)
         .map(|summary| {

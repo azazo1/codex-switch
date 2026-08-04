@@ -81,6 +81,33 @@ fn converts_codex_tools_and_round_trips_reasoning() {
 }
 
 #[test]
+fn converts_plaintext_reasoning_content_to_chat_reasoning_content() {
+    let request = json!({
+        "model":"chat-model",
+        "input":[
+            {
+                "type":"reasoning",
+                "id":"rs_1",
+                "summary":[],
+                "encrypted_content":null,
+                "content":[{"type":"reasoning_text","text":"think step by step"}]
+            },
+            {
+                "type":"message",
+                "role":"user",
+                "content":[{"type":"input_text","text":"continue"}]
+            }
+        ]
+    });
+    let converted = responses_to_chat_json(&serde_json::to_vec(&request).unwrap()).unwrap();
+    let body: Value = serde_json::from_slice(&converted.body).unwrap();
+
+    assert_eq!(body["messages"][0]["role"], "assistant");
+    assert_eq!(body["messages"][0]["reasoning_content"], "think step by step");
+    assert_eq!(body["messages"][1]["role"], "user");
+}
+
+#[test]
 fn converts_multimodal_message_parts() {
     let request = json!({
         "model":"vision-model",
