@@ -19,26 +19,16 @@ fn normalize_reasoning_item(item: &mut Value) {
         .and_then(Value::as_str)
         .and_then(super::decode_reasoning);
     let content_text = content_reasoning_text(item);
-    let summary_text = summary_reasoning_text(item);
-    let Some(text) = decoded_internal
-        .clone()
-        .or(content_text)
-        .or(summary_text.clone())
-    else {
-        return;
-    };
     let Some(object) = item.as_object_mut() else {
         return;
     };
-    object.insert(
-        "content".to_string(),
-        json!([{"type":"reasoning_text","text":text}]),
-    );
-    if decoded_internal.is_some() {
-        object.insert("encrypted_content".to_string(), Value::Null);
-        object.insert("summary".to_string(), json!([]));
-    } else if summary_text.is_some() {
-        object.insert("summary".to_string(), json!([]));
+    object.insert("content".to_string(), json!([]));
+    if let Some(text) = decoded_internal.or(content_text) {
+        object.insert(
+            "summary".to_string(),
+            json!([{"type":"summary_text","text":text}]),
+        );
+        object.remove("encrypted_content");
     }
 }
 
@@ -56,24 +46,12 @@ fn content_reasoning_text(item: &Value) -> Option<String> {
     }
 }
 
-fn summary_reasoning_text(item: &Value) -> Option<String> {
-    item.get("summary")
-        .and_then(Value::as_array)
-        .map(|summary| {
-            summary
-                .iter()
-                .filter_map(|part| part.get("text").and_then(Value::as_str))
-                .collect::<String>()
-        })
-        .filter(|text| !text.is_empty())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn restores_internal_reasoning_as_reasoning_text() {
+    fn restores_internal_reasoning_as_summary_text() {
         let body = json!({
             "model":"deepseek-v4-flash",
             "input":[
@@ -96,15 +74,15 @@ mod tests {
         let value: Value = serde_json::from_slice(&normalized).unwrap();
 
         assert_eq!(
-            value["input"][0]["content"][0],
-            json!({"type":"reasoning_text","text":"hello"})
+            value["input"][0]["summary"][0],
+            json!({"type":"summary_text","text":"hello"})
         );
-        assert_eq!(value["input"][0]["summary"], json!([]));
-        assert_eq!(value["input"][0]["encrypted_content"], Value::Null);
+        assert_eq!(value["input"][0]["content"], json!([]));
+        assert!(value["input"][0].get("encrypted_content").is_none());
     }
 
     #[test]
-    fn converts_summary_reasoning_to_reasoning_text() {
+    fn keeps_summary_reasoning_with_empty_content() {
         let body = json!({
             "model":"responses-model",
             "input":[{
@@ -118,9 +96,31 @@ mod tests {
         let value: Value = serde_json::from_slice(&normalized).unwrap();
 
         assert_eq!(
-            value["input"][0]["content"][0],
-            json!({"type":"reasoning_text","text":"short summary"})
+            value["input"][0]["summary"][0],
+            json!({"type":"summary_text","text":"short summary"})
         );
-        assert_eq!(value["input"][0]["summary"], json!([]));
+        assert_eq!(value["input"][0]["content"], json!([]));
+    }
+
+    #[test]
+    fn moves_existing_reasoning_content_to_summary() {
+        let body = json!({
+            "model":"responses-model",
+            "input":[{
+                "type":"reasoning",
+                "id":"rs_1",
+                "summary":[],
+                "content":[{"type":"reasoning_text","text":"think step by step"}]
+            }]
+        });
+
+        let normalized = normalize_responses_request(&serde_json::to_vec(&body).unwrap()).unwrap();
+        let value: Value = serde_json::from_slice(&normalized).unwrap();
+
+        assert_eq!(
+            value["input"][0]["summary"][0],
+            json!({"type":"summary_text","text":"think step by step"})
+        );
+        assert_eq!(value["input"][0]["content"], json!([]));
     }
 }
