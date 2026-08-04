@@ -51,7 +51,7 @@ pub(super) fn encode_reasoning(reasoning: &str) -> String {
     )
 }
 
-fn decode_reasoning(value: &str) -> Option<String> {
+pub(crate) fn decode_reasoning(value: &str) -> Option<String> {
     let encoded = value.strip_prefix(REASONING_PREFIX)?;
     let bytes = STANDARD_NO_PAD.decode(encoded).ok()?;
     String::from_utf8(bytes).ok()

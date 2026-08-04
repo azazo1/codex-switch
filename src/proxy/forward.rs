@@ -498,6 +498,9 @@ async fn forward_with_upstream(
     if let Some(prepared) = &protocol_request {
         target_body = prepared.body.clone();
     }
+    if upstream_wire_api == WireApi::Responses {
+        target_body = compat::normalize_responses_request(&target_body)?;
+    }
     if upstream.kind == UpstreamKind::CodexOauth && !request.endpoint_kind.is_count_tokens() {
         target_body = transform::normalize_oauth_body(&target_body, request.compact)?;
     }

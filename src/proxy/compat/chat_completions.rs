@@ -10,6 +10,7 @@ pub(crate) use reverse::{
     ResponsesToChatSseConverter, chat_to_responses_request_json,
     responses_response_to_chat_json,
 };
+pub(crate) use self::shared::decode_reasoning;
 
 use self::shared::*;
 use self::tools::{TOOL_SEARCH_CHAT_NAME, ToolContext, ToolKind};

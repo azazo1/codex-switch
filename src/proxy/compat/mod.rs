@@ -2,6 +2,7 @@ mod anthropic;
 mod bridge;
 mod chat_completions;
 mod namespace;
+mod responses;
 
 pub(crate) use anthropic::{
     AnthropicToResponsesSseConverter, ResponsesToAnthropicSseConverter,
@@ -11,7 +12,9 @@ pub(crate) use anthropic::{
 };
 pub(crate) use chat_completions::{
     ChatResponseContext, ChatSseConverter, ResponsesToChatSseConverter,
-    chat_to_responses_json, chat_to_responses_request_json, filter_chat_server_tools,
-    normalize_chat_request_json, responses_response_to_chat_json, responses_to_chat_json,
+    chat_to_responses_json, chat_to_responses_request_json, decode_reasoning,
+    filter_chat_server_tools, normalize_chat_request_json, responses_response_to_chat_json,
+    responses_to_chat_json,
 };
+pub(crate) use responses::normalize_responses_request;
 pub(crate) use bridge::{PreparedProtocolRequest, ProtocolConversionError, ProtocolSseBridge};
