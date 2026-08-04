@@ -1,4 +1,4 @@
-use super::{CodexSwitchApp, DeleteAction, token_amount};
+use super::{CodexSwitchApp, DeleteAction, token_amount, tokens};
 use crate::core::models::TemporaryAccessKey;
 use chrono::{Local, TimeZone, Utc};
 use eframe::egui;
@@ -40,6 +40,7 @@ impl CodexSwitchApp {
         let mut toggle_id = None;
         let mut delete_id = None;
         let mut edit_id = None;
+        let mut token_display_mode = self.token_display_mode;
         egui::ScrollArea::vertical()
             .id_salt("temp_keys_page")
             .max_height(ui.available_height())
@@ -92,7 +93,7 @@ impl CodexSwitchApp {
                             .on_hover_text("支持 d/h/m/s, 如 1d2h30m 或 1天2小时30分钟");
                     }
                 });
-                if ui.button("创建临时 Key").clicked() {
+                if ui.button("创建").clicked() {
                     create_requested = true;
                 }
 
@@ -106,9 +107,10 @@ impl CodexSwitchApp {
                 } else {
                     egui::Grid::new("temp_keys_grid")
                         .striped(true)
-                        .num_columns(7)
+                        .num_columns(8)
                         .spacing([14.0, 8.0])
                         .show(ui, |ui| {
+                            ui.strong("启用");
                             ui.strong("备注");
                             ui.strong("Key");
                             ui.strong("状态");
@@ -119,6 +121,14 @@ impl CodexSwitchApp {
                             ui.end_row();
 
                             for key in &self.temporary_access_keys {
+                                let mut enabled = key.enabled;
+                                if ui
+                                    .checkbox(&mut enabled, "")
+                                    .on_hover_text("启用或停用")
+                                    .changed()
+                                {
+                                    toggle_id = Some((key.id.clone(), enabled));
+                                }
                                 ui.label(if key.name.is_empty() {
                                     "-"
                                 } else {
@@ -146,15 +156,23 @@ impl CodexSwitchApp {
                                 });
                                 ui.label(temp_key_status(key));
                                 ui.label(request_limit_text(key));
-                                ui.label(token_limit_text(key));
+                                ui.horizontal(|ui| {
+                                    tokens::token_number(
+                                        ui,
+                                        &mut token_display_mode,
+                                        key.tokens_used,
+                                    );
+                                    if let Some(limit) = key.token_limit {
+                                        ui.label("/");
+                                        tokens::token_number(
+                                            ui,
+                                            &mut token_display_mode,
+                                            limit,
+                                        );
+                                    }
+                                });
                                 ui.label(format_expires_at(key.expires_at));
                                 ui.horizontal(|ui| {
-                                    if ui
-                                        .button(if key.enabled { "停用" } else { "启用" })
-                                        .clicked()
-                                    {
-                                        toggle_id = Some(key.id.clone());
-                                    }
                                     if ui.button("编辑").clicked() {
                                         edit_id = Some(key.id.clone());
                                     }
@@ -167,12 +185,13 @@ impl CodexSwitchApp {
                         });
                 }
             });
+        self.token_display_mode = token_display_mode;
         self.temp_keys_editor_window(ui.ctx());
         if create_requested {
             self.create_temp_key();
         }
-        if let Some(id) = toggle_id {
-            self.toggle_temp_key(&id);
+        if let Some((id, enabled)) = toggle_id {
+            self.set_temporary_key_enabled(&id, enabled);
         }
         if let Some(id) = edit_id {
             self.open_temp_key_editor(&id);
@@ -291,13 +310,7 @@ impl CodexSwitchApp {
             .unwrap_or_default();
     }
 
-    fn toggle_temp_key(&mut self, id: &str) {
-        let enabled = self
-            .temporary_access_keys
-            .iter()
-            .find(|key| key.id == id)
-            .map(|key| !key.enabled)
-            .unwrap_or(true);
+    fn set_temporary_key_enabled(&mut self, id: &str, enabled: bool) {
         match self
             .runtime
             .block_on(self.state.store.set_temporary_access_key_enabled(id, enabled))
@@ -539,14 +552,6 @@ fn request_limit_text(key: &TemporaryAccessKey) -> String {
     match key.request_limit {
         Some(limit) => format!("{}/{}", key.requests_used, limit),
         None => key.requests_used.to_string(),
-    }
-}
-
-fn token_limit_text(key: &TemporaryAccessKey) -> String {
-    let used = token_amount::format_token_input(key.tokens_used);
-    match key.token_limit {
-        Some(limit) => format!("{used}/{}", token_amount::format_token_input(limit)),
-        None => used,
     }
 }
 
