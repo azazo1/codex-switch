@@ -29,7 +29,7 @@ fn format_build_version(tag: &str, commit: Option<&str>, exact_tag: bool, dirty:
     if exact_tag {
         return tag.to_string();
     }
-    format!("{tag}+{commit}")
+    format!("{tag}-{commit}")
 }
 
 #[cfg(test)]
@@ -48,7 +48,7 @@ mod tests {
     fn clean_non_tag_build_includes_its_commit() {
         assert_eq!(
             format_build_version("v0.4.0", Some("abc123"), false, false),
-            "v0.4.0+abc123"
+            "v0.4.0-abc123"
         );
     }
 

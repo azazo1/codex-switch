@@ -1,5 +1,6 @@
 /target
 /vendors/
+/dist/
 *.patch
 .gitignore
 AGENTS.local.md

@@ -20,6 +20,16 @@ cargo build --locked --release --bins
 
 输出位于 `target/release`.
 
+生成当前平台的发布归档:
+
+```shell
+just dist 0.9.0
+```
+
+输出位于 `dist/`.
+
+构建产物会自动显示版本和构建 commit: 精确 tag 显示 `vX.Y.Z`, 非 tag 显示 `vX.Y.Z-<6 位 commit>`, 工作区有未提交改动时使用 `^` 分隔.
+
 Windows 构建会将 `assets/app-icon.ico` 内嵌到 `.exe` 中. 图标包含从 16x16 到 256x256 的多档尺寸.
 
 ## Linux 依赖
@@ -57,7 +67,7 @@ Bundle 最低系统版本为 macOS 12.0. Bundle 版本读取 `Cargo.toml` 中的
 
 ## GitHub Actions
 
-`.github/workflows/ci.yml` 在普通 push 和 pull request 上构建以下矩阵:
+`.github/workflows/ci.yml` 在普通 push, pull request, tag push 和 `workflow_dispatch` 上构建以下矩阵:
 
 | 系统 | x64 target | arm64 target |
 | --- | --- | --- |
@@ -65,7 +75,9 @@ Bundle 最低系统版本为 macOS 12.0. Bundle 版本读取 `Cargo.toml` 中的
 | Windows | `x86_64-pc-windows-msvc` | `aarch64-pc-windows-msvc` |
 | macOS | `x86_64-apple-darwin` | `aarch64-apple-darwin` |
 
-只有 tag push 会上传产物并进入 GitHub Release job. Release 完全由 Actions 创建或更新, 本地 `gh` 不参与发布.
+tag push 或手动填写已有 tag 的 `workflow_dispatch` 会进入发布流程. `workflow_dispatch` 留空 tag 时只构建并上传 Actions artifact, 不会创建 release.
+
+Release job 会先重新获取远端 tag object, 校验它是 annotated tag 且 annotation 与 `docs/release-notes/<version>.md` 完全一致, 再生成 notes. Release 完全由 Actions 创建或更新, 本地 `gh` 不参与发布.
 
 Release 标题包含项目名和版本. 正文优先读取 `docs/release-notes/<version>.md`, 后面附加 GitHub 自动生成的提交和 PR 说明. 可选的 `<version>-base.txt` 用于指定累计 notes 的起始 tag. Workflow 重跑时会更新正文并覆盖同名资产.
 
@@ -86,6 +98,8 @@ tag push 后, 在 GitHub Actions 中等待六个平台全部构建成功. Releas
 - 包含全部归档 SHA-256 摘要的 `SHA256SUMS`.
 
 归档名称包含包版本, 系统和架构. Release 创建前会检查六个归档是否齐全.
+
+需要重跑已有 tag 的发布时, 在 Actions 页面选择 `workflow_dispatch` 并填写同一个 tag. 留空 tag 只构建并上传 artifact.
 
 ## 发布边界
 

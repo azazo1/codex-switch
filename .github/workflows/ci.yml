@@ -7,12 +7,18 @@ on:
     tags:
       - "v*"
   pull_request:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的已有 tag, 留空时只构建并上传 artifact"
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ inputs.tag != '' && format('refs/tags/{0}', inputs.tag) || github.ref }}
   cancel-in-progress: false
 
 env:
@@ -20,25 +26,61 @@ env:
 
 jobs:
   version:
-    name: 校验发布版本
+    name: 解析并校验发布上下文
     runs-on: ubuntu-latest
     outputs:
+      is_release: ${{ steps.release_context.outputs.is_release }}
+      tag_name: ${{ steps.release_context.outputs.tag_name }}
+      source_ref: ${{ steps.release_context.outputs.source_ref }}
       version: ${{ steps.release_version.outputs.version }}
+      package_version: ${{ steps.package_version.outputs.package_version }}
 
     steps:
-      - name: 检出代码
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: 解析发布上下文
+        id: release_context
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CURRENT_REF: ${{ github.ref }}
+          CURRENT_REF_NAME: ${{ github.ref_name }}
+          CURRENT_SHA: ${{ github.sha }}
+          DISPATCH_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          is_release=false
+          tag_name=""
+          source_ref="$CURRENT_SHA"
+
+          if [[ "$EVENT_NAME" == "push" && "$CURRENT_REF" == refs/tags/* ]]; then
+            is_release=true
+            tag_name="$CURRENT_REF_NAME"
+            source_ref="$CURRENT_REF"
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" && -n "$DISPATCH_TAG" ]]; then
+            git check-ref-format "refs/tags/$DISPATCH_TAG"
+            is_release=true
+            tag_name="$DISPATCH_TAG"
+            source_ref="refs/tags/$DISPATCH_TAG"
+          fi
+
+          echo "is_release=$is_release" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$tag_name" >> "$GITHUB_OUTPUT"
+          echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
+
+      - name: 检出版本来源
+        if: steps.release_context.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
         uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release_context.outputs.source_ref }}
 
       - name: 安装 Rust 工具链
-        if: startsWith(github.ref, 'refs/tags/')
+        if: steps.release_context.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
         uses: dtolnay/rust-toolchain@stable
 
       - name: 校验 tag 和包版本
         id: release_version
-        if: startsWith(github.ref, 'refs/tags/')
+        if: steps.release_context.outputs.is_release == 'true'
         env:
-          TAG_NAME: ${{ github.ref_name }}
+          TAG_NAME: ${{ steps.release_context.outputs.tag_name }}
         shell: bash
         run: |
           set -euo pipefail
@@ -54,6 +96,18 @@ jobs:
           fi
 
           echo "version=$package_version" >> "$GITHUB_OUTPUT"
+
+      - name: 解析包版本
+        id: package_version
+        if: steps.release_context.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="$(
+            cargo metadata --locked --no-deps --format-version 1 |
+              jq -er '.packages[] | select(.name == "codex-switch") | .version'
+          )"
+          echo "package_version=$package_version" >> "$GITHUB_OUTPUT"
 
   build:
     name: 构建 ${{ matrix.name }}
@@ -101,9 +155,10 @@ jobs:
             archive: macos-aarch64.dmg
 
     steps:
-      - name: 检出代码
+      - name: 检出目标提交
         uses: actions/checkout@v4
         with:
+          ref: ${{ needs.version.outputs.source_ref }}
           fetch-depth: 0
 
       - name: 安装 Linux 依赖
@@ -135,7 +190,7 @@ jobs:
         run: cargo build --locked --release --bins --target ${{ matrix.target }}
 
       - name: 校验 Linux 二进制文件
-        if: startsWith(github.ref, 'refs/tags/') && matrix.platform == 'linux'
+        if: (needs.version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch') && matrix.platform == 'linux'
         shell: bash
         run: |
           set -euo pipefail
@@ -144,7 +199,7 @@ jobs:
           file "$binary" | grep -q 'ELF'
 
       - name: 校验 Windows 二进制文件
-        if: startsWith(github.ref, 'refs/tags/') && matrix.platform == 'windows'
+        if: (needs.version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch') && matrix.platform == 'windows'
         shell: pwsh
         run: |
           $binary = "target/${{ matrix.target }}/release/codex-switch.exe"
@@ -212,7 +267,7 @@ jobs:
           }
 
       - name: 校验 macOS 二进制文件
-        if: startsWith(github.ref, 'refs/tags/') && matrix.platform == 'macos'
+        if: (needs.version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch') && matrix.platform == 'macos'
         shell: bash
         run: |
           set -euo pipefail
@@ -221,43 +276,46 @@ jobs:
           file "$binary" | grep -q 'Mach-O'
 
       - name: 打包 Linux 产物
-        if: startsWith(github.ref, 'refs/tags/') && matrix.platform == 'linux'
+        if: (needs.version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch') && matrix.platform == 'linux'
+        env:
+          VERSION: ${{ needs.version.outputs.version || needs.version.outputs.package_version }}
         shell: bash
         run: |
-          mkdir -p dist
-          tar -C "target/${{ matrix.target }}/release" \
-            -czf "dist/codex-switch-${{ needs.version.outputs.version }}-${{ matrix.archive }}" \
-            codex-switch
+          set -euo pipefail
+          bash scripts/dist-linux.sh "target/${{ matrix.target }}/release" "$VERSION"
 
       - name: 打包 Windows 产物
-        if: startsWith(github.ref, 'refs/tags/') && matrix.platform == 'windows'
+        if: (needs.version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch') && matrix.platform == 'windows'
+        env:
+          VERSION: ${{ needs.version.outputs.version || needs.version.outputs.package_version }}
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Compress-Archive `
-            -LiteralPath "target/${{ matrix.target }}/release/codex-switch.exe" `
-            -DestinationPath "dist/codex-switch-${{ needs.version.outputs.version }}-${{ matrix.archive }}"
+          & scripts/dist-windows.ps1 -ProfileDir "target/${{ matrix.target }}/release" -Version "$env:VERSION"
 
       - name: 打包 macOS DMG
-        if: startsWith(github.ref, 'refs/tags/') && matrix.platform == 'macos'
+        if: (needs.version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch') && matrix.platform == 'macos'
+        env:
+          VERSION: ${{ needs.version.outputs.version || needs.version.outputs.package_version }}
         shell: bash
         run: |
+          set -euo pipefail
           bash scripts/package-macos.sh \
             "target/${{ matrix.target }}/release" \
-            "dist/codex-switch-${{ needs.version.outputs.version }}-${{ matrix.archive }}"
+            "dist/codex-switch-$VERSION-${{ matrix.archive }}" \
+            "$VERSION"
 
-      - name: 上传 release 产物
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: 上传构建产物
+        if: needs.version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ matrix.id }}
-          path: dist/codex-switch-${{ needs.version.outputs.version }}-${{ matrix.archive }}
+          name: artifact-${{ matrix.id }}
+          path: dist/codex-switch-*
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 14
 
   release:
     name: 创建 GitHub Release
-    if: startsWith(github.ref, 'refs/tags/')
+    if: needs.version.outputs.is_release == 'true'
     needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
@@ -267,38 +325,77 @@ jobs:
       - name: 检出代码和 tags
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ needs.version.outputs.source_ref }}
           fetch-depth: 0
 
-      - name: 下载 release 产物
-        uses: actions/download-artifact@v4
-        with:
-          pattern: release-*
-          path: release-artifacts
-          merge-multiple: true
-
-      - name: 生成 release notes
+      - name: 重新获取 annotated tag object
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ github.ref_name }}
+          TAG_NAME: ${{ needs.version.outputs.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git check-ref-format "refs/tags/$TAG_NAME"
+          git fetch --force origin \
+            "refs/tags/$TAG_NAME:refs/tags/$TAG_NAME"
+
+      - name: 校验 tag annotation
+        env:
+          TAG_NAME: ${{ needs.version.outputs.tag_name }}
           VERSION: ${{ needs.version.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
+          tag_ref="refs/tags/$TAG_NAME"
           manual_notes="docs/release-notes/$VERSION.md"
-          base_tag_file="docs/release-notes/$VERSION-base.txt"
 
           if [[ ! -s "$manual_notes" ]]; then
             echo "缺少 release notes: $manual_notes" >&2
             exit 1
           fi
 
+          tag_type="$(git cat-file -t "$tag_ref")"
+          if [[ "$tag_type" != "tag" ]]; then
+            echo "发布 tag 必须是 annotated tag: $TAG_NAME" >&2
+            exit 1
+          fi
+
+          git cat-file tag "$tag_ref" | sed '1,/^$/d' > tag-notes.md
+          if ! grep -q '[^[:space:]]' tag-notes.md; then
+            echo "发布 tag 的 annotation 不能为空: $TAG_NAME" >&2
+            exit 1
+          fi
+
+          if ! cmp -s "$manual_notes" tag-notes.md; then
+            echo "发布 tag 的 annotation 与 $manual_notes 不一致" >&2
+            diff -u "$manual_notes" tag-notes.md || true
+            exit 1
+          fi
+
+      - name: 下载 release 产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: artifact-*
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: 生成 release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.version.outputs.tag_name }}
+          VERSION: ${{ needs.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          manual_notes="docs/release-notes/$VERSION.md"
+          base_tag_file="docs/release-notes/$VERSION-base.txt"
           api_args=(
             --method POST
             "repos/$GITHUB_REPOSITORY/releases/generate-notes"
             -f "tag_name=$TAG_NAME"
-            -f "target_commitish=$GITHUB_SHA"
           )
+
+          target_sha="$(git rev-parse HEAD)"
+          api_args+=(-f "target_commitish=$target_sha")
 
           if [[ -s "$base_tag_file" ]]; then
             base_tag="$(<"$base_tag_file")"
@@ -310,7 +407,7 @@ jobs:
           cp "$manual_notes" release-notes.md
 
           if [[ -s generated-notes.md ]]; then
-            printf '\n\n' >> release-notes.md
+            printf '\n---\n\n' >> release-notes.md
             cat generated-notes.md >> release-notes.md
           fi
 
@@ -330,7 +427,7 @@ jobs:
       - name: 创建或更新 GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ github.ref_name }}
+          TAG_NAME: ${{ needs.version.outputs.tag_name }}
           VERSION: ${{ needs.version.outputs.version }}
         shell: bash
         run: |
