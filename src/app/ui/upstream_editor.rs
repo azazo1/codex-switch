@@ -2,9 +2,8 @@ use super::{CodexSwitchApp, token_amount};
 use crate::app::http;
 use crate::balance;
 use crate::core::models::{
-    ApiKeyAuthScheme, BalanceProvider, CacheKeepaliveMode, ErrorRetryPolicy, Upstream,
-    UpstreamBalanceAlertSettings, UpstreamCacheKeepaliveSettings, UpstreamKind, UnknownModalityPolicy,
-    WireApi,
+    ApiKeyAuthScheme, BalanceProvider, CacheKeepaliveMode, ErrorRetryPolicy, UnknownModalityPolicy,
+    Upstream, UpstreamBalanceAlertSettings, UpstreamCacheKeepaliveSettings, UpstreamKind, WireApi,
 };
 use eframe::egui;
 
@@ -263,30 +262,6 @@ impl UpstreamEditor {
             ui.label("名称");
             ui.text_edit_singleline(&mut self.upstream.name);
         });
-        ui.checkbox(
-            &mut self.upstream.strip_multimodal_for_text_models,
-            "为非多模态模型去除多模态输入",
-        )
-        .on_hover_text(
-            "开启后, 当请求模型被识别为不支持图片等媒体输入时, 自动把图片, 音频和文件替换为带媒体类型与大小的文字描述.",
-        );
-        ui.add_enabled_ui(self.upstream.strip_multimodal_for_text_models, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("未知模态模型");
-                ui.radio_value(
-                    &mut self.upstream.unknown_modality_policy,
-                    UnknownModalityPolicy::TextOnly,
-                    "单模态",
-                );
-                ui.radio_value(
-                    &mut self.upstream.unknown_modality_policy,
-                    UnknownModalityPolicy::Multimodal,
-                    "多模态",
-                );
-            });
-        })
-        .response
-        .on_hover_text("模型列表和 models.dev 都没有能力信息时, 按此配置决定是否清理多模态输入.");
         ui.horizontal(|ui| {
             ui.checkbox(&mut self.upstream.enabled, "启用");
             ui.label("优先级");
@@ -316,6 +291,30 @@ impl UpstreamEditor {
                     "仅临时错误会将容量和普通限流错误改写为可由客户端重试的响应. 全部上游错误还会处理上下文, 额度, 策略和无效请求错误. 它不会触发当前请求的上游切换.",
                 );
         });
+        ui.checkbox(
+            &mut self.upstream.strip_multimodal_for_text_models,
+            "为非多模态模型去除多模态输入",
+        )
+        .on_hover_text(
+            "开启后, 当请求模型被识别为不支持图片等媒体输入时, 自动把图片, 音频和文件替换为带媒体类型与大小的文字描述.",
+        );
+        ui.add_enabled_ui(self.upstream.strip_multimodal_for_text_models, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("未知模态模型");
+                ui.radio_value(
+                    &mut self.upstream.unknown_modality_policy,
+                    UnknownModalityPolicy::TextOnly,
+                    "单模态",
+                );
+                ui.radio_value(
+                    &mut self.upstream.unknown_modality_policy,
+                    UnknownModalityPolicy::Multimodal,
+                    "多模态",
+                );
+            });
+        })
+        .response
+        .on_hover_text("模型列表和 models.dev 都没有能力信息时, 按此配置决定是否清理多模态输入.");
         ui.horizontal(|ui| {
             ui.label("代理 URL");
             let proxy_url = self.upstream.proxy_url.get_or_insert_with(String::new);
