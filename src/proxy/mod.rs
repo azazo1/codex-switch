@@ -1,6 +1,7 @@
 mod compat;
 mod debug;
 mod forward;
+mod multimodal;
 mod router;
 mod server;
 pub(crate) mod transform;

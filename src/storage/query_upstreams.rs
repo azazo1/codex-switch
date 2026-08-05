@@ -40,10 +40,10 @@ impl Store {
     pub async fn save_upstream(&self, upstream: &Upstream) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO upstreams (
-                id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, error_retry_policy,
+                id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, strip_multimodal_for_text_models, error_retry_policy,
                 enabled, priority, weight, proxy_url, balance_provider, chatgpt_account_id, email,
                 plan_type, token_expires_at, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
              ON CONFLICT(id) DO UPDATE SET
                 kind = excluded.kind,
                 name = excluded.name,
@@ -52,6 +52,7 @@ impl Store {
                 api_key_auth_scheme = excluded.api_key_auth_scheme,
                 supports_compact = excluded.supports_compact,
                 filter_chat_server_tools = excluded.filter_chat_server_tools,
+                strip_multimodal_for_text_models = excluded.strip_multimodal_for_text_models,
                 error_retry_policy = excluded.error_retry_policy,
                 enabled = excluded.enabled,
                 priority = excluded.priority,
@@ -72,6 +73,7 @@ impl Store {
         .bind(upstream.api_key_auth_scheme.as_str())
         .bind(i64::from(upstream.supports_compact))
         .bind(i64::from(upstream.filter_chat_server_tools))
+        .bind(i64::from(upstream.strip_multimodal_for_text_models))
         .bind(upstream.error_retry_policy.as_str())
         .bind(i64::from(upstream.enabled))
         .bind(upstream.priority)
@@ -256,10 +258,10 @@ async fn insert_upstream(
 ) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO upstreams (
-            id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, error_retry_policy,
+            id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, strip_multimodal_for_text_models, error_retry_policy,
             enabled, priority, weight, proxy_url, balance_provider, chatgpt_account_id, email,
             plan_type, token_expires_at, created_at, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
     )
     .bind(&upstream.id)
     .bind(upstream.kind.as_str())
@@ -269,6 +271,7 @@ async fn insert_upstream(
     .bind(upstream.api_key_auth_scheme.as_str())
     .bind(i64::from(upstream.supports_compact))
     .bind(i64::from(upstream.filter_chat_server_tools))
+    .bind(i64::from(upstream.strip_multimodal_for_text_models))
     .bind(upstream.error_retry_policy.as_str())
     .bind(i64::from(upstream.enabled))
     .bind(upstream.priority)
@@ -322,6 +325,9 @@ pub(super) fn row_to_upstream(row: sqlx::sqlite::SqliteRow) -> anyhow::Result<Up
         ),
         supports_compact: row.get::<i64, _>("supports_compact") != 0,
         filter_chat_server_tools: row.get::<i64, _>("filter_chat_server_tools") != 0,
+        strip_multimodal_for_text_models: row
+            .get::<i64, _>("strip_multimodal_for_text_models")
+            != 0,
         error_retry_policy: ErrorRetryPolicy::from_str(
             &row.get::<String, _>("error_retry_policy"),
         ),
@@ -391,5 +397,27 @@ mod tests {
         let saved = store.get_upstream(&upstream.id).await.unwrap().unwrap();
 
         assert!(saved.filter_chat_server_tools);
+    }
+
+    #[tokio::test]
+    async fn persists_multimodal_stripping_setting() {
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-upstream-multimodal-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let store = Store::open(path).await.unwrap();
+        let mut upstream = Upstream::new_relay(
+            "deepseek".to_string(),
+            "https://example.com/v1".to_string(),
+            WireApi::Responses,
+            false,
+            BalanceProvider::Unsupported,
+        );
+        upstream.strip_multimodal_for_text_models = true;
+
+        store.save_upstream(&upstream).await.unwrap();
+        let saved = store.get_upstream(&upstream.id).await.unwrap().unwrap();
+
+        assert!(saved.strip_multimodal_for_text_models);
     }
 }

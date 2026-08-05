@@ -262,6 +262,13 @@ impl UpstreamEditor {
             ui.label("名称");
             ui.text_edit_singleline(&mut self.upstream.name);
         });
+        ui.checkbox(
+            &mut self.upstream.strip_multimodal_for_text_models,
+            "为非多模态模型去除多模态输入",
+        )
+        .on_hover_text(
+            "开启后, 当请求模型被识别为不支持图片等媒体输入时, 自动把图片, 音频和文件替换为带媒体类型与大小的文字描述.",
+        );
         ui.horizontal(|ui| {
             ui.checkbox(&mut self.upstream.enabled, "启用");
             ui.label("优先级");

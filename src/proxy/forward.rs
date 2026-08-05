@@ -4,6 +4,7 @@ use crate::core::models::{ErrorRetryPolicy, TokenUsage, Upstream, UpstreamKind, 
 use crate::live::LiveRequestMeta;
 use crate::proxy::compat::{self, PreparedProtocolRequest, ProtocolConversionError, ProtocolSseBridge};
 use crate::proxy::debug;
+use crate::proxy::multimodal;
 use crate::proxy::transform;
 use crate::quota;
 use crate::scheduler::{self, SchedulerFailureKind};
@@ -471,6 +472,22 @@ async fn forward_with_upstream(
     let effective_model = target_model
         .map(str::to_string)
         .or_else(|| request.model.clone());
+    if upstream.strip_multimodal_for_text_models
+        && let Some(client_wire_api) = request.endpoint_kind.client_wire_api()
+        && !multimodal::model_is_multimodal(effective_model.as_deref().unwrap_or_default())
+    {
+        let stripped = multimodal::strip_multimodal_input(&target_body, client_wire_api)?;
+        if stripped.removed > 0 {
+            tracing::info!(
+                upstream_id = %upstream.id,
+                upstream_name = %upstream.name,
+                model = effective_model.as_deref().unwrap_or_default(),
+                removed = stripped.removed,
+                "removed multimodal input for text-only upstream"
+            );
+        }
+        target_body = stripped.body;
+    }
     let upstream_wire_api = if upstream.kind == UpstreamKind::CodexOauth {
         WireApi::Responses
     } else {

@@ -1587,6 +1587,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn text_upstream_strips_multimodal_input_when_enabled() {
+        let (mock_base, hits) = spawn_mock(MockMode::ResponsesJson).await;
+        let state = test_state(&mock_base, WireApi::Responses).await;
+        let mut upstream = state.store.list_upstreams().await.unwrap().remove(0);
+        upstream.strip_multimodal_for_text_models = true;
+        state.store.save_upstream(&upstream).await.unwrap();
+        let proxy_base = spawn_proxy(state).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({
+                "model":"deepseek-v4-flash",
+                "input":[{
+                    "type":"message",
+                    "role":"user",
+                    "content":[
+                        {"type":"input_text","text":"keep"},
+                        {"type":"input_image","image_url":"data:image/png;base64,aGVsbG8="},
+                        {"type":"input_audio","input_audio":"data:audio/wav;base64,YXVkaW8="},
+                        {"type":"input_file","file_data":"data:application/pdf;base64,ZmlsZQ==","filename":"a.pdf"}
+                    ]
+                }],
+                "stream":false
+            }))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let hits = hits.lock().await;
+        assert_eq!(hits.len(), 1);
+        let content = hits[0].body["input"][0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 4);
+        assert_eq!(content[0]["text"], "keep");
+        for part in content.iter().skip(1) {
+            assert_eq!(part["type"], "input_text");
+            let text = part["text"].as_str().unwrap();
+            assert!(text.starts_with("[已移除"));
+        }
+        assert!(content[1]["text"].as_str().unwrap().contains("图片"));
+        assert!(content[3]["text"].as_str().unwrap().contains("a.pdf"));
+    }
+
+    #[tokio::test]
     async fn text_protocol_matrix_converts_fragmented_streams() {
         let upstreams = [
             (WireApi::Responses, MockMode::ResponsesSse),

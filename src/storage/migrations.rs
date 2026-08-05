@@ -424,6 +424,13 @@ fn migrations() -> &'static [Migration] {
                 "CREATE INDEX IF NOT EXISTS idx_temporary_access_keys_key_value ON temporary_access_keys(key_value)",
             ],
         },
+        Migration {
+            version: 17,
+            name: "upstream_strip_multimodal_for_text_models",
+            statements: &[
+                "ALTER TABLE upstreams ADD COLUMN strip_multimodal_for_text_models INTEGER NOT NULL DEFAULT 0",
+            ],
+        },
     ]
 }
 
@@ -444,7 +451,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 16);
+        assert_eq!(rows.len(), 17);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -507,6 +514,11 @@ mod tests {
             rows[15].get::<String, _>("name"),
             "temporary_access_keys"
         );
+        assert_eq!(rows[16].get::<i64, _>("version"), 17);
+        assert_eq!(
+            rows[16].get::<String, _>("name"),
+            "upstream_strip_multimodal_for_text_models"
+        );
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
             Some("127.0.0.1:15721")
@@ -535,6 +547,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 16);
+        assert_eq!(count, 17);
     }
 }
