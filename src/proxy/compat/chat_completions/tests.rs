@@ -103,6 +103,7 @@ fn converts_plaintext_reasoning_content_to_chat_reasoning_content() {
     let body: Value = serde_json::from_slice(&converted.body).unwrap();
 
     assert_eq!(body["messages"][0]["role"], "assistant");
+    assert_eq!(body["messages"][0]["content"], "");
     assert_eq!(body["messages"][0]["reasoning_content"], "think step by step");
     assert_eq!(body["messages"][1]["role"], "user");
 }

@@ -93,9 +93,16 @@ impl PendingAssistant {
         }
         let mut message = Map::new();
         message.insert("role".to_string(), json!("assistant"));
+        let has_tool_calls = !self.tool_calls.is_empty();
         message.insert(
             "content".to_string(),
-            self.content.take().unwrap_or(Value::Null),
+            self.content.take().unwrap_or_else(|| {
+                if has_tool_calls {
+                    Value::Null
+                } else {
+                    json!("")
+                }
+            }),
         );
         if let Some(reasoning_content) = self.reasoning_content.take() {
             message.insert("reasoning_content".to_string(), json!(reasoning_content));
