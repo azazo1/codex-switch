@@ -217,6 +217,7 @@ mod tests {
         ForbiddenError,
         InvalidPromptError,
         ModelsJson,
+        ModelsCapabilitiesJson,
         ResponsesJson,
         ResponsesThenForbidden,
         ResponsesSse,
@@ -1632,6 +1633,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn model_capability_cache_overrides_heuristic() {
+        let (mock_base, hits) = spawn_mock(MockMode::ModelsCapabilitiesJson).await;
+        let state = test_state(&mock_base, WireApi::Responses).await;
+        let proxy_base = spawn_proxy(state.clone()).await;
+        reqwest::Client::new()
+            .get(format!("{proxy_base}/v1/models"))
+            .bearer_auth("local-test")
+            .send()
+            .await
+            .unwrap();
+
+        let mut upstream = state.store.list_upstreams().await.unwrap().remove(0);
+        upstream.strip_multimodal_for_text_models = true;
+        state.store.save_upstream(&upstream).await.unwrap();
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({
+                "model":"deepseek-v4-flash",
+                "input":[{
+                    "type":"message",
+                    "role":"user",
+                    "content":[
+                        {"type":"input_text","text":"keep"},
+                        {"type":"input_image","image_url":"data:image/png;base64,aGVsbG8="}
+                    ]
+                }],
+                "stream":false
+            }))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let hits = hits.lock().await;
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].path, "/v1/models");
+        assert_eq!(
+            hits[1].body["input"][0]["content"][1]["type"],
+            "input_image"
+        );
+    }
+
+    #[tokio::test]
     async fn text_protocol_matrix_converts_fragmented_streams() {
         let upstreams = [
             (WireApi::Responses, MockMode::ResponsesSse),
@@ -1962,6 +2007,7 @@ mod tests {
         let oauth_accounts = crate::oauth::OAuthAccountService::new(store.clone());
         AppState {
             store,
+            model_capabilities: Default::default(),
             credentials,
             oauth_accounts,
             http: reqwest::Client::new(),
@@ -2166,6 +2212,18 @@ mod tests {
                 axum::Json(json!({
                     "object":"list",
                     "data":[{"id":"gpt-mock","object":"model","created":1,"owned_by":"mock-upstream"}]
+                })),
+            )
+                .into_response(),
+            MockMode::ModelsCapabilitiesJson => (
+                StatusCode::OK,
+                axum::Json(json!({
+                    "object":"list",
+                    "data":[{
+                        "id":"deepseek-v4-flash",
+                        "object":"model",
+                        "capabilities":{"supports_image_input":true}
+                    }]
                 })),
             )
                 .into_response(),

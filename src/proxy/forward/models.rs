@@ -9,6 +9,7 @@ use axum::http::HeaderMap;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use super::multimodal;
 use super::headers::apply_headers;
 
 #[derive(Debug, thiserror::Error)]
@@ -371,7 +372,19 @@ async fn query_relay_models(
                 .unwrap_or("models endpoint returned an error")
         );
     }
-    Ok(normalize_models_response(&value, upstream))
+    let items = normalize_models_response(&value, upstream);
+    let capabilities = items
+        .iter()
+        .filter_map(|item| {
+            let model = item.get("id").and_then(Value::as_str)?;
+            let multimodal = multimodal::model_multimodal_from_item(item)?;
+            Some((model.to_string(), multimodal))
+        })
+        .collect::<Vec<_>>();
+    if !capabilities.is_empty() {
+        state.model_capabilities.extend(&upstream.id, capabilities);
+    }
+    Ok(items)
 }
 
 fn push_models(models: &mut Vec<Value>, seen: &mut BTreeSet<String>, items: Vec<Value>) {

@@ -472,16 +472,22 @@ async fn forward_with_upstream(
     let effective_model = target_model
         .map(str::to_string)
         .or_else(|| request.model.clone());
+    let effective_model_name = effective_model.as_deref().unwrap_or_default();
+    let model_is_multimodal = request
+        .state
+        .model_capabilities
+        .get(&upstream.id, effective_model_name)
+        .unwrap_or_else(|| multimodal::model_is_multimodal(effective_model_name));
     if upstream.strip_multimodal_for_text_models
         && let Some(client_wire_api) = request.endpoint_kind.client_wire_api()
-        && !multimodal::model_is_multimodal(effective_model.as_deref().unwrap_or_default())
+        && !model_is_multimodal
     {
         let stripped = multimodal::strip_multimodal_input(&target_body, client_wire_api)?;
         if stripped.removed > 0 {
             tracing::info!(
                 upstream_id = %upstream.id,
                 upstream_name = %upstream.name,
-                model = effective_model.as_deref().unwrap_or_default(),
+                model = effective_model_name,
                 removed = stripped.removed,
                 "removed multimodal input for text-only upstream"
             );

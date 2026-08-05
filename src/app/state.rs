@@ -1,5 +1,6 @@
 use crate::app::http;
 use crate::cache_keepalive::CacheKeepaliveRuntime;
+use crate::core::model_capabilities::ModelCapabilityCache;
 use crate::core::models::Upstream;
 use crate::live::LiveRequestStore;
 use crate::oauth::OAuthAccountService;
@@ -20,6 +21,7 @@ type RepaintRequester = Arc<dyn Fn() + Send + Sync>;
 #[derive(Clone)]
 pub struct AppState {
     pub store: Store,
+    pub model_capabilities: ModelCapabilityCache,
     pub credentials: CredentialStore,
     pub oauth_accounts: OAuthAccountService,
     pub http: reqwest::Client,
@@ -115,6 +117,7 @@ impl AppState {
         );
         let state = Self {
             store,
+            model_capabilities: ModelCapabilityCache::default(),
             credentials,
             oauth_accounts,
             http,
