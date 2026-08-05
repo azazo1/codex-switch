@@ -73,12 +73,12 @@ impl CodexSwitchApp {
             tokens::estimated_cost(ui, "今日估算", self.today_estimated_cost_usd);
         });
         ui.horizontal_wrapped(|ui| {
-            ui.label(format!("模型价格缓存: {} 条", self.price_cache_count));
+            ui.label(format!("模型信息缓存: {} 条", self.price_cache_count));
             ui.label(price_cache_age_text(self.price_cache_age_seconds));
             let label = if self.price_fetch_pending {
                 "获取中"
             } else {
-                "获取模型价格"
+                "获取模型信息"
             };
             if ui
                 .add_enabled(!self.price_fetch_pending, egui::Button::new(label))
@@ -399,7 +399,7 @@ fn price_cache_age_text(age_seconds: Option<i64>) -> String {
         Some(age) if age < 3600 => format!("{} 分钟前更新", age / 60),
         Some(age) if age < 86_400 => format!("{} 小时前更新", age / 3600),
         Some(age) => format!("{} 天前更新", age / 86_400),
-        None => "尚未缓存价格".to_string(),
+        None => "尚未缓存模型信息".to_string(),
     }
 }
 

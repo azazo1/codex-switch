@@ -1,4 +1,5 @@
 use crate::core::models::WireApi;
+pub(crate) use crate::core::model_capabilities::model_multimodal_from_item;
 use base64::Engine;
 use serde_json::{Value, json};
 
@@ -29,91 +30,6 @@ pub(crate) fn model_is_multimodal(model: &str) -> bool {
     MULTIMODAL_MODEL_TOKENS
         .iter()
         .any(|token| contains_model_token(&model, token))
-}
-
-pub(crate) fn model_multimodal_from_item(item: &Value) -> Option<bool> {
-    for key in ["multimodal", "supports_image_input", "supports_vision", "vision"] {
-        if let Some(value) = item.get(key).and_then(Value::as_bool) {
-            return Some(value);
-        }
-    }
-    if let Some(capabilities) = item.get("capabilities") {
-        for key in [
-            "image_input",
-            "supports_image_input",
-            "vision",
-            "supports_vision",
-            "multimodal",
-            "images",
-        ] {
-            if let Some(value) = capabilities.get(key).and_then(Value::as_bool) {
-                return Some(value);
-            }
-        }
-    }
-    for key in ["modalities", "input_modalities"] {
-        if let Some(value) = item.get(key)
-            && let Some(result) = modalities_bool(value)
-        {
-            return Some(result);
-        }
-    }
-    if let Some(modality) = item
-        .pointer("/architecture/modality")
-        .and_then(Value::as_str)
-    {
-        let lower = modality.to_ascii_lowercase();
-        return Some(
-            lower.contains("image")
-                || lower.contains("audio")
-                || lower.contains("video")
-                || lower.contains("file"),
-        );
-    }
-    None
-}
-
-fn modalities_bool(value: &Value) -> Option<bool> {
-    match value {
-        Value::Array(items) => {
-            let values = items.iter().filter_map(Value::as_str).collect::<Vec<_>>();
-            if values.is_empty() {
-                return None;
-            }
-            Some(values.iter().any(|value| {
-                let value = value.to_ascii_lowercase();
-                value == "image"
-                    || value == "audio"
-                    || value == "video"
-                    || value == "file"
-                    || value.contains("image")
-                    || value.contains("audio")
-            }))
-        }
-        Value::Object(object) => {
-            let mut has_known = false;
-            let mut has_media = false;
-            for key in ["text", "image", "audio", "video", "file"] {
-                if let Some(value) = object.get(key).and_then(Value::as_bool) {
-                    has_known = true;
-                    if key != "text" && value {
-                        has_media = true;
-                    }
-                }
-            }
-            has_known.then_some(has_media)
-        }
-        Value::String(value) => {
-            let value = value.to_ascii_lowercase();
-            Some(
-                value.contains("image")
-                    || value.contains("audio")
-                    || value.contains("video")
-                    || value.contains("file"),
-            )
-        }
-        _ => None,
-    }
 }
 
 const MULTIMODAL_MODEL_TOKENS: &[&str] = &[

@@ -2,6 +2,7 @@ use crate::app::tray::{TrayCommand, TrayController};
 use crate::app::{http, platform, state::AppState};
 use crate::balance;
 use crate::cache_keepalive::CacheKeepaliveSessionSnapshot;
+use crate::core::model_capabilities::ModelCapabilityCache;
 use crate::core::models::{
     ApiKeyAuthScheme, BalanceProvider, BalanceSnapshot, DashboardStats, DatabaseInfo, ProviderStats,
     QuotaSnapshot, RequestLog, ScheduleGroup, ScheduleGroupChild, ScheduleGroupMember,
@@ -29,6 +30,21 @@ const ACTIVE_TAB_COUNT_MAX: usize = 999;
 const REQUEST_LOG_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const HIDDEN_REPAINT_INTERVAL: Duration = Duration::from_secs(5);
 const CACHE_KEEPALIVE_VISIBLE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+
+fn model_modality_label(
+    cache: &ModelCapabilityCache,
+    upstream_id: Option<&str>,
+    model: Option<&str>,
+) -> String {
+    let Some(model) = model.filter(|value| !value.is_empty()) else {
+        return "未知".to_string();
+    };
+    match cache.get(upstream_id.unwrap_or_default(), model) {
+        Some(true) => "多模态".to_string(),
+        Some(false) => "文本".to_string(),
+        None => "未知".to_string(),
+    }
+}
 
 mod active;
 mod cache_keepalive;
@@ -743,10 +759,10 @@ impl CodexSwitchApp {
                     self.price_fetch_pending = false;
                     match result {
                         Ok(count) => {
-                            self.status = format!("模型价格已获取: {count} 条");
+                            self.status = format!("模型信息已获取: {count} 条");
                             self.refresh_all_if_visible();
                         }
-                        Err(err) => self.status = format!("模型价格获取失败: {err}"),
+                        Err(err) => self.status = format!("模型信息获取失败: {err}"),
                     }
                 }
                 UiTaskEvent::PriceCacheOnceFetched(result) => {
@@ -754,14 +770,14 @@ impl CodexSwitchApp {
                     match result {
                         Ok(summary) => {
                             if summary.fetched {
-                                self.status = format!("模型价格已获取: {} 条", summary.count);
+                                self.status = format!("模型信息已获取: {} 条", summary.count);
                                 self.refresh_all_if_visible();
                             } else if summary.count > 0 {
-                                self.status = format!("模型价格缓存可用: {} 条", summary.count);
+                                self.status = format!("模型信息缓存可用: {} 条", summary.count);
                             }
                         }
                         Err(err) => {
-                            self.status = format!("模型价格获取失败, 将使用已有缓存: {err}");
+                            self.status = format!("模型信息获取失败, 将使用已有缓存: {err}");
                         }
                     }
                 }
@@ -1013,7 +1029,7 @@ impl CodexSwitchApp {
             return;
         }
         self.price_fetch_pending = true;
-        self.status = "正在获取模型价格".to_string();
+        self.status = "正在获取模型信息".to_string();
         let state = self.state.clone();
         let tx = self.task_tx.clone();
         self.runtime.spawn(async move {
@@ -1028,7 +1044,7 @@ impl CodexSwitchApp {
         }
         self.price_fetch_started = true;
         self.price_fetch_pending = true;
-        self.status = "正在检查模型价格缓存".to_string();
+        self.status = "正在检查模型信息缓存".to_string();
         let state = self.state.clone();
         let tx = self.task_tx.clone();
         self.runtime.spawn(async move {

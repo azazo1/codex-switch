@@ -1,4 +1,5 @@
 use crate::app::AppState;
+use crate::core::model_capabilities::model_multimodal_from_item;
 use crate::core::models::{ModelPrice, TokenUsage};
 use anyhow::Context;
 use serde_json::Value;
@@ -48,8 +49,19 @@ pub async fn fetch_price_cache(state: &AppState) -> anyhow::Result<usize> {
         .context("failed to parse models.dev catalog")?;
     let prices = parse_models_dev_prices(&value);
     let count = prices.len();
+    let capability_count = prices
+        .iter()
+        .filter(|price| price.multimodal.is_some())
+        .count();
     state.store.replace_model_prices(&prices).await?;
-    tracing::info!(count, "model price cache fetched");
+    state
+        .model_capabilities
+        .extend_global(state.store.model_multimodal_entries().await?);
+    tracing::info!(
+        count,
+        capability_count,
+        "model info cache fetched"
+    );
     Ok(count)
 }
 
@@ -154,6 +166,7 @@ fn parse_models_dev_prices(value: &Value) -> Vec<ModelPrice> {
                 provider_name: provider_name.to_string(),
                 model_id,
                 model_name,
+                multimodal: model_multimodal_from_item(model),
                 input_usd_per_million: input,
                 cached_input_usd_per_million: cache_read,
                 cache_write_usd_per_million: cache_write,

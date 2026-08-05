@@ -126,6 +126,7 @@ impl CodexSwitchApp {
 
         let tail_width = live_tail_width(ui.available_width());
         let settings = self.live_output_settings;
+        let model_capabilities = &self.state.model_capabilities;
         let live_connections = &self.live_connections;
         let scroll_states = &mut self.live_tail_scroll_states;
         let mut terminate_request_id = None;
@@ -159,6 +160,14 @@ impl CodexSwitchApp {
                                 item.model.as_deref(),
                                 item.target_model.as_deref(),
                             );
+                            let model_hover = format!(
+                                "{model}\n模态能力: {}",
+                                super::model_modality_label(
+                                    model_capabilities,
+                                    None,
+                                    item.target_model.as_deref().or(item.model.as_deref()),
+                                )
+                            );
                             if model.contains('\n') {
                                 ui.vertical(|ui| {
                                     for line in model.lines() {
@@ -166,10 +175,10 @@ impl CodexSwitchApp {
                                     }
                                 })
                                 .response
-                                .on_hover_text(model);
+                                .on_hover_text(model_hover);
                             } else {
                                 sized_row_label(ui, &model, LIVE_MODEL_WIDTH, finished)
-                                    .on_hover_text(model);
+                                    .on_hover_text(model_hover);
                             }
                             let reasoning = item.reasoning_effort.as_deref().unwrap_or("-");
                             sized_row_label(

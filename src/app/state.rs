@@ -105,6 +105,9 @@ impl AppState {
         let db_path = data_dir.join("codex-switch.sqlite");
         tracing::info!(path = %db_path.display(), "opening sqlite database");
         let store = Store::open(db_path).await?;
+        store.backfill_model_multimodal_entries().await?;
+        let model_capabilities = ModelCapabilityCache::default();
+        model_capabilities.extend_global(store.model_multimodal_entries().await?);
         let credentials = CredentialStore::new(store.clone()).await?;
         let oauth_accounts = OAuthAccountService::new(store.clone());
         let http = http::build_client(None)?;
@@ -117,7 +120,7 @@ impl AppState {
         );
         let state = Self {
             store,
-            model_capabilities: ModelCapabilityCache::default(),
+            model_capabilities,
             credentials,
             oauth_accounts,
             http,

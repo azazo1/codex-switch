@@ -431,6 +431,18 @@ fn migrations() -> &'static [Migration] {
                 "ALTER TABLE upstreams ADD COLUMN strip_multimodal_for_text_models INTEGER NOT NULL DEFAULT 0",
             ],
         },
+        Migration {
+            version: 18,
+            name: "model_info_cache",
+            statements: &[
+                "ALTER TABLE model_price_cache RENAME TO model_info_cache",
+                "ALTER TABLE model_info_cache ADD COLUMN multimodal INTEGER",
+                "DROP INDEX IF EXISTS idx_model_price_cache_model",
+                "DROP INDEX IF EXISTS idx_model_price_cache_official",
+                "CREATE INDEX IF NOT EXISTS idx_model_info_cache_model ON model_info_cache(model_id)",
+                "CREATE INDEX IF NOT EXISTS idx_model_info_cache_official ON model_info_cache(official, model_id)",
+            ],
+        },
     ]
 }
 
@@ -451,7 +463,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 17);
+        assert_eq!(rows.len(), 18);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -519,6 +531,11 @@ mod tests {
             rows[16].get::<String, _>("name"),
             "upstream_strip_multimodal_for_text_models"
         );
+        assert_eq!(rows[17].get::<i64, _>("version"), 18);
+        assert_eq!(
+            rows[17].get::<String, _>("name"),
+            "model_info_cache"
+        );
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
             Some("127.0.0.1:15721")
@@ -547,6 +564,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 17);
+        assert_eq!(count, 18);
     }
 }

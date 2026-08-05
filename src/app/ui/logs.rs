@@ -2,6 +2,7 @@ use super::{
     CodexSwitchApp, F64RangeFilter, I64RangeFilter, LogDateTimeFilter, LogRetentionChoice,
     LogStatusFilter, tokens,
 };
+use crate::core::model_capabilities::ModelCapabilityCache;
 use crate::core::models::{RequestLog, Upstream};
 use crate::storage::RequestLogRetention;
 use chrono::{Duration, Local, Utc};
@@ -43,10 +44,11 @@ impl CodexSwitchApp {
                         ui.end_row();
 
                         for (index, log) in self.logs.iter().enumerate() {
+                            let hover = log_hover_text(log, &self.state.model_capabilities);
                             ui.label(upstream_text(log))
-                                .on_hover_text(log_hover_text(log));
+                                .on_hover_text(hover.clone());
                             let model_response = ui.label(model_text(log));
-                            model_response.on_hover_text(log_hover_text(log));
+                            model_response.on_hover_text(hover);
                             ui.label(log.reasoning_effort.as_deref().unwrap_or("-"));
                             log_token_cell(ui, &mut token_display_mode, log);
                             log_cost_cell(
@@ -803,7 +805,7 @@ fn upstream_text(log: &RequestLog) -> String {
     log.upstream_name.clone().unwrap_or_else(|| "-".to_string())
 }
 
-fn log_hover_text(log: &RequestLog) -> String {
+fn log_hover_text(log: &RequestLog, cache: &ModelCapabilityCache) -> String {
     let mut lines = Vec::new();
     if let Some(upstream) = &log.upstream_name {
         lines.push(format!("上游: {upstream}"));
@@ -815,6 +817,12 @@ fn log_hover_text(log: &RequestLog) -> String {
         && log.model.as_deref() != Some(target.as_str())
     {
         lines.push(format!("实际模型: {target}"));
+    }
+    if let Some(model) = log.target_model.as_deref().or(log.model.as_deref()) {
+        lines.push(format!(
+            "模态能力: {}",
+            super::model_modality_label(cache, log.upstream_id.as_deref(), Some(model))
+        ));
     }
     lines.push(format!("endpoint: {}", log.endpoint));
     lines.push(format!("status: {}", log.status));

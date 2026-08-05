@@ -572,6 +572,7 @@ pub struct ModelPrice {
     pub provider_name: String,
     pub model_id: String,
     pub model_name: String,
+    pub multimodal: Option<bool>,
     pub input_usd_per_million: Option<f64>,
     pub cached_input_usd_per_million: Option<f64>,
     pub cache_write_usd_per_million: Option<f64>,
