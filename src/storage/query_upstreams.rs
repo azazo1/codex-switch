@@ -1,5 +1,6 @@
 use crate::core::models::{
-    ApiKeyAuthScheme, BalanceProvider, ErrorRetryPolicy, Upstream, UpstreamKind, WireApi,
+    ApiKeyAuthScheme, BalanceProvider, ErrorRetryPolicy, UnknownModalityPolicy, Upstream,
+    UpstreamKind, WireApi,
 };
 use crate::storage::Store;
 use anyhow::Context;
@@ -40,10 +41,10 @@ impl Store {
     pub async fn save_upstream(&self, upstream: &Upstream) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO upstreams (
-                id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, strip_multimodal_for_text_models, error_retry_policy,
+                id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, strip_multimodal_for_text_models, unknown_modality_policy, error_retry_policy,
                 enabled, priority, weight, proxy_url, balance_provider, chatgpt_account_id, email,
                 plan_type, token_expires_at, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
              ON CONFLICT(id) DO UPDATE SET
                 kind = excluded.kind,
                 name = excluded.name,
@@ -53,6 +54,7 @@ impl Store {
                 supports_compact = excluded.supports_compact,
                 filter_chat_server_tools = excluded.filter_chat_server_tools,
                 strip_multimodal_for_text_models = excluded.strip_multimodal_for_text_models,
+                unknown_modality_policy = excluded.unknown_modality_policy,
                 error_retry_policy = excluded.error_retry_policy,
                 enabled = excluded.enabled,
                 priority = excluded.priority,
@@ -74,6 +76,7 @@ impl Store {
         .bind(i64::from(upstream.supports_compact))
         .bind(i64::from(upstream.filter_chat_server_tools))
         .bind(i64::from(upstream.strip_multimodal_for_text_models))
+        .bind(upstream.unknown_modality_policy.as_str())
         .bind(upstream.error_retry_policy.as_str())
         .bind(i64::from(upstream.enabled))
         .bind(upstream.priority)
@@ -258,10 +261,10 @@ async fn insert_upstream(
 ) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO upstreams (
-            id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, strip_multimodal_for_text_models, error_retry_policy,
+            id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, strip_multimodal_for_text_models, unknown_modality_policy, error_retry_policy,
             enabled, priority, weight, proxy_url, balance_provider, chatgpt_account_id, email,
             plan_type, token_expires_at, created_at, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
     )
     .bind(&upstream.id)
     .bind(upstream.kind.as_str())
@@ -272,6 +275,7 @@ async fn insert_upstream(
     .bind(i64::from(upstream.supports_compact))
     .bind(i64::from(upstream.filter_chat_server_tools))
     .bind(i64::from(upstream.strip_multimodal_for_text_models))
+    .bind(upstream.unknown_modality_policy.as_str())
     .bind(upstream.error_retry_policy.as_str())
     .bind(i64::from(upstream.enabled))
     .bind(upstream.priority)
@@ -328,6 +332,9 @@ pub(super) fn row_to_upstream(row: sqlx::sqlite::SqliteRow) -> anyhow::Result<Up
         strip_multimodal_for_text_models: row
             .get::<i64, _>("strip_multimodal_for_text_models")
             != 0,
+        unknown_modality_policy: UnknownModalityPolicy::from_str(
+            &row.get::<String, _>("unknown_modality_policy"),
+        ),
         error_retry_policy: ErrorRetryPolicy::from_str(
             &row.get::<String, _>("error_retry_policy"),
         ),
@@ -419,5 +426,30 @@ mod tests {
         let saved = store.get_upstream(&upstream.id).await.unwrap().unwrap();
 
         assert!(saved.strip_multimodal_for_text_models);
+    }
+
+    #[tokio::test]
+    async fn persists_unknown_modality_policy() {
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-upstream-modality-policy-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let store = Store::open(path).await.unwrap();
+        let mut upstream = Upstream::new_relay(
+            "deepseek".to_string(),
+            "https://example.com/v1".to_string(),
+            WireApi::Responses,
+            false,
+            BalanceProvider::Unsupported,
+        );
+        upstream.unknown_modality_policy = UnknownModalityPolicy::Multimodal;
+
+        store.save_upstream(&upstream).await.unwrap();
+        let saved = store.get_upstream(&upstream.id).await.unwrap().unwrap();
+
+        assert_eq!(
+            saved.unknown_modality_policy,
+            UnknownModalityPolicy::Multimodal
+        );
     }
 }

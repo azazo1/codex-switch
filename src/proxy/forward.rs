@@ -1,6 +1,8 @@
 use crate::app::AppState;
 use crate::cache_keepalive::CacheKeepaliveRegistration;
-use crate::core::models::{ErrorRetryPolicy, TokenUsage, Upstream, UpstreamKind, WireApi};
+use crate::core::models::{
+    ErrorRetryPolicy, TokenUsage, UnknownModalityPolicy, Upstream, UpstreamKind, WireApi,
+};
 use crate::live::LiveRequestMeta;
 use crate::proxy::compat::{self, PreparedProtocolRequest, ProtocolConversionError, ProtocolSseBridge};
 use crate::proxy::debug;
@@ -473,11 +475,14 @@ async fn forward_with_upstream(
         .map(str::to_string)
         .or_else(|| request.model.clone());
     let effective_model_name = effective_model.as_deref().unwrap_or_default();
-    let model_is_multimodal = request
+    let model_is_multimodal = match request
         .state
         .model_capabilities
         .get(&upstream.id, effective_model_name)
-        .unwrap_or_else(|| multimodal::model_is_multimodal(effective_model_name));
+    {
+        Some(multimodal) => multimodal,
+        None => upstream.unknown_modality_policy == UnknownModalityPolicy::Multimodal,
+    };
     if upstream.strip_multimodal_for_text_models
         && let Some(client_wire_api) = request.endpoint_kind.client_wire_api()
         && !model_is_multimodal

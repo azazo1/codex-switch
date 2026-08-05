@@ -98,6 +98,28 @@ impl ErrorRetryPolicy {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UnknownModalityPolicy {
+    TextOnly,
+    Multimodal,
+}
+
+impl UnknownModalityPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TextOnly => "text_only",
+            Self::Multimodal => "multimodal",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "multimodal" => Self::Multimodal,
+            _ => Self::TextOnly,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BalanceProvider {
     Auto,
     DeepSeek,
@@ -193,6 +215,7 @@ pub struct Upstream {
     pub supports_compact: bool,
     pub filter_chat_server_tools: bool,
     pub strip_multimodal_for_text_models: bool,
+    pub unknown_modality_policy: UnknownModalityPolicy,
     pub error_retry_policy: ErrorRetryPolicy,
     pub enabled: bool,
     pub priority: i64,
@@ -230,6 +253,7 @@ impl Upstream {
             supports_compact,
             filter_chat_server_tools: false,
             strip_multimodal_for_text_models: false,
+            unknown_modality_policy: UnknownModalityPolicy::TextOnly,
             error_retry_policy: ErrorRetryPolicy::Off,
             enabled: true,
             priority: 0,
@@ -263,6 +287,7 @@ impl Upstream {
             supports_compact: true,
             filter_chat_server_tools: false,
             strip_multimodal_for_text_models: false,
+            unknown_modality_policy: UnknownModalityPolicy::TextOnly,
             error_retry_policy: ErrorRetryPolicy::Off,
             enabled: true,
             priority: 10,

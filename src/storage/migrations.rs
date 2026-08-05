@@ -443,6 +443,13 @@ fn migrations() -> &'static [Migration] {
                 "CREATE INDEX IF NOT EXISTS idx_model_info_cache_official ON model_info_cache(official, model_id)",
             ],
         },
+        Migration {
+            version: 19,
+            name: "upstream_unknown_modality_policy",
+            statements: &[
+                "ALTER TABLE upstreams ADD COLUMN unknown_modality_policy TEXT NOT NULL DEFAULT 'text_only'",
+            ],
+        },
     ]
 }
 
@@ -463,7 +470,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 18);
+        assert_eq!(rows.len(), 19);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -536,6 +543,11 @@ mod tests {
             rows[17].get::<String, _>("name"),
             "model_info_cache"
         );
+        assert_eq!(rows[18].get::<i64, _>("version"), 19);
+        assert_eq!(
+            rows[18].get::<String, _>("name"),
+            "upstream_unknown_modality_policy"
+        );
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
             Some("127.0.0.1:15721")
@@ -564,6 +576,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 18);
+        assert_eq!(count, 19);
     }
 }

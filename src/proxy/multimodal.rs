@@ -24,60 +24,6 @@ pub(crate) fn strip_multimodal_input(
     })
 }
 
-// 未知模型按文本模型处理, 因为此功能需要用户在每个上游上显式开启.
-pub(crate) fn model_is_multimodal(model: &str) -> bool {
-    let model = model.trim().to_ascii_lowercase();
-    MULTIMODAL_MODEL_TOKENS
-        .iter()
-        .any(|token| contains_model_token(&model, token))
-}
-
-const MULTIMODAL_MODEL_TOKENS: &[&str] = &[
-    "gpt-5",
-    "gpt-4o",
-    "gpt-4.1",
-    "gpt-4.5",
-    "gpt-4-turbo",
-    "gpt-4-vision",
-    "o1",
-    "o3",
-    "o4",
-    "claude",
-    "gemini",
-    "gemma-3",
-    "llava",
-    "minicpm-v",
-    "internvl",
-    "intern-vl",
-    "qwen-vl",
-    "deepseek-vl",
-    "glm-4v",
-    "glm-4-v",
-    "glm-4.5v",
-    "step-1v",
-    "step-1-v",
-    "grok",
-    "vision",
-    "multimodal",
-    "omni",
-    "audio",
-];
-
-fn contains_model_token(model: &str, token: &str) -> bool {
-    model == token
-        || model.starts_with(&format!("{token}-"))
-        || model.starts_with(&format!("{token}."))
-        || model.starts_with(&format!("{token}/"))
-        || model.starts_with(&format!("{token}:"))
-        || model.contains(&format!("-{token}-"))
-        || model.contains(&format!("-{token}."))
-        || model.contains(&format!("-{token}/"))
-        || model.contains(&format!("-{token}:"))
-        || model.ends_with(&format!("-{token}"))
-        || model.ends_with(&format!("/{token}"))
-        || model.ends_with(&format!(":{token}"))
-}
-
 fn strip_responses_input(value: &mut Value) -> usize {
     let Some(input) = value.get_mut("input") else {
         return 0;
@@ -378,16 +324,6 @@ fn webp_dimensions(data: &[u8]) -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn recognizes_known_multimodal_models() {
-        assert!(model_is_multimodal("gpt-5-codex"));
-        assert!(model_is_multimodal("claude-sonnet-4"));
-        assert!(model_is_multimodal("qwen-vl-max"));
-        assert!(!model_is_multimodal("deepseek-v4-flash"));
-        assert!(!model_is_multimodal("gpt-3.5-turbo"));
-        assert!(!model_is_multimodal("unknown-custom-model"));
-    }
 
     #[test]
     fn reads_capabilities_from_model_items() {

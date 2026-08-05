@@ -201,7 +201,7 @@ mod tests {
     use crate::core::models::{
         ApiKeyAuthScheme, BalanceProvider, CacheKeepaliveMode, ErrorRetryPolicy, ScheduleGroup,
         ScheduleGroupMember, ScheduleMode, ScheduleRouteRule, ScheduleRouteTargetKind, Upstream,
-        TemporaryAccessKey, UpstreamCacheKeepaliveSettings, WireApi,
+        TemporaryAccessKey, UnknownModalityPolicy, UpstreamCacheKeepaliveSettings, WireApi,
     };
     use crate::storage::{Store, credentials::CredentialStore};
     use axum::{body::Body, http::header, routing::get};
@@ -1633,7 +1633,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn model_capability_cache_overrides_heuristic() {
+    async fn model_capability_cache_overrides_unknown_policy() {
         let (mock_base, hits) = spawn_mock(MockMode::ModelsCapabilitiesJson).await;
         let state = test_state(&mock_base, WireApi::Responses).await;
         let proxy_base = spawn_proxy(state.clone()).await;
@@ -1672,6 +1672,43 @@ mod tests {
         assert_eq!(hits[0].path, "/v1/models");
         assert_eq!(
             hits[1].body["input"][0]["content"][1]["type"],
+            "input_image"
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_modality_policy_keeps_media_for_multimodal_policy() {
+        let (mock_base, hits) = spawn_mock(MockMode::ResponsesJson).await;
+        let state = test_state(&mock_base, WireApi::Responses).await;
+        let mut upstream = state.store.list_upstreams().await.unwrap().remove(0);
+        upstream.strip_multimodal_for_text_models = true;
+        upstream.unknown_modality_policy = UnknownModalityPolicy::Multimodal;
+        state.store.save_upstream(&upstream).await.unwrap();
+        let proxy_base = spawn_proxy(state).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("local-test")
+            .json(&json!({
+                "model":"unknown-model",
+                "input":[{
+                    "type":"message",
+                    "role":"user",
+                    "content":[
+                        {"type":"input_text","text":"keep"},
+                        {"type":"input_image","image_url":"data:image/png;base64,aGVsbG8="}
+                    ]
+                }],
+                "stream":false
+            }))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let hits = hits.lock().await;
+        assert_eq!(
+            hits[0].body["input"][0]["content"][1]["type"],
             "input_image"
         );
     }
