@@ -224,7 +224,7 @@ fn make_label(mtm: MainThreadMarker, text: &str) -> Retained<NSTextField> {
     label.setDrawsBackground(false);
     label.setEditable(false);
     label.setSelectable(false);
-    label.setAlignment(NSTextAlignment::Left);
+    label.setAlignment(NSTextAlignment::Right);
     label.setLineBreakMode(NSLineBreakMode::ByClipping);
     label.setUsesSingleLineMode(true);
     label
