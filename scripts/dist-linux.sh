@@ -3,7 +3,11 @@
 set -euo pipefail
 
 profile_dir="${1:?profile_dir is required}"
-version="${2:?version is required}"
+
+version="$(
+  cargo metadata --locked --no-deps --format-version 1 |
+    jq -er '.packages[] | select(.name == "codex-switch") | .version'
+)"
 
 arch="$(uname -m)"
 case "$arch" in

@@ -17,22 +17,22 @@ debug:
 run:
     cargo run
 
-# just dist 1.2.3
+# just dist
 # 根据当前平台生成发布产物.
 [macos]
-dist version:
+dist:
     cargo build --locked --release --bins
-    bash scripts/package-macos.sh target/release "dist/codex-switch-{{version}}-macos-$(uname -m).dmg" "{{version}}"
+    bash scripts/package-macos.sh target/release "dist/codex-switch-macos-$(uname -m).dmg"
 
 [linux]
-dist version:
+dist:
     cargo build --locked --release --bins
-    bash scripts/dist-linux.sh target/release "{{version}}"
+    bash scripts/dist-linux.sh target/release
 
 [windows]
-dist version:
+dist:
     cargo build --locked --release --bins
-    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dist-windows.ps1 -Version "{{version}}"
+    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dist-windows.ps1
 
 # just macos-app
 # 打包 macOS .app 到 target/macos-app/Codex Switch.app.

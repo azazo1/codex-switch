@@ -1,8 +1,14 @@
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$Version,
     [string]$ProfileDir = "target/release"
 )
+
+$metadata = cargo metadata --locked --no-deps --format-version 1 | Out-String | ConvertFrom-Json
+$Version = $metadata.packages |
+    Where-Object { $_.name -eq "codex-switch" } |
+    Select-Object -First 1 -ExpandProperty version
+if (-not $Version) {
+    throw "failed to resolve codex-switch version from cargo metadata"
+}
 
 $binary = Join-Path $ProfileDir "codex-switch.exe"
 if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {

@@ -23,10 +23,12 @@ cargo build --locked --release --bins
 生成当前平台的发布归档:
 
 ```shell
-just dist 0.9.0
+just dist
 ```
 
 输出位于 `dist/`.
+
+归档文件名中的版本号自动从 `Cargo.toml` 读取.
 
 构建产物会自动显示版本和构建 commit: 精确 tag 显示 `vX.Y.Z`, 非 tag 显示 `vX.Y.Z-<6 位 commit>`, 工作区有未提交改动时使用 `^` 分隔.
 

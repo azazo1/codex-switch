@@ -277,20 +277,16 @@ jobs:
 
       - name: 打包 Linux 产物
         if: (needs.version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch') && matrix.platform == 'linux'
-        env:
-          VERSION: ${{ needs.version.outputs.version || needs.version.outputs.package_version }}
         shell: bash
         run: |
           set -euo pipefail
-          bash scripts/dist-linux.sh "target/${{ matrix.target }}/release" "$VERSION"
+          bash scripts/dist-linux.sh "target/${{ matrix.target }}/release"
 
       - name: 打包 Windows 产物
         if: (needs.version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch') && matrix.platform == 'windows'
-        env:
-          VERSION: ${{ needs.version.outputs.version || needs.version.outputs.package_version }}
         shell: pwsh
         run: |
-          & scripts/dist-windows.ps1 -ProfileDir "target/${{ matrix.target }}/release" -Version "$env:VERSION"
+          & scripts/dist-windows.ps1 -ProfileDir "target/${{ matrix.target }}/release"
 
       - name: 打包 macOS DMG
         if: (needs.version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch') && matrix.platform == 'macos'
@@ -301,8 +297,7 @@ jobs:
           set -euo pipefail
           bash scripts/package-macos.sh \
             "target/${{ matrix.target }}/release" \
-            "dist/codex-switch-$VERSION-${{ matrix.archive }}" \
-            "$VERSION"
+            "dist/codex-switch-$VERSION-${{ matrix.archive }}"
 
       - name: 上传构建产物
         if: needs.version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
