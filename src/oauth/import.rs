@@ -272,6 +272,7 @@ mod tests {
         assert_eq!(result.updated, 0);
         assert_eq!(result.failed, 1);
         assert_eq!(progress, vec![(1, 2), (2, 2)]);
+        drop(service);
         tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 }
