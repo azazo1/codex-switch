@@ -400,9 +400,9 @@ fn sized_row_label(
 
 fn format_tps(value: f64) -> String {
     if value.abs() >= 1_000.0 {
-        format!("~{value:.0} tps")
+        format!("~{value:.0} TPS")
     } else {
-        format!("~{value:.1} tps")
+        format!("~{value:.1} TPS")
     }
 }
 

@@ -3,21 +3,24 @@ use std::cell::Cell;
 use objc2::rc::Retained;
 use objc2::{define_class, msg_send, DeclaredClass, MainThreadMarker};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSColor, NSFont, NSLineBreakMode, NSStatusItem, NSTextAlignment,
-    NSTextField, NSView,
+    NSAutoresizingMaskOptions, NSColor, NSFont, NSImage, NSImageView, NSLineBreakMode,
+    NSStatusBarButton, NSStatusItem, NSTextAlignment, NSTextField, NSView,
 };
 use objc2_foundation::{NSString, NSPoint, NSRect, NSSize};
 
-const ICON_WIDTH: f64 = 22.0;
-const TEXT_MARGIN: f64 = 4.0;
+const ICON_WIDTH: f64 = 18.0;
+const TEXT_MARGIN: f64 = 2.0;
 const ONE_LINE_FONT_SIZE: f64 = 12.0;
 const TWO_LINE_FONT_SIZE: f64 = 9.0;
+const TWO_LINE_OVERLAP: f64 = 2.0;
 
 #[derive(Debug)]
-struct TrayTitleViewIvars {
+pub(crate) struct TrayTitleViewIvars {
     first_label: Retained<NSTextField>,
     second_label: Retained<NSTextField>,
     status_item: Retained<NSStatusItem>,
+    button: Retained<NSStatusBarButton>,
+    icon_view: Retained<NSImageView>,
     button_height: f64,
     last_width: Cell<f64>,
 }
@@ -44,8 +47,9 @@ pub(crate) fn install(
         .button(mtm)
         .expect("tray status item must have a button");
     let button_height = button.bounds().size.height;
-    let view = TrayTitleView::new(mtm, status_item.clone(), button_height);
+    let view = TrayTitleView::new(mtm, status_item.clone(), button.clone(), button_height);
     button.addSubview(&view);
+    button.setImage(None);
     view.setFrame(NSRect::new(
         NSPoint::new(0.0, 0.0),
         NSSize::new(ICON_WIDTH, button_height),
@@ -60,14 +64,33 @@ impl TrayTitleView {
     fn new(
         mtm: MainThreadMarker,
         status_item: Retained<NSStatusItem>,
+        button: Retained<NSStatusBarButton>,
         button_height: f64,
     ) -> Retained<Self> {
         let first_label = make_label(mtm, "");
         let second_label = make_label(mtm, "");
+        let icon_view = match button.image() {
+            Some(image) => NSImageView::imageViewWithImage(&image, mtm),
+            None => NSImageView::initWithFrame(
+                mtm.alloc(),
+                NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(ICON_WIDTH, button_height)),
+            ),
+        };
+        let icon_width = button
+            .image()
+            .map(|image| image.size().width)
+            .unwrap_or(ICON_WIDTH)
+            .max(1.0);
+        icon_view.setFrame(NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(icon_width, button_height),
+        ));
         let this = mtm.alloc().set_ivars(TrayTitleViewIvars {
             first_label,
             second_label,
             status_item,
+            button,
+            icon_view,
             button_height,
             last_width: Cell::new(0.0),
         });
@@ -77,9 +100,26 @@ impl TrayTitleView {
                 initWithFrame: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, button_height))
             ]
         };
+        view.addSubview(&view.ivars().icon_view);
         view.addSubview(&view.ivars().first_label);
         view.addSubview(&view.ivars().second_label);
         view
+    }
+
+    pub(crate) fn refresh_icon(&self) {
+        if let Some(image) = self.ivars().button.image() {
+            self.apply_icon_image(&image);
+            self.ivars().button.setImage(None);
+        }
+    }
+
+    fn apply_icon_image(&self, image: &NSImage) {
+        let icon_width = image.size().width.max(1.0);
+        self.ivars().icon_view.setFrame(NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(icon_width, self.ivars().button_height),
+        ));
+        self.ivars().icon_view.setImage(Some(image));
     }
 
     pub(crate) fn update(&self, first: Option<&str>, second: Option<&str>) {
@@ -109,28 +149,47 @@ impl TrayTitleView {
         }
 
         let line_height = measured_height;
-        let text_x = ICON_WIDTH + TEXT_MARGIN;
         let height = self.ivars().button_height;
+        let icon_width = self.ivars().icon_view.frame().size.width.max(1.0);
+        let icon_x = if line_count == 0 {
+            let button_width = self.ivars().button.bounds().size.width;
+            ((button_width - icon_width) / 2.0).max(0.0)
+        } else {
+            0.0
+        };
+        self.ivars().icon_view.setFrame(NSRect::new(
+            NSPoint::new(icon_x, 0.0),
+            NSSize::new(icon_width, height),
+        ));
+        let text_x = icon_x + icon_width + TEXT_MARGIN;
         let text_width = max_text_width + TEXT_MARGIN;
         if line_count >= 2 {
             let middle = height / 2.0;
+            let overlap = TWO_LINE_OVERLAP / 2.0;
             self.ivars().first_label.setFrame(NSRect::new(
-                NSPoint::new(text_x, middle + 1.0),
+                NSPoint::new(text_x, middle - overlap),
                 NSSize::new(text_width, line_height),
             ));
             self.ivars().second_label.setFrame(NSRect::new(
-                NSPoint::new(text_x, middle - line_height - 1.0),
+                NSPoint::new(text_x, middle - line_height + overlap),
                 NSSize::new(text_width, line_height),
             ));
         } else {
             let y = ((height - line_height) / 2.0).max(0.0);
-            self.ivars().first_label.setFrame(NSRect::new(
-                NSPoint::new(text_x, y),
-                NSSize::new(text_width, line_height),
-            ));
+            let frame = NSRect::new(NSPoint::new(text_x, y), NSSize::new(text_width, line_height));
+            if first.is_some() {
+                self.ivars().first_label.setFrame(frame);
+            }
+            if second.is_some() {
+                self.ivars().second_label.setFrame(frame);
+            }
         }
 
-        let width = (ICON_WIDTH + max_text_width + TEXT_MARGIN * 2.0).max(ICON_WIDTH + 6.0);
+        let width = if line_count == 0 {
+            icon_width + 6.0
+        } else {
+            (icon_width + max_text_width + TEXT_MARGIN * 2.0).max(icon_width + 6.0)
+        };
         if width != self.ivars().last_width.get() {
             self.ivars().status_item.setLength(width);
             self.ivars().last_width.set(width);
@@ -167,6 +226,6 @@ fn make_label(mtm: MainThreadMarker, text: &str) -> Retained<NSTextField> {
     label.setSelectable(false);
     label.setAlignment(NSTextAlignment::Left);
     label.setLineBreakMode(NSLineBreakMode::ByClipping);
-    label.setUsesSingleLineMode(false);
+    label.setUsesSingleLineMode(true);
     label
 }

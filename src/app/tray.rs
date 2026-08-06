@@ -191,6 +191,7 @@ pub enum TrayCommand {
     ShowWindow,
     ToggleService,
     Quit,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     ThemeChanged(bool),
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     SetBadgeMetric(TrayBadgeMetric),
@@ -380,6 +381,9 @@ impl TrayController {
         {
             self.tray_icon
                 .set_icon_with_as_template(Some(tray_icon), true)?;
+            if let Some(view) = &self.tray_title_view {
+                view.refresh_icon();
+            }
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -529,6 +533,7 @@ fn format_cps(value: f64) -> String {
 }
 
 #[cfg(not(target_os = "windows"))]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn format_title(
     stats: &TrayStats,
     first: TrayBadgeMetric,
@@ -551,8 +556,8 @@ fn metric_line(stats: &TrayStats, metric: TrayBadgeMetric) -> Option<String> {
 fn metric_unit(metric: TrayBadgeMetric) -> &'static str {
     match metric {
         TrayBadgeMetric::Connections => "连接",
-        TrayBadgeMetric::TotalTps => "tps",
-        TrayBadgeMetric::TotalCps => "cps",
+        TrayBadgeMetric::TotalTps => "TPS",
+        TrayBadgeMetric::TotalCps => "CPS",
         TrayBadgeMetric::TodayRequests => "请求",
         TrayBadgeMetric::KeepaliveSessions => "会话",
         TrayBadgeMetric::None => "",
@@ -718,7 +723,7 @@ mod tests {
                 TrayBadgeMetric::TotalCps
             )
             .as_deref(),
-            Some("12 tps\n46 cps")
+            Some("12 TPS\n46 CPS")
         );
     }
 
