@@ -4,9 +4,9 @@ use resvg::{tiny_skia, usvg};
 
 const APP_ICON_SIZE: u32 = 256;
 const TRAY_ICON_SIZE: u32 = 32;
-const BADGE_CENTER_X: f32 = 22.0;
-const BADGE_CENTER_Y: f32 = 22.0;
-const BADGE_RADIUS: f32 = 10.0;
+const ICON_AREA_HEIGHT: usize = 20;
+const VALUE_AREA_TOP: f32 = 20.0;
+const VALUE_AREA_HEIGHT: f32 = 12.0;
 
 const FONT_6X8: &[(char, &[u8])] = &[
     ('0', &[0b011100, 0b100010, 0b100110, 0b101010, 0b110010, 0b100010, 0b100010, 0b011100]),
@@ -62,28 +62,28 @@ const FONT_4X6: &[(char, &[u8])] = &[
     ('.', &[0b0000, 0b0000, 0b0000, 0b0000, 0b0100, 0b0100]),
 ];
 
-struct BadgeFont {
+struct ValueFont {
     width: usize,
     height: usize,
     spacing: usize,
     glyphs: &'static [(char, &'static [u8])],
 }
 
-fn badge_font_for(text: &str) -> BadgeFont {
+fn value_font_for(text: &str) -> ValueFont {
     match text.chars().count() {
-        1..=2 => BadgeFont {
+        1..=2 => ValueFont {
             width: 6,
             height: 8,
             spacing: 1,
             glyphs: FONT_6X8,
         },
-        3 => BadgeFont {
+        3 => ValueFont {
             width: 5,
             height: 7,
             spacing: 1,
             glyphs: FONT_5X7,
         },
-        _ => BadgeFont {
+        _ => ValueFont {
             width: 4,
             height: 6,
             spacing: 0,
@@ -92,7 +92,7 @@ fn badge_font_for(text: &str) -> BadgeFont {
     }
 }
 
-impl BadgeFont {
+impl ValueFont {
     fn glyph(&self, ch: char) -> &'static [u8] {
         self.glyphs
             .iter()
@@ -119,48 +119,58 @@ pub fn app_icon() -> egui::IconData {
 }
 
 pub fn tray_icon_for_theme(dark: bool) -> anyhow::Result<tray_icon::Icon> {
-    let svg = if dark { TRAY_ICON_LIGHT_SVG } else { TRAY_ICON_SVG };
-    let rgba = render_svg(svg, TRAY_ICON_SIZE)?;
-    tray_icon::Icon::from_rgba(rgba, TRAY_ICON_SIZE, TRAY_ICON_SIZE).map_err(Into::into)
+    tray_icon_with_value(dark, None)
 }
 
-pub fn tray_icon_with_badge(
+pub fn tray_icon_with_value(
     dark: bool,
-    badge: Option<&str>,
-    template: bool,
+    value: Option<&str>,
 ) -> anyhow::Result<tray_icon::Icon> {
-    let rgba = tray_icon_rgba(dark, badge, template)?;
+    let rgba = tray_icon_value_rgba(dark, value)?;
     tray_icon::Icon::from_rgba(rgba, TRAY_ICON_SIZE, TRAY_ICON_SIZE).map_err(Into::into)
 }
 
-pub fn tray_icon_rgba(dark: bool, badge: Option<&str>, template: bool) -> anyhow::Result<Vec<u8>> {
-    let svg = if dark { TRAY_ICON_LIGHT_SVG } else { TRAY_ICON_SVG };
+fn tray_icon_value_rgba(dark: bool, value: Option<&str>) -> anyhow::Result<Vec<u8>> {
+    let svg = if value.is_some() {
+        if dark { TRAY_ICON_SVG } else { TRAY_ICON_LIGHT_SVG }
+    } else if dark {
+        TRAY_ICON_LIGHT_SVG
+    } else {
+        TRAY_ICON_SVG
+    };
     let mut pixmap = render_svg_pixmap(svg, TRAY_ICON_SIZE)?;
-    if let Some(text) = badge.filter(|text| !text.is_empty()) {
-        draw_badge(&mut pixmap, text, template);
+    if let Some(text) = value.filter(|text| !text.is_empty()) {
+        draw_value_area(&mut pixmap, text, dark);
     }
     Ok(demultiply_rgba(&pixmap))
 }
 
-fn draw_badge(pixmap: &mut tiny_skia::Pixmap, text: &str, template: bool) {
-    if let Some(path) =
-        tiny_skia::PathBuilder::from_circle(BADGE_CENTER_X, BADGE_CENTER_Y, BADGE_RADIUS)
-    {
-        let mut paint = tiny_skia::Paint::default();
-        paint.set_color_rgba8(0xe5, 0x48, 0x4d, 0xff);
-        pixmap.fill_path(
-            &path,
-            &paint,
-            tiny_skia::FillRule::Winding,
-            tiny_skia::Transform::identity(),
-            None,
-        );
+fn draw_value_area(pixmap: &mut tiny_skia::Pixmap, text: &str, dark: bool) {
+    let icon_area = pixmap.data()[..ICON_AREA_HEIGHT * TRAY_ICON_SIZE as usize * 4].to_vec();
+    let whole = tiny_skia::Rect::from_xywh(
+        0.0,
+        0.0,
+        TRAY_ICON_SIZE as f32,
+        TRAY_ICON_SIZE as f32,
+    )
+    .expect("whole icon rect is valid");
+    let (bg_r, bg_g, bg_b) = if dark { (255, 255, 255) } else { (25, 25, 25) };
+    let mut paint = tiny_skia::Paint::default();
+    paint.set_color_rgba8(bg_r, bg_g, bg_b, 255);
+    pixmap.fill_rect(whole, &paint, tiny_skia::Transform::identity(), None);
+    for (offset, pixel) in icon_area.chunks_exact(4).enumerate() {
+        if pixel[3] > 0 {
+            let target = offset * 4;
+            pixmap.data_mut()[target..target + 4].copy_from_slice(pixel);
+        }
     }
-    let font = badge_font_for(text);
+
+    let font = value_font_for(text);
     let glyphs = text.chars().map(|ch| font.glyph(ch)).collect::<Vec<_>>();
     let width = glyphs.len() * font.width + (glyphs.len().saturating_sub(1)) * font.spacing;
-    let start_x = BADGE_CENTER_X as i32 - (width / 2) as i32;
-    let start_y = BADGE_CENTER_Y as i32 - (font.height / 2) as i32;
+    let start_x = (TRAY_ICON_SIZE as i32 - width as i32) / 2;
+    let start_y = VALUE_AREA_TOP as i32 + ((VALUE_AREA_HEIGHT as i32 - font.height as i32) / 2);
+    let (fg_r, fg_g, fg_b) = if dark { (25, 25, 25) } else { (255, 255, 255) };
     for (glyph_index, glyph) in glyphs.iter().enumerate() {
         for row_index in 0..font.height {
             let bits = glyph.get(row_index).copied().unwrap_or(0);
@@ -168,31 +178,21 @@ fn draw_badge(pixmap: &mut tiny_skia::Pixmap, text: &str, template: bool) {
                 if bits & (1 << (font.width - 1 - column)) == 0 {
                     continue;
                 }
-                let x = start_x
-                    + (glyph_index * (font.width + font.spacing)) as i32
-                    + column as i32;
+                let x = start_x + (glyph_index * (font.width + font.spacing)) as i32 + column as i32;
                 let y = start_y + row_index as i32;
-                set_badge_pixel(pixmap, x, y, template);
+                set_value_pixel(pixmap, x, y, fg_r, fg_g, fg_b);
             }
         }
     }
 }
 
-fn set_badge_pixel(pixmap: &mut tiny_skia::Pixmap, x: i32, y: i32, template: bool) {
-    if x < 0
-        || y < 0
-        || x >= TRAY_ICON_SIZE as i32
-        || y >= TRAY_ICON_SIZE as i32
-    {
+fn set_value_pixel(pixmap: &mut tiny_skia::Pixmap, x: i32, y: i32, r: u8, g: u8, b: u8) {
+    if x < 0 || y < 0 || x >= TRAY_ICON_SIZE as i32 || y >= TRAY_ICON_SIZE as i32 {
         return;
     }
     let offset = ((y * TRAY_ICON_SIZE as i32 + x) * 4) as usize;
     let data = pixmap.data_mut();
-    if template {
-        data[offset..offset + 4].copy_from_slice(&[0, 0, 0, 0]);
-    } else {
-        data[offset..offset + 4].copy_from_slice(&[255, 255, 255, 255]);
-    }
+    data[offset..offset + 4].copy_from_slice(&[r, g, b, 255]);
 }
 
 fn render_svg(svg: &str, size: u32) -> anyhow::Result<Vec<u8>> {
@@ -240,36 +240,43 @@ mod tests {
     }
 
     #[test]
-    fn tray_icon_badge_overlay_changes_pixels() {
-        let plain = tray_icon_rgba(false, None, false).unwrap();
-        let badge = tray_icon_rgba(false, Some("3"), false).unwrap();
-        let template_badge = tray_icon_rgba(false, Some("3"), true).unwrap();
+    fn value_area_covers_bottom_of_icon() {
+        let plain = tray_icon_value_rgba(false, None).unwrap();
+        let with_value = tray_icon_value_rgba(false, Some("3")).unwrap();
 
-        assert_eq!(plain.len(), badge.len());
-        assert_ne!(plain, badge);
-        assert_ne!(badge, template_badge);
-        assert!(badge.chunks_exact(4).any(|pixel| pixel[3] > 0));
+        assert_ne!(plain, with_value);
+        let corner = &with_value[..4];
+        assert_eq!(corner[3], 255, "whole icon should be wrapped by value area");
+        let bottom = &with_value[(26 * TRAY_ICON_SIZE as usize + 16) * 4..];
+        assert_eq!(bottom[3], 255);
+        assert!(bottom[0] < 100, "light theme value area should be dark");
     }
 
     #[test]
-    fn badge_pixels_fill_bottom_right_corner() {
-        let badge = tray_icon_rgba(false, Some("3"), false).unwrap();
-        let offset = (BADGE_CENTER_Y as usize - 7) * TRAY_ICON_SIZE as usize
-            + BADGE_CENTER_X as usize;
-        let pixel = &badge[offset * 4..offset * 4 + 4];
-
-        assert_eq!(pixel[3], 255);
-        assert!(pixel[0] > 200);
-        assert!(pixel[1] < 120);
-    }
-
-    #[test]
-    fn badge_text_renders_white_pixels() {
-        let badge = tray_icon_rgba(false, Some("3"), false).unwrap();
-        let white = badge
+    fn value_text_renders_contrast_pixels() {
+        let dark_icon = tray_icon_value_rgba(true, Some("3")).unwrap();
+        let dark_white = dark_icon
             .chunks_exact(4)
-            .filter(|pixel| pixel[0] == 255 && pixel[1] == 255 && pixel[2] == 255 && pixel[3] == 255)
+            .filter(|pixel| pixel[0] == 255 && pixel[1] == 255 && pixel[2] == 255)
             .count();
-        assert!(white > 0, "no white text pixels rendered");
+        let dark_text = dark_icon
+            .chunks_exact(4)
+            .filter(|pixel| pixel[0] == 25 && pixel[1] == 25 && pixel[2] == 25)
+            .count();
+        assert!(dark_white > 0, "value area background should be white");
+        assert!(dark_text > 0, "dark theme text should be dark");
+        let dark_icon_area = dark_icon[..ICON_AREA_HEIGHT * TRAY_ICON_SIZE as usize * 4]
+            .chunks_exact(4)
+            .filter(|pixel| pixel[3] > 0 && pixel[0] < 200 && pixel[1] < 200 && pixel[2] < 200)
+            .count();
+        assert!(dark_icon_area > 0, "dark theme icon should stay visible");
+
+        let light_icon = tray_icon_value_rgba(false, Some("3")).unwrap();
+        let light_text = light_icon
+            .chunks_exact(4)
+            .filter(|pixel| pixel[0] == 255 && pixel[1] == 255 && pixel[2] == 255)
+            .count();
+        assert!(light_text > 0, "light theme text should be white");
     }
+
 }

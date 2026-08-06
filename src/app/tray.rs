@@ -175,8 +175,9 @@ pub struct TrayController {
     badge_metric: TrayBadgeMetric,
     dark: bool,
     last_tooltip: String,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     last_title: Option<String>,
+    #[cfg(target_os = "windows")]
     last_badge_text: Option<String>,
     last_stats: Option<TrayStats>,
 }
@@ -222,7 +223,7 @@ impl TrayController {
             .iter()
             .map(|(_, item)| item as &dyn IsMenuItem)
             .collect::<Vec<_>>();
-        let badge_submenu = Submenu::with_items("角标显示", true, &badge_item_refs)?;
+        let badge_submenu = Submenu::with_items("指标显示", true, &badge_item_refs)?;
 
         let menu = Menu::new();
         menu.append(&open_item)?;
@@ -258,8 +259,9 @@ impl TrayController {
             badge_metric,
             dark,
             last_tooltip: String::new(),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             last_title: None,
+            #[cfg(target_os = "windows")]
             last_badge_text: None,
             last_stats: None,
         })
@@ -284,15 +286,10 @@ impl TrayController {
             item.set_checked(*item_metric == metric);
         }
         if let Some(stats) = self.last_stats {
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             self.update_title(&stats);
-            let badge_text = stats.badge_text(metric);
-            if badge_text != self.last_badge_text {
-                self.last_badge_text = badge_text.clone();
-                if let Err(err) = self.update_icon() {
-                    tracing::warn!(error = %err, "failed to update tray icon badge");
-                }
-            }
+            #[cfg(target_os = "windows")]
+            self.update_badge_text(&stats);
         }
     }
 
@@ -305,23 +302,20 @@ impl TrayController {
                 tracing::warn!(error = %err, "failed to update tray tooltip");
             }
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         self.update_title(&stats);
-        let badge_text = stats.badge_text(self.badge_metric);
-        if badge_text != self.last_badge_text {
-            self.last_badge_text = badge_text.clone();
-            if let Err(err) = self.update_icon() {
-                tracing::warn!(error = %err, "failed to update tray icon badge");
-            }
-        }
+        #[cfg(target_os = "windows")]
+        self.update_badge_text(&stats);
     }
 
     fn update_icon(&self) -> anyhow::Result<()> {
-        let tray_icon = icon::tray_icon_with_badge(
+        #[cfg(target_os = "windows")]
+        let tray_icon = icon::tray_icon_with_value(
             self.dark,
             self.last_badge_text.as_deref(),
-            cfg!(target_os = "macos"),
         )?;
+        #[cfg(not(target_os = "windows"))]
+        let tray_icon = icon::tray_icon_for_theme(self.dark)?;
         #[cfg(target_os = "macos")]
         {
             self.tray_icon
@@ -334,7 +328,19 @@ impl TrayController {
         Ok(())
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(target_os = "windows")]
+    fn update_badge_text(&mut self, stats: &TrayStats) {
+        let badge_text = stats.badge_text(self.badge_metric);
+        if badge_text == self.last_badge_text {
+            return;
+        }
+        self.last_badge_text = badge_text;
+        if let Err(err) = self.update_icon() {
+            tracing::warn!(error = %err, "failed to update tray icon value");
+        }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn update_title(&mut self, stats: &TrayStats) {
         let title = format_title(stats, self.badge_metric);
         if title != self.last_title {
@@ -467,7 +473,7 @@ fn format_cps(value: f64) -> String {
     format!("~{}", value.round())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn format_title(stats: &TrayStats, metric: TrayBadgeMetric) -> Option<String> {
     let text = stats.badge_text(metric)?;
     let unit = match metric {
