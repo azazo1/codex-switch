@@ -230,9 +230,8 @@ fn upstream_available(upstream: &Upstream, endpoint_kind: OpenAiEndpoint, compac
                 upstream.kind == UpstreamKind::CodexOauth || !upstream.base_url.is_empty()
             }
             OpenAiEndpoint::AnthropicCountTokens => {
-                (upstream.kind == UpstreamKind::CodexOauth
-                    || upstream.wire_api != WireApi::ChatCompletions)
-                    && (upstream.kind == UpstreamKind::CodexOauth || !upstream.base_url.is_empty())
+                upstream.kind == UpstreamKind::CodexOauth
+                    || upstream.wire_api != WireApi::ChatCompletions && !upstream.base_url.is_empty()
             }
             OpenAiEndpoint::Images => {
                 upstream.kind == UpstreamKind::RelayApiKey
@@ -260,4 +259,66 @@ fn format_route_path(route_path: &[ScheduleRouteTraceStep]) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::models::BalanceProvider;
+
+    fn upstream(kind: UpstreamKind, wire_api: WireApi, base_url: &str) -> Upstream {
+        let mut upstream = Upstream::new_relay(
+            "test".to_string(),
+            base_url.to_string(),
+            wire_api,
+            false,
+            BalanceProvider::Auto,
+        );
+        upstream.kind = kind;
+        upstream
+    }
+
+    #[test]
+    fn count_tokens_availability_follows_oauth_or_non_chat_with_base_url() {
+        let oauth =
+            upstream(UpstreamKind::CodexOauth, WireApi::ChatCompletions, "");
+        assert!(upstream_available(
+            &oauth,
+            OpenAiEndpoint::AnthropicCountTokens,
+            false
+        ));
+
+        let non_chat_with_url = upstream(
+            UpstreamKind::RelayApiKey,
+            WireApi::AnthropicMessages,
+            "https://example.com",
+        );
+        assert!(upstream_available(
+            &non_chat_with_url,
+            OpenAiEndpoint::AnthropicCountTokens,
+            false
+        ));
+
+        let chat_with_url = upstream(
+            UpstreamKind::RelayApiKey,
+            WireApi::ChatCompletions,
+            "https://example.com",
+        );
+        assert!(!upstream_available(
+            &chat_with_url,
+            OpenAiEndpoint::AnthropicCountTokens,
+            false
+        ));
+
+        let non_chat_without_url = upstream(
+            UpstreamKind::RelayApiKey,
+            WireApi::AnthropicMessages,
+            "",
+        );
+        assert!(!upstream_available(
+            &non_chat_without_url,
+            OpenAiEndpoint::AnthropicCountTokens,
+            false
+        ));
+    }
 }

@@ -420,6 +420,7 @@ fn init_file_tracing(log_path: &Path, env_filter: EnvFilter, append: bool) -> an
     Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
 fn init_stderr_tracing(env_filter: EnvFilter) -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(env_filter)
@@ -507,7 +508,7 @@ mod tests {
         writer.flush().unwrap();
 
         let current = fs::read_to_string(&log_path).unwrap();
-        let rotated = fs::read_to_string(&writer.filename_for(1)).unwrap();
+        let rotated = fs::read_to_string(writer.filename_for(1)).unwrap();
         assert!(current.contains("second line"));
         assert!(rotated.contains("first line"));
     }

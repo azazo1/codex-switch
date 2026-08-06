@@ -912,6 +912,7 @@ dependencies = [
  "tray-icon",
  "url",
  "uuid",
+ "windows-registry",
  "winresource",
 ]
 

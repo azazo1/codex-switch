@@ -692,6 +692,13 @@ impl CodexSwitchApp {
             TrayCommand::Quit => {
                 self.exit_app(ctx);
             }
+            TrayCommand::ThemeChanged(dark) => {
+                if let Some(tray) = &mut self.tray
+                    && let Err(err) = tray.set_theme(dark)
+                {
+                    tracing::warn!(error = %err, "failed to update tray icon for theme");
+                }
+            }
         }
     }
 

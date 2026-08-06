@@ -39,5 +39,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSRunningApplication"] }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-registry = "0.6.1"
+
 [build-dependencies]
 winresource = { version = "0.1.31", default-features = false }

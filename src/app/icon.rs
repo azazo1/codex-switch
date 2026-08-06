@@ -7,6 +7,7 @@ const TRAY_ICON_SIZE: u32 = 32;
 
 const APP_ICON_SVG: &str = include_str!("../../assets/app-icon.svg");
 const TRAY_ICON_SVG: &str = include_str!("../../assets/tray-icon.svg");
+const TRAY_ICON_LIGHT_SVG: &str = include_str!("../../assets/tray-icon-light.svg");
 
 pub fn app_icon() -> egui::IconData {
     let rgba = render_svg(APP_ICON_SVG, APP_ICON_SIZE).unwrap_or_else(|err| {
@@ -20,8 +21,9 @@ pub fn app_icon() -> egui::IconData {
     }
 }
 
-pub fn tray_icon() -> anyhow::Result<tray_icon::Icon> {
-    let rgba = render_svg(TRAY_ICON_SVG, TRAY_ICON_SIZE)?;
+pub fn tray_icon_for_theme(dark: bool) -> anyhow::Result<tray_icon::Icon> {
+    let svg = if dark { TRAY_ICON_LIGHT_SVG } else { TRAY_ICON_SVG };
+    let rgba = render_svg(svg, TRAY_ICON_SIZE)?;
     tray_icon::Icon::from_rgba(rgba, TRAY_ICON_SIZE, TRAY_ICON_SIZE).map_err(Into::into)
 }
 
@@ -59,5 +61,9 @@ mod tests {
         let tray = render_svg(TRAY_ICON_SVG, TRAY_ICON_SIZE).unwrap();
         assert_eq!(tray.len(), (TRAY_ICON_SIZE * TRAY_ICON_SIZE * 4) as usize);
         assert!(tray.chunks_exact(4).any(|pixel| pixel[3] > 0));
+
+        let light_tray = render_svg(TRAY_ICON_LIGHT_SVG, TRAY_ICON_SIZE).unwrap();
+        assert_eq!(light_tray.len(), (TRAY_ICON_SIZE * TRAY_ICON_SIZE * 4) as usize);
+        assert!(light_tray.chunks_exact(4).any(|pixel| pixel[3] > 0));
     }
 }
