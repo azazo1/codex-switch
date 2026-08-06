@@ -1,9 +1,7 @@
 use std::cell::Cell;
 
 use objc2::rc::Retained;
-use objc2::{
-    define_class, msg_send, AllocAnyThread, DeclaredClass, MainThreadMarker, Message,
-};
+use objc2::{define_class, msg_send, DeclaredClass, MainThreadMarker};
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSColor, NSFont, NSLineBreakMode, NSStatusItem, NSTextAlignment,
     NSTextField, NSView,
@@ -28,10 +26,10 @@ define_class!(
     #[unsafe(super(NSView))]
     #[name = "CodexSwitchTrayTitleView"]
     #[ivars = TrayTitleViewIvars]
-    struct TrayTitleView;
+    pub(crate) struct TrayTitleView;
 
     impl TrayTitleView {
-        #[unsafe(method(hitTest:))]
+        #[unsafe(method_id(hitTest:))]
         fn hit_test(&self, _point: NSPoint) -> Option<Retained<NSView>> {
             None
         }
@@ -97,17 +95,17 @@ impl TrayTitleView {
         self.apply_label(&self.ivars().first_label, first, &font, &color);
         self.apply_label(&self.ivars().second_label, second, &font, &color);
 
-        let mut max_text_width = 0.0;
-        let mut measured_height = font_size * 1.1;
-        for (label, text) in [
-            (self.ivars().first_label.as_ref(), first),
-            (self.ivars().second_label.as_ref(), second),
-        ] {
-            if text.is_some() {
-                let size = label.frame().size;
-                max_text_width = max_text_width.max(size.width);
-                measured_height = measured_height.max(size.height);
-            }
+        let mut max_text_width: f64 = 0.0;
+        let mut measured_height: f64 = font_size * 1.1;
+        if first.is_some() {
+            let size = self.ivars().first_label.frame().size;
+            max_text_width = max_text_width.max(size.width);
+            measured_height = measured_height.max(size.height);
+        }
+        if second.is_some() {
+            let size = self.ivars().second_label.frame().size;
+            max_text_width = max_text_width.max(size.width);
+            measured_height = measured_height.max(size.height);
         }
 
         let line_height = measured_height;
