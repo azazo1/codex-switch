@@ -1,7 +1,15 @@
 use super::icon;
+#[cfg(target_os = "macos")]
+use crate::app::tray_title;
+#[cfg(target_os = "macos")]
+use crate::app::tray_title::TrayTitleView;
 #[cfg(target_os = "windows")]
 use anyhow::Context;
 use eframe::egui;
+#[cfg(target_os = "macos")]
+use objc2::rc::Retained;
+#[cfg(target_os = "macos")]
+use objc2::MainThreadMarker;
 use std::sync::Arc;
 #[cfg(target_os = "windows")]
 use std::time::Duration;
@@ -201,9 +209,11 @@ pub struct TrayController {
     secondary_badge_metric: TrayBadgeMetric,
     dark: bool,
     last_tooltip: String,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     last_title: String,
     last_stats: Option<TrayStats>,
+    #[cfg(target_os = "macos")]
+    tray_title_view: Option<Retained<TrayTitleView>>,
 }
 
 impl TrayController {
@@ -280,6 +290,15 @@ impl TrayController {
 
         spawn_theme_watcher(send_command)?;
 
+        #[cfg(target_os = "macos")]
+        let tray_title_view = {
+            let mtm =
+                MainThreadMarker::new().expect("tray initialization must run on main thread");
+            tray_icon
+                .ns_status_item()
+                .map(|status_item| tray_title::install(&status_item, mtm))
+        };
+
         tracing::info!("system tray initialized");
         Ok(Self {
             tray_icon,
@@ -292,9 +311,11 @@ impl TrayController {
             secondary_badge_metric,
             dark,
             last_tooltip: String::new(),
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(target_os = "linux")]
             last_title: String::new(),
             last_stats: None,
+            #[cfg(target_os = "macos")]
+            tray_title_view,
         })
     }
 
@@ -367,10 +388,19 @@ impl TrayController {
         Ok(())
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     fn update_title(&mut self, stats: &TrayStats) {
-        let title = format_title(stats, self.badge_metric, self.secondary_badge_metric)
-            .unwrap_or_default();
+        let first = metric_line(stats, self.badge_metric);
+        let second = metric_line(stats, self.secondary_badge_metric);
+        if let Some(view) = &self.tray_title_view {
+            view.update(first.as_deref(), second.as_deref());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn update_title(&mut self, stats: &TrayStats) {
+        let title =
+            format_title(stats, self.badge_metric, self.secondary_badge_metric).unwrap_or_default();
         if title != self.last_title {
             self.last_title = title.clone();
             self.tray_icon.set_title(Some(title));
@@ -504,14 +534,17 @@ fn format_title(
     first: TrayBadgeMetric,
     second: TrayBadgeMetric,
 ) -> Option<String> {
-    let mut lines = Vec::with_capacity(2);
-    for metric in [first, second] {
-        let Some(text) = stats.badge_text(metric) else {
-            continue;
-        };
-        lines.push(format!("{text} {}", metric_unit(metric)));
-    }
+    let lines = [first, second]
+        .into_iter()
+        .filter_map(|metric| metric_line(stats, metric))
+        .collect::<Vec<_>>();
     (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn metric_line(stats: &TrayStats, metric: TrayBadgeMetric) -> Option<String> {
+    let text = stats.badge_text(metric)?;
+    Some(format!("{text} {}", metric_unit(metric)))
 }
 
 #[cfg(not(target_os = "windows"))]

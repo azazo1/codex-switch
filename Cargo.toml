@@ -37,7 +37,25 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSRunningApplication"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "NSApplication",
+    "NSButton",
+    "NSCell",
+    "NSColor",
+    "NSControl",
+    "NSFont",
+    "NSParagraphStyle",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSStatusBar",
+    "NSStatusBarButton",
+    "NSStatusItem",
+    "NSText",
+    "NSTextField",
+    "NSView",
+    "objc2-core-foundation",
+] }
+objc2-foundation = { version = "0.3.2", features = ["NSGeometry", "NSString"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-registry = "0.6.1"
