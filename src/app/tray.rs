@@ -5,11 +5,9 @@ use eframe::egui;
 use std::sync::Arc;
 #[cfg(target_os = "windows")]
 use std::time::Duration;
-use tray_icon::menu::{
-    Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem,
-};
 #[cfg(not(target_os = "windows"))]
 use tray_icon::menu::{CheckMenuItem, IsMenuItem, Submenu};
+use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use crate::live::LiveRequestSnapshot;
@@ -128,10 +126,7 @@ impl TrayStats {
             today_requests,
             keepalive_sessions,
         };
-        for item in snapshots
-            .iter()
-            .filter(|item| item.finished_at.is_none())
-        {
+        for item in snapshots.iter().filter(|item| item.finished_at.is_none()) {
             stats.active_connections += 1;
             if let Some(rate) = item.output_rate {
                 stats.total_tps += rate.estimated_tokens_per_second;
@@ -397,18 +392,14 @@ fn install_handlers(egui_ctx: egui::Context, send_command: Arc<dyn Fn(TrayComman
             BADGE_CONNECTIONS_MENU_ID => {
                 Some(TrayCommand::SetBadgeMetric(TrayBadgeMetric::Connections))
             }
-            BADGE_TOTAL_TPS_MENU_ID => {
-                Some(TrayCommand::SetBadgeMetric(TrayBadgeMetric::TotalTps))
-            }
-            BADGE_TOTAL_CPS_MENU_ID => {
-                Some(TrayCommand::SetBadgeMetric(TrayBadgeMetric::TotalCps))
-            }
+            BADGE_TOTAL_TPS_MENU_ID => Some(TrayCommand::SetBadgeMetric(TrayBadgeMetric::TotalTps)),
+            BADGE_TOTAL_CPS_MENU_ID => Some(TrayCommand::SetBadgeMetric(TrayBadgeMetric::TotalCps)),
             BADGE_TODAY_REQUESTS_MENU_ID => {
                 Some(TrayCommand::SetBadgeMetric(TrayBadgeMetric::TodayRequests))
             }
-            BADGE_KEEPALIVE_MENU_ID => {
-                Some(TrayCommand::SetBadgeMetric(TrayBadgeMetric::KeepaliveSessions))
-            }
+            BADGE_KEEPALIVE_MENU_ID => Some(TrayCommand::SetBadgeMetric(
+                TrayBadgeMetric::KeepaliveSessions,
+            )),
             _ => None,
         };
         if let Some(command) = command {
@@ -439,7 +430,11 @@ fn service_menu_text(running: bool) -> &'static str {
 }
 
 fn format_tooltip(stats: &TrayStats) -> String {
-    let service = if stats.server_running { "运行中" } else { "已停止" };
+    let service = if stats.server_running {
+        "运行中"
+    } else {
+        "已停止"
+    };
     format!(
         "Codex Switch\n服务: {service}\n活跃连接: {}\n总 TPS: {}\n总字符速率: {}\n今日请求: {}\n缓存保持会话: {}",
         stats.active_connections,
@@ -478,11 +473,7 @@ fn format_title(stats: &TrayStats, metric: TrayBadgeMetric) -> Option<String> {
 
 #[cfg(not(target_os = "windows"))]
 fn format_badge_count(value: u64) -> String {
-    if value > 99 {
-        "99+".to_string()
-    } else {
-        value.to_string()
-    }
+    value.to_string()
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -532,10 +523,7 @@ mod tests {
     #[test]
     fn badge_metric_roundtrips_through_text() {
         for metric in TrayBadgeMetric::ALL {
-            assert_eq!(
-                metric.as_str().parse::<TrayBadgeMetric>().unwrap(),
-                metric
-            );
+            assert_eq!(metric.as_str().parse::<TrayBadgeMetric>().unwrap(), metric);
             assert_eq!(metric.to_string().as_str(), metric.as_str());
         }
         assert!("unknown".parse::<TrayBadgeMetric>().is_err());
@@ -601,9 +589,7 @@ mod tests {
             Some("46")
         );
         assert_eq!(
-            stats
-                .badge_text(TrayBadgeMetric::TodayRequests)
-                .as_deref(),
+            stats.badge_text(TrayBadgeMetric::TodayRequests).as_deref(),
             Some("1.2K")
         );
         assert_eq!(
@@ -619,7 +605,7 @@ mod tests {
     fn badge_count_caps_at_ninety_nine() {
         assert_eq!(format_badge_count(0), "0");
         assert_eq!(format_badge_count(99), "99");
-        assert_eq!(format_badge_count(100), "99+");
+        assert_eq!(format_badge_count(100), "100");
     }
 
     #[cfg(not(target_os = "windows"))]
