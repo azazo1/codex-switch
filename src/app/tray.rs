@@ -6,8 +6,10 @@ use std::sync::Arc;
 #[cfg(target_os = "windows")]
 use std::time::Duration;
 use tray_icon::menu::{
-    CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu,
+    Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem,
 };
+#[cfg(not(target_os = "windows"))]
+use tray_icon::menu::{CheckMenuItem, IsMenuItem, Submenu};
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use crate::live::LiveRequestSnapshot;
@@ -34,6 +36,7 @@ pub enum TrayBadgeMetric {
 }
 
 impl TrayBadgeMetric {
+    #[cfg(not(target_os = "windows"))]
     pub const ALL: [Self; 6] = [
         Self::None,
         Self::Connections,
@@ -65,6 +68,7 @@ impl TrayBadgeMetric {
         }
     }
 
+    #[cfg(not(target_os = "windows"))]
     fn menu_id(self) -> MenuId {
         MenuId::new(match self {
             Self::None => BADGE_NONE_MENU_ID,
@@ -137,6 +141,7 @@ impl TrayStats {
         stats
     }
 
+    #[cfg(not(target_os = "windows"))]
     pub fn badge_text(self, metric: TrayBadgeMetric) -> Option<String> {
         match metric {
             TrayBadgeMetric::None => None,
@@ -171,14 +176,13 @@ pub enum TrayCommand {
 pub struct TrayController {
     tray_icon: TrayIcon,
     toggle_service_item: MenuItem,
+    #[cfg(not(target_os = "windows"))]
     badge_items: Vec<(TrayBadgeMetric, CheckMenuItem)>,
     badge_metric: TrayBadgeMetric,
     dark: bool,
     last_tooltip: String,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     last_title: Option<String>,
-    #[cfg(target_os = "windows")]
-    last_badge_text: Option<String>,
     last_stats: Option<TrayStats>,
 }
 
@@ -206,23 +210,27 @@ impl TrayController {
         let first_separator = PredefinedMenuItem::separator();
         let second_separator = PredefinedMenuItem::separator();
 
+        #[cfg(not(target_os = "windows"))]
         let mut badge_items = Vec::with_capacity(TrayBadgeMetric::ALL.len());
+        #[cfg(not(target_os = "windows"))]
         for metric in TrayBadgeMetric::ALL {
             badge_items.push((
                 metric,
                 CheckMenuItem::with_id(
-                metric.menu_id(),
-                metric.label(),
-                true,
-                metric == badge_metric,
-                None,
+                    metric.menu_id(),
+                    metric.label(),
+                    true,
+                    metric == badge_metric,
+                    None,
                 ),
             ));
         }
+        #[cfg(not(target_os = "windows"))]
         let badge_item_refs = badge_items
             .iter()
             .map(|(_, item)| item as &dyn IsMenuItem)
             .collect::<Vec<_>>();
+        #[cfg(not(target_os = "windows"))]
         let badge_submenu = Submenu::with_items("指标显示", true, &badge_item_refs)?;
 
         let menu = Menu::new();
@@ -230,6 +238,7 @@ impl TrayController {
         menu.append(&first_separator)?;
         menu.append(&toggle_service_item)?;
         menu.append(&second_separator)?;
+        #[cfg(not(target_os = "windows"))]
         menu.append(&badge_submenu)?;
         menu.append(&quit_item)?;
 
@@ -255,14 +264,13 @@ impl TrayController {
         Ok(Self {
             tray_icon,
             toggle_service_item,
+            #[cfg(not(target_os = "windows"))]
             badge_items,
             badge_metric,
             dark,
             last_tooltip: String::new(),
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             last_title: None,
-            #[cfg(target_os = "windows")]
-            last_badge_text: None,
             last_stats: None,
         })
     }
@@ -282,14 +290,15 @@ impl TrayController {
 
     pub fn set_badge_metric(&mut self, metric: TrayBadgeMetric) {
         self.badge_metric = metric;
+        #[cfg(not(target_os = "windows"))]
         for (item_metric, item) in &self.badge_items {
             item.set_checked(*item_metric == metric);
         }
-        if let Some(stats) = self.last_stats {
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
-            self.update_title(&stats);
-            #[cfg(target_os = "windows")]
-            self.update_badge_text(&stats);
+        if self.last_stats.is_some() {
+            #[cfg(not(target_os = "windows"))]
+            if let Some(stats) = self.last_stats {
+                self.update_title(&stats);
+            }
         }
     }
 
@@ -304,17 +313,9 @@ impl TrayController {
         }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         self.update_title(&stats);
-        #[cfg(target_os = "windows")]
-        self.update_badge_text(&stats);
     }
 
     fn update_icon(&self) -> anyhow::Result<()> {
-        #[cfg(target_os = "windows")]
-        let tray_icon = icon::tray_icon_with_value(
-            self.dark,
-            self.last_badge_text.as_deref(),
-        )?;
-        #[cfg(not(target_os = "windows"))]
         let tray_icon = icon::tray_icon_for_theme(self.dark)?;
         #[cfg(target_os = "macos")]
         {
@@ -326,18 +327,6 @@ impl TrayController {
             self.tray_icon.set_icon(Some(tray_icon))?;
         }
         Ok(())
-    }
-
-    #[cfg(target_os = "windows")]
-    fn update_badge_text(&mut self, stats: &TrayStats) {
-        let badge_text = stats.badge_text(self.badge_metric);
-        if badge_text == self.last_badge_text {
-            return;
-        }
-        self.last_badge_text = badge_text;
-        if let Err(err) = self.update_icon() {
-            tracing::warn!(error = %err, "failed to update tray icon value");
-        }
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -487,6 +476,7 @@ fn format_title(stats: &TrayStats, metric: TrayBadgeMetric) -> Option<String> {
     Some(format!("{text} {unit}"))
 }
 
+#[cfg(not(target_os = "windows"))]
 fn format_badge_count(value: u64) -> String {
     if value > 99 {
         "99+".to_string()
@@ -495,6 +485,7 @@ fn format_badge_count(value: u64) -> String {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 fn format_compact_count(value: u64) -> String {
     if value < 1_000 {
         return value.to_string();
@@ -537,6 +528,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn badge_metric_roundtrips_through_text() {
         for metric in TrayBadgeMetric::ALL {
@@ -583,6 +575,7 @@ mod tests {
         assert!(stats.server_running);
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn badge_text_uses_metric_specific_formatting() {
         let stats = TrayStats {
@@ -621,6 +614,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn badge_count_caps_at_ninety_nine() {
         assert_eq!(format_badge_count(0), "0");
@@ -628,6 +622,7 @@ mod tests {
         assert_eq!(format_badge_count(100), "99+");
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn compact_count_uses_short_units() {
         assert_eq!(format_compact_count(999), "999");
