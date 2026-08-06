@@ -1626,9 +1626,12 @@ mod tests {
         for part in content.iter().skip(1) {
             assert_eq!(part["type"], "input_text");
             let text = part["text"].as_str().unwrap();
-            assert!(text.starts_with("[已移除"));
+            assert!(text.starts_with("[该模型不支持"));
         }
-        assert!(content[1]["text"].as_str().unwrap().contains("图片"));
+        assert!(content[1]["text"]
+            .as_str()
+            .unwrap()
+            .contains("不支持图片输入"));
         assert!(content[3]["text"].as_str().unwrap().contains("a.pdf"));
     }
 

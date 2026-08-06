@@ -296,7 +296,7 @@ impl UpstreamEditor {
             "为非多模态模型去除多模态输入",
         )
         .on_hover_text(
-            "开启后, 当请求模型被识别为不支持图片等媒体输入时, 自动把图片, 音频和文件替换为带媒体类型与大小的文字描述.",
+            "开启后, 当请求模型被识别为不支持图片等媒体输入时, 自动把图片, 音频和文件替换为说明模型不支持对应输入, 并带媒体类型与大小的文字描述.",
         );
         ui.add_enabled_ui(self.upstream.strip_multimodal_for_text_models, |ui| {
             ui.horizontal(|ui| {

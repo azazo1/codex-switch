@@ -152,7 +152,10 @@ fn multimodal_description(part: &Value, kind: &str) -> Option<String> {
     {
         details.push(format!("detail={detail}"));
     }
-    Some(format!("[已移除{label}: {}]", details.join(", ")))
+    Some(format!(
+        "[该模型不支持{label}输入, 已移除: {}]",
+        details.join(", ")
+    ))
 }
 
 fn media_type_of(part: &Value, kind: &str) -> Option<String> {
@@ -371,8 +374,14 @@ mod tests {
         let content = value["input"][0]["content"].as_array().unwrap();
         assert_eq!(stripped.removed, 3);
         assert_eq!(content[0]["text"], "describe this");
-        assert!(content[1]["text"].as_str().unwrap().contains("图片"));
-        assert!(content[2]["text"].as_str().unwrap().contains("音频"));
+        assert!(content[1]["text"]
+            .as_str()
+            .unwrap()
+            .contains("不支持图片输入"));
+        assert!(content[2]["text"]
+            .as_str()
+            .unwrap()
+            .contains("不支持音频输入"));
         assert!(content[3]["text"].as_str().unwrap().contains("a.pdf"));
     }
 
@@ -391,6 +400,10 @@ mod tests {
         let value: Value = serde_json::from_slice(&stripped.body).unwrap();
         assert_eq!(stripped.removed, 1);
         assert_eq!(value["messages"][0]["content"][1]["type"], "text");
+        assert!(value["messages"][0]["content"][1]["text"]
+            .as_str()
+            .unwrap()
+            .contains("不支持图片输入"));
         assert!(value["messages"][0]["content"][1]["text"]
             .as_str()
             .unwrap()
@@ -416,7 +429,7 @@ mod tests {
         assert!(value["messages"][0]["content"][2]["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("图片"));
+            .contains("不支持图片输入"));
     }
 
     #[test]
