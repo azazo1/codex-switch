@@ -42,11 +42,15 @@ fn main() -> eframe::Result<()> {
     }
     let _ = logging::set_debug_log_enabled(rotation_config.enabled);
 
+    let persistence_path = app::data_dir()
+        .expect("failed to resolve application data directory")
+        .join("window-state.ron");
     let native_options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Codex Switch")
             .with_app_id("codex-switch")
             .with_icon(app::app_icon()),
+        persistence_path: Some(persistence_path),
         ..Default::default()
     };
     eframe::run_native(
