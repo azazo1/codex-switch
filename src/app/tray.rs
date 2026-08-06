@@ -15,12 +15,6 @@ use crate::live::LiveRequestSnapshot;
 const OPEN_MENU_ID: &str = "codex-switch-open-window";
 const TOGGLE_SERVICE_MENU_ID: &str = "codex-switch-toggle-service";
 const QUIT_MENU_ID: &str = "codex-switch-quit";
-const BADGE_NONE_MENU_ID: &str = "codex-switch-badge-none";
-const BADGE_CONNECTIONS_MENU_ID: &str = "codex-switch-badge-connections";
-const BADGE_TOTAL_TPS_MENU_ID: &str = "codex-switch-badge-total-tps";
-const BADGE_TOTAL_CPS_MENU_ID: &str = "codex-switch-badge-total-cps";
-const BADGE_TODAY_REQUESTS_MENU_ID: &str = "codex-switch-badge-today-requests";
-const BADGE_KEEPALIVE_MENU_ID: &str = "codex-switch-badge-keepalive-sessions";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TrayBadgeMetric {
@@ -66,17 +60,6 @@ impl TrayBadgeMetric {
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
-    fn menu_id(self) -> MenuId {
-        MenuId::new(match self {
-            Self::None => BADGE_NONE_MENU_ID,
-            Self::Connections => BADGE_CONNECTIONS_MENU_ID,
-            Self::TotalTps => BADGE_TOTAL_TPS_MENU_ID,
-            Self::TotalCps => BADGE_TOTAL_CPS_MENU_ID,
-            Self::TodayRequests => BADGE_TODAY_REQUESTS_MENU_ID,
-            Self::KeepaliveSessions => BADGE_KEEPALIVE_MENU_ID,
-        })
-    }
 }
 
 impl std::fmt::Display for TrayBadgeMetric {
@@ -99,6 +82,42 @@ impl std::str::FromStr for TrayBadgeMetric {
             _ => Err(format!("unknown tray badge metric: {value}")),
         }
     }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn metric_menu_id(metric: TrayBadgeMetric, secondary: bool) -> MenuId {
+    let suffix = if secondary { "-2" } else { "" };
+    MenuId::new(format!("codex-switch-badge-{}{}", metric.as_str(), suffix))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn metric_from_menu_id(id: &str) -> Option<(TrayBadgeMetric, bool)> {
+    let (base, secondary) = match id.strip_suffix("-2") {
+        Some(base) => (base, true),
+        None => (id, false),
+    };
+    let metric = base.strip_prefix("codex-switch-badge-")?.parse().ok()?;
+    Some((metric, secondary))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn metric_items(
+    current: TrayBadgeMetric,
+    secondary: bool,
+) -> Vec<(TrayBadgeMetric, CheckMenuItem)> {
+    TrayBadgeMetric::ALL
+        .into_iter()
+        .map(|metric| {
+            let item = CheckMenuItem::with_id(
+                metric_menu_id(metric, secondary),
+                metric.label(),
+                true,
+                metric == current,
+                None,
+            );
+            (metric, item)
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -165,19 +184,25 @@ pub enum TrayCommand {
     ToggleService,
     Quit,
     ThemeChanged(bool),
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     SetBadgeMetric(TrayBadgeMetric),
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    SetBadgeMetricSecondary(TrayBadgeMetric),
 }
 
 pub struct TrayController {
     tray_icon: TrayIcon,
     toggle_service_item: MenuItem,
     #[cfg(not(target_os = "windows"))]
-    badge_items: Vec<(TrayBadgeMetric, CheckMenuItem)>,
+    first_badge_items: Vec<(TrayBadgeMetric, CheckMenuItem)>,
+    #[cfg(not(target_os = "windows"))]
+    second_badge_items: Vec<(TrayBadgeMetric, CheckMenuItem)>,
     badge_metric: TrayBadgeMetric,
+    secondary_badge_metric: TrayBadgeMetric,
     dark: bool,
     last_tooltip: String,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    last_title: Option<String>,
+    last_title: String,
     last_stats: Option<TrayStats>,
 }
 
@@ -185,6 +210,7 @@ impl TrayController {
     pub fn new<F>(
         server_running: bool,
         badge_metric: TrayBadgeMetric,
+        secondary_badge_metric: TrayBadgeMetric,
         egui_ctx: egui::Context,
         send_command: F,
     ) -> anyhow::Result<Self>
@@ -206,27 +232,24 @@ impl TrayController {
         let second_separator = PredefinedMenuItem::separator();
 
         #[cfg(not(target_os = "windows"))]
-        let mut badge_items = Vec::with_capacity(TrayBadgeMetric::ALL.len());
+        let first_badge_items = metric_items(badge_metric, false);
         #[cfg(not(target_os = "windows"))]
-        for metric in TrayBadgeMetric::ALL {
-            badge_items.push((
-                metric,
-                CheckMenuItem::with_id(
-                    metric.menu_id(),
-                    metric.label(),
-                    true,
-                    metric == badge_metric,
-                    None,
-                ),
-            ));
-        }
-        #[cfg(not(target_os = "windows"))]
-        let badge_item_refs = badge_items
+        let first_badge_item_refs = first_badge_items
             .iter()
             .map(|(_, item)| item as &dyn IsMenuItem)
             .collect::<Vec<_>>();
         #[cfg(not(target_os = "windows"))]
-        let badge_submenu = Submenu::with_items("指标显示", true, &badge_item_refs)?;
+        let first_title_submenu = Submenu::with_items("标题行 1", true, &first_badge_item_refs)?;
+
+        #[cfg(not(target_os = "windows"))]
+        let second_badge_items = metric_items(secondary_badge_metric, true);
+        #[cfg(not(target_os = "windows"))]
+        let second_badge_item_refs = second_badge_items
+            .iter()
+            .map(|(_, item)| item as &dyn IsMenuItem)
+            .collect::<Vec<_>>();
+        #[cfg(not(target_os = "windows"))]
+        let second_title_submenu = Submenu::with_items("标题行 2", true, &second_badge_item_refs)?;
 
         let menu = Menu::new();
         menu.append(&open_item)?;
@@ -234,7 +257,9 @@ impl TrayController {
         menu.append(&toggle_service_item)?;
         menu.append(&second_separator)?;
         #[cfg(not(target_os = "windows"))]
-        menu.append(&badge_submenu)?;
+        menu.append(&first_title_submenu)?;
+        #[cfg(not(target_os = "windows"))]
+        menu.append(&second_title_submenu)?;
         menu.append(&quit_item)?;
 
         #[cfg(target_os = "windows")]
@@ -260,12 +285,15 @@ impl TrayController {
             tray_icon,
             toggle_service_item,
             #[cfg(not(target_os = "windows"))]
-            badge_items,
+            first_badge_items,
+            #[cfg(not(target_os = "windows"))]
+            second_badge_items,
             badge_metric,
+            secondary_badge_metric,
             dark,
             last_tooltip: String::new(),
             #[cfg(any(target_os = "macos", target_os = "linux"))]
-            last_title: None,
+            last_title: String::new(),
             last_stats: None,
         })
     }
@@ -286,14 +314,29 @@ impl TrayController {
     pub fn set_badge_metric(&mut self, metric: TrayBadgeMetric) {
         self.badge_metric = metric;
         #[cfg(not(target_os = "windows"))]
-        for (item_metric, item) in &self.badge_items {
-            item.set_checked(*item_metric == metric);
-        }
-        if self.last_stats.is_some() {
-            #[cfg(not(target_os = "windows"))]
-            if let Some(stats) = self.last_stats {
-                self.update_title(&stats);
+        {
+            for (item_metric, item) in &self.first_badge_items {
+                item.set_checked(*item_metric == metric);
             }
+            self.refresh_title_if_needed();
+        }
+    }
+
+    pub fn set_badge_metric_secondary(&mut self, metric: TrayBadgeMetric) {
+        self.secondary_badge_metric = metric;
+        #[cfg(not(target_os = "windows"))]
+        {
+            for (item_metric, item) in &self.second_badge_items {
+                item.set_checked(*item_metric == metric);
+            }
+            self.refresh_title_if_needed();
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn refresh_title_if_needed(&mut self) {
+        if let Some(stats) = self.last_stats {
+            self.update_title(&stats);
         }
     }
 
@@ -326,10 +369,11 @@ impl TrayController {
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn update_title(&mut self, stats: &TrayStats) {
-        let title = format_title(stats, self.badge_metric);
+        let title = format_title(stats, self.badge_metric, self.secondary_badge_metric)
+            .unwrap_or_default();
         if title != self.last_title {
             self.last_title = title.clone();
-            self.tray_icon.set_title(title);
+            self.tray_icon.set_title(Some(title));
         }
     }
 }
@@ -388,18 +432,15 @@ fn install_handlers(egui_ctx: egui::Context, send_command: Arc<dyn Fn(TrayComman
             OPEN_MENU_ID => Some(TrayCommand::ShowWindow),
             TOGGLE_SERVICE_MENU_ID => Some(TrayCommand::ToggleService),
             QUIT_MENU_ID => Some(TrayCommand::Quit),
-            BADGE_NONE_MENU_ID => Some(TrayCommand::SetBadgeMetric(TrayBadgeMetric::None)),
-            BADGE_CONNECTIONS_MENU_ID => {
-                Some(TrayCommand::SetBadgeMetric(TrayBadgeMetric::Connections))
-            }
-            BADGE_TOTAL_TPS_MENU_ID => Some(TrayCommand::SetBadgeMetric(TrayBadgeMetric::TotalTps)),
-            BADGE_TOTAL_CPS_MENU_ID => Some(TrayCommand::SetBadgeMetric(TrayBadgeMetric::TotalCps)),
-            BADGE_TODAY_REQUESTS_MENU_ID => {
-                Some(TrayCommand::SetBadgeMetric(TrayBadgeMetric::TodayRequests))
-            }
-            BADGE_KEEPALIVE_MENU_ID => Some(TrayCommand::SetBadgeMetric(
-                TrayBadgeMetric::KeepaliveSessions,
-            )),
+            #[cfg(not(target_os = "windows"))]
+            id => metric_from_menu_id(id).map(|(metric, secondary)| {
+                if secondary {
+                    TrayCommand::SetBadgeMetricSecondary(metric)
+                } else {
+                    TrayCommand::SetBadgeMetric(metric)
+                }
+            }),
+            #[cfg(target_os = "windows")]
             _ => None,
         };
         if let Some(command) = command {
@@ -457,18 +498,32 @@ fn format_cps(value: f64) -> String {
     format!("~{}", value.round())
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn format_title(stats: &TrayStats, metric: TrayBadgeMetric) -> Option<String> {
-    let text = stats.badge_text(metric)?;
-    let unit = match metric {
+#[cfg(not(target_os = "windows"))]
+fn format_title(
+    stats: &TrayStats,
+    first: TrayBadgeMetric,
+    second: TrayBadgeMetric,
+) -> Option<String> {
+    let mut lines = Vec::with_capacity(2);
+    for metric in [first, second] {
+        let Some(text) = stats.badge_text(metric) else {
+            continue;
+        };
+        lines.push(format!("{text} {}", metric_unit(metric)));
+    }
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn metric_unit(metric: TrayBadgeMetric) -> &'static str {
+    match metric {
         TrayBadgeMetric::Connections => "连接",
         TrayBadgeMetric::TotalTps => "tps",
         TrayBadgeMetric::TotalCps => "cps",
         TrayBadgeMetric::TodayRequests => "请求",
         TrayBadgeMetric::KeepaliveSessions => "会话",
-        TrayBadgeMetric::None => return None,
-    };
-    Some(format!("{text} {unit}"))
+        TrayBadgeMetric::None => "",
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -598,6 +653,51 @@ mod tests {
                 .as_deref(),
             Some("5")
         );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn title_supports_zero_one_or_two_metrics() {
+        let stats = TrayStats {
+            server_running: true,
+            active_connections: 3,
+            total_tps: 12.4,
+            total_cps: 45.6,
+            today_requests: 1_234,
+            keepalive_sessions: 5,
+        };
+
+        assert_eq!(format_title(&stats, TrayBadgeMetric::None, TrayBadgeMetric::None), None);
+        assert_eq!(
+            format_title(&stats, TrayBadgeMetric::Connections, TrayBadgeMetric::None)
+                .as_deref(),
+            Some("3 连接")
+        );
+        assert_eq!(
+            format_title(&stats, TrayBadgeMetric::None, TrayBadgeMetric::KeepaliveSessions)
+                .as_deref(),
+            Some("5 会话")
+        );
+        assert_eq!(
+            format_title(
+                &stats,
+                TrayBadgeMetric::TotalTps,
+                TrayBadgeMetric::TotalCps
+            )
+            .as_deref(),
+            Some("12 tps\n46 cps")
+        );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn metric_menu_ids_roundtrip() {
+        for metric in TrayBadgeMetric::ALL {
+            for secondary in [false, true] {
+                let id = metric_menu_id(metric, secondary);
+                assert_eq!(metric_from_menu_id(id.as_ref()), Some((metric, secondary)));
+            }
+        }
     }
 
     #[cfg(not(target_os = "windows"))]

@@ -384,6 +384,7 @@ pub struct CodexSwitchApp {
     tray: Option<TrayController>,
     tray_init_failed: bool,
     tray_badge_metric: TrayBadgeMetric,
+    tray_badge_metric_secondary: TrayBadgeMetric,
     last_tray_stats_refresh_at: Instant,
     exit_requested: bool,
     exit_confirm_open: bool,
@@ -497,6 +498,12 @@ impl CodexSwitchApp {
             .flatten()
             .and_then(|value| value.parse().ok())
             .unwrap_or_default();
+        let tray_badge_metric_secondary = runtime
+            .block_on(state.store.get_setting("tray_badge_metric_secondary"))
+            .ok()
+            .flatten()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(TrayBadgeMetric::None);
         let mut app = Self {
             runtime,
             state,
@@ -507,6 +514,7 @@ impl CodexSwitchApp {
             tray: None,
             tray_init_failed: false,
             tray_badge_metric,
+            tray_badge_metric_secondary,
             last_tray_stats_refresh_at: Instant::now(),
             exit_requested: false,
             exit_confirm_open: false,
@@ -652,6 +660,7 @@ impl CodexSwitchApp {
         let tray = TrayController::new(
             self.server.is_some(),
             self.tray_badge_metric,
+            self.tray_badge_metric_secondary,
             ctx.clone(),
             move |command| {
                 if let Err(err) = tx.send(UiTaskEvent::Tray(command)) {
@@ -722,12 +731,27 @@ impl CodexSwitchApp {
                         .store
                         .set_setting("tray_badge_metric", metric.as_str()),
                 ) {
-                    self.status = format!("保存托盘角标设置失败: {err}");
+                    self.status = format!("保存托盘标题行 1 设置失败: {err}");
                 } else {
-                    self.status = format!("托盘角标已切换: {}", metric.label());
+                    self.status = format!("托盘标题行 1 已切换: {}", metric.label());
                 }
                 if let Some(tray) = &mut self.tray {
                     tray.set_badge_metric(metric);
+                }
+            }
+            TrayCommand::SetBadgeMetricSecondary(metric) => {
+                self.tray_badge_metric_secondary = metric;
+                if let Err(err) = self.runtime.block_on(
+                    self.state
+                        .store
+                        .set_setting("tray_badge_metric_secondary", metric.as_str()),
+                ) {
+                    self.status = format!("保存托盘标题行 2 设置失败: {err}");
+                } else {
+                    self.status = format!("托盘标题行 2 已切换: {}", metric.label());
+                }
+                if let Some(tray) = &mut self.tray {
+                    tray.set_badge_metric_secondary(metric);
                 }
             }
         }
