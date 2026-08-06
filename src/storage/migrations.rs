@@ -73,6 +73,9 @@ impl Store {
         if self.get_setting("log_max_files").await?.is_none() {
             self.set_setting("log_max_files", "10").await?;
         }
+        if self.get_setting("tray_badge_metric").await?.is_none() {
+            self.set_setting("tray_badge_metric", "connections").await?;
+        }
         self.ensure_default_schedule_group().await?;
         Ok(())
     }

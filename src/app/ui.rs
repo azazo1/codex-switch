@@ -1,4 +1,4 @@
-use crate::app::tray::{TrayCommand, TrayController};
+use crate::app::tray::{TrayBadgeMetric, TrayCommand, TrayController, TrayStats};
 use crate::app::{http, platform, state::AppState};
 use crate::balance;
 use crate::cache_keepalive::CacheKeepaliveSessionSnapshot;
@@ -30,6 +30,7 @@ const ACTIVE_TAB_COUNT_MAX: usize = 999;
 const REQUEST_LOG_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const HIDDEN_REPAINT_INTERVAL: Duration = Duration::from_secs(5);
 const CACHE_KEEPALIVE_VISIBLE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const TRAY_STATS_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 fn model_modality_label(
     cache: &ModelCapabilityCache,
@@ -382,6 +383,8 @@ pub struct CodexSwitchApp {
     server: Option<ServerHandle>,
     tray: Option<TrayController>,
     tray_init_failed: bool,
+    tray_badge_metric: TrayBadgeMetric,
+    last_tray_stats_refresh_at: Instant,
     exit_requested: bool,
     exit_confirm_open: bool,
     delete_confirmation: Option<DeleteConfirmation>,
@@ -488,6 +491,12 @@ impl CodexSwitchApp {
         let last_seen_live_stream_version = state.events.live_stream_version();
         let last_seen_cache_keepalive_version = state.events.cache_keepalive_version();
         let last_seen_balance_snapshot_version = state.events.balance_snapshot_version();
+        let tray_badge_metric = runtime
+            .block_on(state.store.get_setting("tray_badge_metric"))
+            .ok()
+            .flatten()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_default();
         let mut app = Self {
             runtime,
             state,
@@ -497,6 +506,8 @@ impl CodexSwitchApp {
             server: None,
             tray: None,
             tray_init_failed: false,
+            tray_badge_metric,
+            last_tray_stats_refresh_at: Instant::now(),
             exit_requested: false,
             exit_confirm_open: false,
             delete_confirmation: None,
@@ -638,11 +649,16 @@ impl CodexSwitchApp {
             return;
         }
         let tx = self.task_tx.clone();
-        let tray = TrayController::new(self.server.is_some(), ctx.clone(), move |command| {
-            if let Err(err) = tx.send(UiTaskEvent::Tray(command)) {
-                tracing::debug!(error = %err, "failed to send tray command");
-            }
-        });
+        let tray = TrayController::new(
+            self.server.is_some(),
+            self.tray_badge_metric,
+            ctx.clone(),
+            move |command| {
+                if let Err(err) = tx.send(UiTaskEvent::Tray(command)) {
+                    tracing::debug!(error = %err, "failed to send tray command");
+                }
+            },
+        );
         match tray {
             Ok(tray) => {
                 self.tray = Some(tray);
@@ -699,6 +715,21 @@ impl CodexSwitchApp {
                     tracing::warn!(error = %err, "failed to update tray icon for theme");
                 }
             }
+            TrayCommand::SetBadgeMetric(metric) => {
+                self.tray_badge_metric = metric;
+                if let Err(err) = self.runtime.block_on(
+                    self.state
+                        .store
+                        .set_setting("tray_badge_metric", metric.as_str()),
+                ) {
+                    self.status = format!("保存托盘角标设置失败: {err}");
+                } else {
+                    self.status = format!("托盘角标已切换: {}", metric.label());
+                }
+                if let Some(tray) = &mut self.tray {
+                    tray.set_badge_metric(metric);
+                }
+            }
         }
     }
 
@@ -721,6 +752,24 @@ impl CodexSwitchApp {
     fn sync_tray_service_state(&mut self) {
         if let Some(tray) = &self.tray {
             tray.set_server_running(self.server.is_some());
+        }
+        self.last_tray_stats_refresh_at = Instant::now() - TRAY_STATS_REFRESH_INTERVAL;
+        self.sync_tray_stats();
+    }
+
+    fn sync_tray_stats(&mut self) {
+        if self.last_tray_stats_refresh_at.elapsed() < TRAY_STATS_REFRESH_INTERVAL {
+            return;
+        }
+        self.last_tray_stats_refresh_at = Instant::now();
+        let stats = TrayStats::from_live(
+            &self.live_connections,
+            self.stats.today_requests,
+            self.cache_keepalive_sessions.len(),
+            self.server.is_some(),
+        );
+        if let Some(tray) = &mut self.tray {
+            tray.set_stats(stats);
         }
     }
 
@@ -1068,6 +1117,7 @@ impl eframe::App for CodexSwitchApp {
         self.handle_close_request(ctx);
         self.handle_dock_reopen(ctx);
         self.maybe_auto_refresh(ctx);
+        self.sync_tray_stats();
         self.drain_task_events(ctx);
     }
 
