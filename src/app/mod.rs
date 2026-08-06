@@ -5,8 +5,6 @@ mod icon;
 mod platform;
 mod state;
 mod tray;
-#[cfg(target_os = "macos")]
-mod tray_title;
 mod ui;
 
 pub use build_info::display_version;

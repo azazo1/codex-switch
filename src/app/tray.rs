@@ -1,8 +1,8 @@
 use super::icon;
 #[cfg(target_os = "macos")]
-use crate::app::tray_title;
+use crate::app::platform::tray_title;
 #[cfg(target_os = "macos")]
-use crate::app::tray_title::TrayTitleView;
+use crate::app::platform::tray_title::TrayTitleView;
 #[cfg(target_os = "windows")]
 use anyhow::Context;
 use eframe::egui;
