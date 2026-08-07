@@ -1,3 +1,4 @@
+use super::window_state::{self, PersistedWindowSettings};
 use crate::app::tray::{TrayBadgeMetric, TrayCommand, TrayController, TrayStats};
 use crate::app::{http, platform, state::AppState};
 use crate::balance;
@@ -392,6 +393,7 @@ pub struct CodexSwitchApp {
     log_filter_open: bool,
     log_cleanup_open: bool,
     window_hidden_to_tray: bool,
+    last_good_window: Option<PersistedWindowSettings>,
     background_reopen: platform::BackgroundReopenMonitor,
     bind_addr: String,
     local_key: String,
@@ -466,10 +468,30 @@ pub struct CodexSwitchApp {
 }
 
 impl CodexSwitchApp {
-    pub fn new(runtime: Arc<Runtime>, state: AppState, egui_ctx: egui::Context) -> Self {
+    pub fn new(
+        runtime: Arc<Runtime>,
+        state: AppState,
+        egui_ctx: egui::Context,
+        storage: Option<&dyn eframe::Storage>,
+    ) -> Self {
+        let repaint_ctx = egui_ctx.clone();
         state.events.set_repaint_requester(move || {
-            egui_ctx.request_repaint();
+            repaint_ctx.request_repaint();
         });
+        let persisted_window = storage.and_then(window_state::PersistedWindowSettings::load);
+        let last_good_window = persisted_window
+            .as_ref()
+            .filter(|settings| settings.is_valid())
+            .cloned();
+        if persisted_window
+            .as_ref()
+            .is_some_and(|settings| !settings.is_valid())
+        {
+            tracing::warn!("invalid persisted window state, using default window size");
+            egui_ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
+                window_state::DEFAULT_WINDOW_SIZE,
+            ));
+        }
         let (task_tx, task_rx) = tokio::sync::mpsc::unbounded_channel();
         let bind_addr = runtime
             .block_on(state.store.get_setting("bind_addr"))
@@ -522,6 +544,7 @@ impl CodexSwitchApp {
             log_filter_open: false,
             log_cleanup_open: false,
             window_hidden_to_tray: false,
+            last_good_window,
             background_reopen: platform::BackgroundReopenMonitor::default(),
             bind_addr,
             local_key,
@@ -1135,6 +1158,11 @@ impl CodexSwitchApp {
 }
 
 impl eframe::App for CodexSwitchApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.last_good_window =
+            window_state::sanitize_on_save(storage, self.last_good_window.as_ref());
+    }
+
     // Tray 命令必须在 logic 中处理, 因为隐藏窗口不会调用 ui.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.ensure_tray(ctx);

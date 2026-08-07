@@ -6,6 +6,7 @@ mod platform;
 mod state;
 mod tray;
 mod ui;
+pub(crate) mod window_state;
 
 pub use build_info::display_version;
 pub use fonts::install_fonts;

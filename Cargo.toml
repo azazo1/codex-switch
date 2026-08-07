@@ -18,6 +18,7 @@ notify-rust = "4"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "rustls-tls-webpki-roots", "stream", "system-proxy"] }
 resvg = { version = "0.47.0", default-features = false }
 rfd = "0.15"
+ron = { version = "0.12", features = ["integer128"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

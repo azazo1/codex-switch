@@ -45,10 +45,12 @@ fn main() -> eframe::Result<()> {
     let persistence_path = app::data_dir()
         .expect("failed to resolve application data directory")
         .join("window-state.ron");
+    app::window_state::sanitize_file(&persistence_path);
     let native_options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Codex Switch")
             .with_app_id("codex-switch")
+            .with_inner_size(app::window_state::DEFAULT_WINDOW_SIZE)
             .with_icon(app::app_icon()),
         persistence_path: Some(persistence_path),
         ..Default::default()
@@ -62,6 +64,7 @@ fn main() -> eframe::Result<()> {
                 runtime,
                 app_state,
                 cc.egui_ctx.clone(),
+                cc.storage,
             )))
         }),
     )

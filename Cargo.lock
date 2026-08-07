@@ -900,6 +900,7 @@ dependencies = [
  "reqwest",
  "resvg",
  "rfd",
+ "ron",
  "serde",
  "serde_json",
  "sha2",
