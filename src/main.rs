@@ -1,4 +1,8 @@
-#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+// Debug 构建保留控制台, 方便终端里 Ctrl+C; release 使用无控制台 GUI 子系统.
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
 
 mod app;
 mod balance;
