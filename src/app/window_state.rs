@@ -8,7 +8,7 @@ use std::{
 use eframe::{Storage, egui};
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_WINDOW_SIZE: egui::Vec2 = egui::vec2(1100.0, 720.0);
+pub const DEFAULT_WINDOW_SIZE: egui::Vec2 = egui::vec2(780.0, 560.0);
 
 const WINDOW_KEY: &str = "window";
 
@@ -149,7 +149,7 @@ mod tests {
             outer_position_pixels: Some(egui::pos2(100.0, 100.0)),
             fullscreen: false,
             maximized: false,
-            inner_size_points: Some(egui::vec2(1100.0, 720.0)),
+            inner_size_points: Some(DEFAULT_WINDOW_SIZE),
         }
     }
 
