@@ -54,6 +54,12 @@ fn strip_responses_item(item: &mut Value) -> usize {
         });
         removed += 1;
     }
+    if matches!(
+        item.get("type").and_then(Value::as_str),
+        Some("function_call_output" | "custom_tool_call_output" | "tool_search_output")
+    ) {
+        removed += strip_output_field(item, "output", "text");
+    }
     removed
 }
 
@@ -64,10 +70,13 @@ fn strip_chat_messages(value: &mut Value) -> usize {
     messages
         .iter_mut()
         .map(|message| {
-            message
-                .get_mut("content")
-                .and_then(Value::as_array_mut)
-                .map_or(0, |parts| strip_content_parts(parts, "text"))
+            let mut removed = 0;
+            if let Some(parts) = message.get_mut("content").and_then(Value::as_array_mut) {
+                removed += strip_content_parts(parts, "text");
+            } else if message.get("role").and_then(Value::as_str) == Some("tool") {
+                removed += strip_output_field(message, "content", "text");
+            }
+            removed
         })
         .sum()
 }
@@ -94,10 +103,16 @@ fn strip_anthropic_content_blocks(blocks: &mut Vec<Value>) -> usize {
         if let Some(description) = multimodal_description(block, kind) {
             *block = json!({"type":"text","text":description});
             removed += 1;
-        } else if kind == "tool_result"
-            && let Some(content) = block.get_mut("content").and_then(Value::as_array_mut)
-        {
-            removed += strip_anthropic_content_blocks(content);
+        } else if kind == "tool_result" {
+            match block.get_mut("content") {
+                Some(Value::Array(content)) => {
+                    removed += strip_anthropic_content_blocks(content);
+                }
+                Some(field) => {
+                    removed += strip_embedded_media_value(field, "text");
+                }
+                None => {}
+            }
         }
     }
     removed
@@ -113,6 +128,84 @@ fn strip_content_parts(parts: &mut Vec<Value>, text_type: &str) -> usize {
         }
     }
     removed
+}
+
+fn strip_output_field(value: &mut Value, key: &str, text_type: &str) -> usize {
+    let Some(field) = value.get_mut(key) else {
+        return 0;
+    };
+    match field {
+        Value::String(text) => {
+            let (cleaned, removed) = strip_embedded_media_json(text, text_type);
+            if removed > 0 {
+                *field = Value::String(cleaned);
+            }
+            removed
+        }
+        other => strip_embedded_media_value(other, text_type),
+    }
+}
+
+fn strip_embedded_media_json(text: &str, text_type: &str) -> (String, usize) {
+    let Ok(mut value) = serde_json::from_str::<Value>(text) else {
+        return (text.to_string(), 0);
+    };
+    let removed = strip_embedded_media_value(&mut value, text_type);
+    if removed == 0 {
+        return (text.to_string(), 0);
+    }
+    (
+        serde_json::to_string(&value).unwrap_or_else(|_| text.to_string()),
+        removed,
+    )
+}
+
+fn strip_embedded_media_value(value: &mut Value, text_type: &str) -> usize {
+    match value {
+        Value::Array(items) => items
+            .iter_mut()
+            .map(|item| strip_embedded_media_value(item, text_type))
+            .sum(),
+        Value::Object(_) => {
+            let media_description = value
+                .get("type")
+                .and_then(Value::as_str)
+                .and_then(|kind| multimodal_description(value, kind));
+            if let Some(description) = media_description {
+                *value = json!({"type":text_type,"text":description});
+                return 1;
+            }
+            let mut removed = 0;
+            if let Some(content) = value.get_mut("content").and_then(Value::as_array_mut) {
+                removed += strip_content_parts(content, text_type);
+            }
+            if let Some(object) = value.as_object_mut() {
+                for (key, field) in object.iter_mut() {
+                    if key == "content" && field.is_array() {
+                        continue;
+                    }
+                    if let Value::String(text) = field {
+                        let (cleaned, count) = strip_embedded_media_json(text, text_type);
+                        if count > 0 {
+                            *field = Value::String(cleaned);
+                        }
+                        removed += count;
+                    } else {
+                        removed += strip_embedded_media_value(field, text_type);
+                    }
+                }
+            }
+            removed
+        }
+        Value::String(text) => {
+            let (cleaned, removed) = strip_embedded_media_json(text, text_type);
+            if removed > 0 {
+                *text = cleaned;
+            }
+            removed
+        }
+        _ => 0,
+    }
 }
 
 fn multimodal_description(part: &Value, kind: &str) -> Option<String> {
@@ -430,6 +523,100 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("不支持图片输入"));
+    }
+
+    #[test]
+    fn strips_media_inside_responses_tool_output() {
+        let body = json!({
+            "model":"deepseek-v4-flash",
+            "input":[
+                {
+                    "type":"function_call",
+                    "call_id":"call_1",
+                    "name":"view_image",
+                    "arguments":"{}"
+                },
+                {
+                    "type":"function_call_output",
+                    "call_id":"call_1",
+                    "output": r#"[{"detail":"high","image_url":"data:image/png;base64,aGVsbG8=","type":"input_image"}]"#
+                }
+            ]
+        });
+        let stripped =
+            strip_multimodal_input(&serde_json::to_vec(&body).unwrap(), WireApi::Responses)
+                .unwrap();
+        let value: Value = serde_json::from_slice(&stripped.body).unwrap();
+        assert_eq!(stripped.removed, 1);
+        let output = value["input"][1]["output"].as_str().unwrap();
+        assert!(!output.contains("base64"));
+        assert!(!output.contains("aGVsbG8="));
+        assert!(output.contains("不支持图片输入"));
+        assert!(output.contains("image/png"));
+    }
+
+    #[test]
+    fn strips_media_inside_chat_tool_content() {
+        let chat = json!({
+            "model":"deepseek-v4-flash",
+            "messages":[{
+                "role":"tool",
+                "tool_call_id":"call_1",
+                "content": r#"[{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}]"#
+            }]
+        });
+        let stripped =
+            strip_multimodal_input(&serde_json::to_vec(&chat).unwrap(), WireApi::ChatCompletions)
+                .unwrap();
+        let value: Value = serde_json::from_slice(&stripped.body).unwrap();
+        assert_eq!(stripped.removed, 1);
+        let content = value["messages"][0]["content"].as_str().unwrap();
+        assert!(!content.contains("example.com"));
+        assert!(content.contains("不支持图片输入"));
+        assert!(content.contains("远程"));
+    }
+
+    #[test]
+    fn strips_media_inside_anthropic_tool_result() {
+        let anthropic = json!({
+            "model":"deepseek-v4-flash",
+            "messages":[{
+                "role":"user",
+                "content":[{
+                    "type":"tool_result",
+                    "tool_use_id":"call_1",
+                    "content": r#"[{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"aGVsbG8="}}]"#
+                }]
+            }]
+        });
+        let stripped = strip_multimodal_input(
+            &serde_json::to_vec(&anthropic).unwrap(),
+            WireApi::AnthropicMessages,
+        )
+        .unwrap();
+        let value: Value = serde_json::from_slice(&stripped.body).unwrap();
+        assert_eq!(stripped.removed, 1);
+        let content = value["messages"][0]["content"][0]["content"].as_str().unwrap();
+        assert!(!content.contains("aGVsbG8="));
+        assert!(content.contains("不支持图片输入"));
+    }
+
+    #[test]
+    fn keeps_plain_tool_output_unchanged() {
+        let body = json!({
+            "model":"deepseek-v4-flash",
+            "input":[{
+                "type":"function_call_output",
+                "call_id":"call_1",
+                "output":"plain text"
+            }]
+        });
+        let stripped =
+            strip_multimodal_input(&serde_json::to_vec(&body).unwrap(), WireApi::Responses)
+                .unwrap();
+        let value: Value = serde_json::from_slice(&stripped.body).unwrap();
+        assert_eq!(stripped.removed, 0);
+        assert_eq!(value["input"][0]["output"], "plain text");
     }
 
     #[test]
