@@ -8,6 +8,10 @@ use crate::core::models::{
 use eframe::egui;
 use std::collections::BTreeSet;
 
+const ROUTE_RULE_TEXT_EDIT_MIN_WIDTH: f32 = 120.0;
+const ROUTE_RULE_TEXT_EDIT_MAX_WIDTH: f32 = 280.0;
+const ROUTE_RULE_TEXT_EDIT_PADDING: f32 = 16.0;
+
 #[derive(Clone)]
 pub(super) struct ScheduleGroupEditor {
     pub group: ScheduleGroup,
@@ -628,6 +632,7 @@ fn schedule_route_rules_form(
     egui::Grid::new(format!("route_rules_{}", editor.group.id))
         .striped(true)
         .num_columns(8)
+        .max_col_width(ROUTE_RULE_TEXT_EDIT_MAX_WIDTH)
         .spacing([12.0, 8.0])
         .show(ui, |ui| {
             ui.strong("启用");
@@ -642,8 +647,8 @@ fn schedule_route_rules_form(
 
             for rule in &mut editor.route_rules {
                 ui.checkbox(&mut rule.enabled, "");
-                ui.text_edit_singleline(&mut rule.name);
-                ui.text_edit_singleline(&mut rule.pattern);
+                route_rule_text_edit(ui, &mut rule.name);
+                route_rule_text_edit(ui, &mut rule.pattern);
                 route_target_kind_combo(ui, rule);
                 match rule.target_kind {
                     ScheduleRouteTargetKind::Group => route_target_group_combo(ui, rule, groups),
@@ -652,7 +657,7 @@ fn schedule_route_rules_form(
                     }
                 }
                 let target_model = rule.target_model.get_or_insert_with(String::new);
-                ui.text_edit_singleline(target_model);
+                route_rule_text_edit(ui, target_model);
                 ui.add(egui::DragValue::new(&mut rule.priority).speed(1));
                 if ui.button("删除").clicked() {
                     let name = if rule.name.trim().is_empty() {
@@ -672,6 +677,23 @@ fn schedule_route_rules_form(
                 ui.end_row();
             }
         });
+}
+
+fn route_rule_text_edit(ui: &mut egui::Ui, value: &mut String) {
+    let text_width = ui
+        .painter()
+        .layout_no_wrap(
+            value.as_str().to_owned(),
+            egui::TextStyle::Body.resolve(ui.style()),
+            ui.visuals().widgets.inactive.text_color(),
+        )
+        .rect
+        .width();
+    let desired_width = (text_width + ROUTE_RULE_TEXT_EDIT_PADDING).clamp(
+        ROUTE_RULE_TEXT_EDIT_MIN_WIDTH,
+        ROUTE_RULE_TEXT_EDIT_MAX_WIDTH,
+    );
+    ui.add(egui::TextEdit::singleline(value).desired_width(desired_width));
 }
 
 fn route_target_kind_combo(ui: &mut egui::Ui, rule: &mut ScheduleRouteRule) {
