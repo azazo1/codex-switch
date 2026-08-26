@@ -109,6 +109,39 @@ jobs:
           )"
           echo "package_version=$package_version" >> "$GITHUB_OUTPUT"
 
+  test:
+    name: 测试
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Linux 依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            libwayland-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxdo-dev \
+            libxkbcommon-dev \
+            pkg-config
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 Rust 构建
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: test
+
+      - name: 运行测试
+        run: cargo test --locked
+
   build:
     name: 构建 ${{ matrix.name }}
     needs: version

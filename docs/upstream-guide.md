@@ -21,7 +21,7 @@ Codex OAuth 的完整流程见[OAuth 使用指南](oauth-guide.md). 本文重点
 | 去除多模态输入 | 上游编辑页中的独立设置, 开启后自动清洗文本模型收到的图片, 音频和文件 |
 | 未知模态模型 | 上游编辑页中的独立设置, 决定能力未知时按单模态还是多模态处理 |
 
-Base URL 可以填写站点根地址或以 `/v1` 结尾的地址. 构建上游端点时, Codex Switch 会在需要时补上 `/v1`.
+Base URL 可以填写站点根地址, 或以 `/v1`, `/v4` 这类 `/vN` 结尾的地址. 若 Base URL 还没有 API 版本后缀, 构建上游端点时会补上 `/v1`. 若已经以 `/vN` 结尾, 则保留该版本, 不再插入 `/v1`.
 
 代理 URL 会应用到该上游的模型请求和余额查询. 填写无效 URL 时无法保存. 留空时使用系统代理设置.
 
@@ -71,7 +71,7 @@ namespace tool 会展开成 `namespace__name` 形式的 Chat function. 上游返
 
 | 字段 | 建议值 |
 | --- | --- |
-| Base URL | 服务商给出的 OpenAI 兼容根地址, 可带或不带 `/v1` |
+| Base URL | 服务商给出的 OpenAI 兼容根地址, 可带或不带 `/v1` 或 `/v4` 这类版本后缀 |
 | API Key | 服务商创建的 API Key |
 | Wire API | `Chat Completions` |
 | 支持 compact | 先关闭, 确认长上下文压缩可用后再开启 |

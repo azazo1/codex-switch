@@ -1,10 +1,12 @@
 use crate::app::AppState;
 use crate::proxy::forward::{self, OpenAiEndpoint};
+use crate::proxy::transform;
 use axum::{
     Router,
     body::Bytes,
-    extract::{DefaultBodyLimit, Path, State},
+    extract::{DefaultBodyLimit, Path, Request, State},
     http::{HeaderMap, Method, StatusCode, Uri},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -18,7 +20,7 @@ pub struct ProxyState {
 
 pub fn build_router(state: AppState) -> Router {
     let state = Arc::new(ProxyState { app: state });
-    Router::new()
+    let api = Router::new()
         .route("/health", get(health))
         .route("/v1/models", get(models))
         .route("/models", get(models))
@@ -47,7 +49,34 @@ pub fn build_router(state: AppState) -> Router {
         .layer(DefaultBodyLimit::disable())
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
-        .with_state(state)
+        .with_state(state);
+
+    Router::new()
+        .fallback_service(api)
+        .layer(middleware::from_fn(rewrite_incoming_api_path))
+}
+
+async fn rewrite_incoming_api_path(mut request: Request, next: Next) -> Response {
+    if let Some(uri) = rewrite_request_uri(request.uri()) {
+        tracing::debug!(
+            original = %request.uri(),
+            rewritten = %uri,
+            "rewrite incoming api path"
+        );
+        *request.uri_mut() = uri;
+    }
+    next.run(request).await
+}
+
+fn rewrite_request_uri(uri: &Uri) -> Option<Uri> {
+    let new_path = transform::canonicalize_incoming_path(uri.path())?;
+    let path_and_query = match uri.query() {
+        Some(query) => format!("{new_path}?{query}"),
+        None => new_path,
+    };
+    let mut parts = uri.clone().into_parts();
+    parts.path_and_query = path_and_query.parse().ok();
+    Uri::from_parts(parts).ok()
 }
 
 async fn health() -> impl IntoResponse {
@@ -632,6 +661,53 @@ mod tests {
         let hits = hits.lock().await;
         assert_eq!(hits[0].body["messages"][0]["role"], "system");
         assert_eq!(hits[0].body["messages"][1]["role"], "user");
+    }
+
+    #[tokio::test]
+    async fn chat_route_accepts_non_v1_version_and_completion_alias() {
+        let (mock_base, hits) = spawn_mock(MockMode::ChatJson).await;
+        let state = test_state(&mock_base, WireApi::ChatCompletions).await;
+        let proxy_base = spawn_proxy(state).await;
+        let client = reqwest::Client::new();
+        let body = json!({
+            "model":"gpt-test",
+            "messages":[{"role":"user","content":"hello"}]
+        });
+
+        for path in ["/v4/chat/completions", "/v4/chat/completion"] {
+            let response = client
+                .post(format!("{proxy_base}{path}"))
+                .bearer_auth("local-test")
+                .json(&body)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let hits = hits.lock().await;
+        assert_eq!(hits.len(), 2);
+        assert!(hits.iter().all(|hit| hit.path == "/v1/chat/completions"));
+    }
+
+    #[tokio::test]
+    async fn chat_upstream_keeps_versioned_base_url() {
+        let (mock_base, hits) = spawn_mock(MockMode::ChatJson).await;
+        let state = test_state(&format!("{mock_base}/v4"), WireApi::ChatCompletions).await;
+        let proxy_base = spawn_proxy(state).await;
+        let response = reqwest::Client::new()
+            .post(format!("{proxy_base}/v1/chat/completions"))
+            .bearer_auth("local-test")
+            .json(&json!({
+                "model":"gpt-test",
+                "messages":[{"role":"user","content":"hello"}]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let hits = hits.lock().await;
+        assert_eq!(hits[0].path, "/v4/chat/completions");
     }
 
     #[tokio::test]

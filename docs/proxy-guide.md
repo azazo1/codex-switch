@@ -31,7 +31,7 @@ Authorization: Bearer cs-<uuid>
 | `POST /v1/messages/count_tokens` | Anthropic 原生 token 计数 |
 | `POST /v1/images/<subpath>` | Images 子路径, 例如 `generations` 和 `edits` |
 
-`/responses`, `/chat/completions`, `/messages`, `/messages/count_tokens` 和 `/models/<id>` 也提供不带 `/v1` 的别名. `/backend-api/codex/responses` 及其子路径可用于 Codex 风格请求.
+`/responses`, `/chat/completions`, `/messages`, `/messages/count_tokens` 和 `/models/<id>` 也提供不带 `/v1` 的别名. `/vN/...` 会当作 `/v1/...` 的别名, 例如 `POST /v4/chat/completions`. `/chat/completion` 会当作 `/chat/completions` 的别名. `/backend-api/codex/responses` 及其子路径可用于 Codex 风格请求.
 
 当前没有 `POST /v1/images` 根路径, 客户端必须使用具体子路径. Responses 的 `GET` 和 WebSocket 模式尚未实现, 当前会返回 `501`.
 

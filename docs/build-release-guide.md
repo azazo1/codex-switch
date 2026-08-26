@@ -69,7 +69,7 @@ Bundle 最低系统版本为 macOS 12.0. Bundle 版本读取 `Cargo.toml` 中的
 
 ## GitHub Actions
 
-`.github/workflows/ci.yml` 在普通 push, pull request, tag push 和 `workflow_dispatch` 上构建以下矩阵:
+`.github/workflows/ci.yml` 在普通 push, pull request, tag push 和 `workflow_dispatch` 上会在 Ubuntu 22.04 运行 `cargo test --locked`, 并构建以下矩阵:
 
 | 系统 | x64 target | arm64 target |
 | --- | --- | --- |

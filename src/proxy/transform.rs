@@ -77,11 +77,64 @@ pub fn images_subpath_from_uri(path: &str) -> String {
 pub fn build_endpoint(base_url: &str, endpoint: &str) -> String {
     let base = base_url.trim_end_matches('/');
     let endpoint = endpoint.trim_start_matches('/');
-    if base.ends_with("/v1") || endpoint.starts_with("v1/") {
+    if has_api_version_suffix(base) || has_api_version_prefix(endpoint) {
         format!("{base}/{endpoint}")
     } else {
         format!("{base}/v1/{endpoint}")
     }
+}
+
+pub fn canonicalize_incoming_path(path: &str) -> Option<String> {
+    let mut canonical = path.to_string();
+    let mut changed = false;
+
+    if let Some((version, rest)) = split_leading_api_version(&canonical)
+        && version != "v1"
+    {
+        canonical = format!("/v1{rest}");
+        changed = true;
+    }
+
+    if let Some(rewritten) = rewrite_chat_completion_alias(&canonical) {
+        canonical = rewritten;
+        changed = true;
+    }
+
+    changed.then_some(canonical)
+}
+
+fn is_api_version_segment(segment: &str) -> bool {
+    let Some(digits) = segment.strip_prefix('v') else {
+        return false;
+    };
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn has_api_version_suffix(path: &str) -> bool {
+    path.rsplit('/').next().is_some_and(is_api_version_segment)
+}
+
+fn has_api_version_prefix(path: &str) -> bool {
+    path.split('/').next().is_some_and(is_api_version_segment)
+}
+
+fn split_leading_api_version(path: &str) -> Option<(&str, &str)> {
+    let trimmed = path.strip_prefix('/')?;
+    match trimmed.split_once('/') {
+        Some((segment, _)) if is_api_version_segment(segment) => {
+            Some((segment, path.get(segment.len() + 1..)?))
+        }
+        None if is_api_version_segment(trimmed) => Some((trimmed, "")),
+        _ => None,
+    }
+}
+
+fn rewrite_chat_completion_alias(path: &str) -> Option<String> {
+    if path == "/chat/completion" {
+        return Some("/chat/completions".to_string());
+    }
+    let (version, rest) = split_leading_api_version(path)?;
+    (rest == "/chat/completion").then(|| format!("/{version}/chat/completions"))
 }
 
 #[cfg(test)]
@@ -141,5 +194,63 @@ mod tests {
         assert_eq!(value["model"], "gpt-5.4");
         assert_eq!(value["response"]["model"], "gpt-5.4");
         assert_eq!(value["message"]["model"], "gpt-5.4");
+    }
+
+    #[test]
+    fn build_endpoint_appends_v1_when_base_has_no_version() {
+        assert_eq!(
+            build_endpoint("https://api.example.com", "chat/completions"),
+            "https://api.example.com/v1/chat/completions"
+        );
+        assert_eq!(
+            build_endpoint("https://api.example.com/", "/models"),
+            "https://api.example.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn build_endpoint_keeps_existing_api_version() {
+        assert_eq!(
+            build_endpoint("https://api.example.com/v1", "/chat/completions"),
+            "https://api.example.com/v1/chat/completions"
+        );
+        assert_eq!(
+            build_endpoint("https://api.example.com/v4/", "chat/completions"),
+            "https://api.example.com/v4/chat/completions"
+        );
+        assert_eq!(
+            build_endpoint("https://api.example.com/openai/v4", "chat/completions"),
+            "https://api.example.com/openai/v4/chat/completions"
+        );
+        assert_eq!(
+            build_endpoint("https://api.example.com", "v4/chat/completions"),
+            "https://api.example.com/v4/chat/completions"
+        );
+    }
+
+    #[test]
+    fn canonicalize_incoming_path_rewrites_non_v1_and_completion_alias() {
+        assert_eq!(
+            canonicalize_incoming_path("/v4/chat/completion"),
+            Some("/v1/chat/completions".to_string())
+        );
+        assert_eq!(
+            canonicalize_incoming_path("/v4/chat/completions"),
+            Some("/v1/chat/completions".to_string())
+        );
+        assert_eq!(
+            canonicalize_incoming_path("/chat/completion"),
+            Some("/chat/completions".to_string())
+        );
+        assert_eq!(canonicalize_incoming_path("/v1/chat/completions"), None);
+        assert_eq!(
+            canonicalize_incoming_path("/v1/chat/completion"),
+            Some("/v1/chat/completions".to_string())
+        );
+        assert_eq!(canonicalize_incoming_path("/health"), None);
+        assert_eq!(
+            canonicalize_incoming_path("/backend-api/codex/responses"),
+            None
+        );
     }
 }
