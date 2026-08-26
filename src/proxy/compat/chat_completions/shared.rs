@@ -67,10 +67,14 @@ pub(crate) fn decode_reasoning(value: &str) -> Option<String> {
 }
 
 pub(super) fn reasoning_item(reasoning: &str) -> Value {
+    reasoning_item_with_id(&new_item_id("rs"), reasoning)
+}
+
+pub(super) fn reasoning_item_with_id(id: &str, reasoning: &str) -> Value {
     json!({
-        "id":new_item_id("rs"),
+        "id":id,
         "type":"reasoning",
-        "summary":[],
+        "summary":[{"type":"summary_text","text":reasoning}],
         "encrypted_content":encode_reasoning(reasoning),
         "status":"completed"
     })

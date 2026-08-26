@@ -55,6 +55,16 @@ fn converts_codex_tools_and_round_trips_reasoning() {
     );
     let reasoning = first_response["output"][0].clone();
     let call = first_response["output"][1].clone();
+    assert_eq!(
+        reasoning["summary"][0],
+        json!({"type":"summary_text","text":"需要先读取文件"})
+    );
+    assert!(
+        reasoning["encrypted_content"]
+            .as_str()
+            .unwrap()
+            .starts_with("codex-switch-reasoning-v1:")
+    );
     let request = json!({
         "model":"deepseek-v4-pro",
         "instructions":"完成代码任务",
@@ -158,11 +168,55 @@ fn converts_streaming_tool_call_to_responses_events() {
     );
     events.push_str(&String::from_utf8(converter.convert_block("data: [DONE]")).unwrap());
 
+    assert!(events.contains("response.reasoning_summary_text.delta"));
+    assert!(events.contains("response.reasoning_summary_text.done"));
+    assert!(events.contains("\"delta\":\"先检查\""));
+    assert!(events.contains("\"summary_index\":0"));
+    assert!(events.contains("\"type\":\"summary_text\""));
     assert!(events.contains("response.function_call_arguments.delta"));
     assert!(events.contains("response.function_call_arguments.done"));
     assert!(events.contains("\"call_id\":\"call_1\""));
     assert!(events.contains("response.completed"));
     assert!(events.contains("\"input_tokens\":8"));
+}
+
+#[test]
+fn streams_chat_reasoning_content_as_responses_summary_deltas() {
+    let context = ChatResponseContext {
+        tool_context: ToolContext::default(),
+        model: Some("glm-5.3-flash".to_string()),
+    };
+    let mut converter = ChatSseConverter::new(context);
+    let mut events = String::from_utf8(converter.initial_events()).unwrap();
+    for block in [
+        r#"data: {"choices":[{"delta":{"reasoning_content":"The"}}]}"#,
+        r#"data: {"choices":[{"delta":{"reasoning_content":" answer is 2."}}]}"#,
+        r#"data: {"choices":[{"delta":{"content":"1 + 1 = 2"}}]}"#,
+        r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+        r#"data: {"choices":[],"usage":{"prompt_tokens":6,"completion_tokens":12,"total_tokens":18,"completion_tokens_details":{"reasoning_tokens":4}}}"#,
+        "data: [DONE]",
+    ] {
+        events.push_str(&String::from_utf8(converter.convert_block(block)).unwrap());
+    }
+
+    let reasoning_added = events.find("\"type\":\"reasoning\"").unwrap();
+    let first_delta = events.find("response.reasoning_summary_text.delta").unwrap();
+    let second_delta = events.find("\"delta\":\" answer is 2.\"").unwrap();
+    let text_delta = events.find("response.output_text.delta").unwrap();
+    let reasoning_done = events.find("response.reasoning_summary_text.done").unwrap();
+    let completed = events.find("response.completed").unwrap();
+
+    assert!(reasoning_added < first_delta);
+    assert!(first_delta < second_delta);
+    assert!(second_delta < text_delta);
+    assert!(text_delta < reasoning_done);
+    assert!(reasoning_done < completed);
+    assert!(events.contains("\"delta\":\"The\""));
+    assert!(events.contains("\"delta\":\"1 + 1 = 2\""));
+    assert!(events.contains("\"text\":\"The answer is 2.\""));
+    assert!(events.contains("\"type\":\"summary_text\""));
+    assert!(events.contains("codex-switch-reasoning-v1:"));
+    assert!(events.contains("\"reasoning_tokens\":4"));
 }
 
 #[test]

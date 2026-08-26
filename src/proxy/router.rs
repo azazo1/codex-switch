@@ -819,6 +819,9 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         let text = response.text().await.unwrap();
+        assert!(text.contains("response.reasoning_summary_text.delta"));
+        assert!(text.contains("response.reasoning_summary_text.done"));
+        assert!(text.contains("\"delta\":\"need a file\""));
         assert!(text.contains("response.function_call_arguments.delta"));
         assert!(text.contains("response.function_call_arguments.done"));
         assert!(text.contains("\"type\":\"function_call\""));

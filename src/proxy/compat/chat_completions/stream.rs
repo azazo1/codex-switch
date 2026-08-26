@@ -1,7 +1,7 @@
 use super::{ChatResponseContext, response_tool_item_from_chat_name};
 use super::shared::{
-    chat_message_text, custom_input, encode_reasoning, message_item_with_id, new_call_id,
-    new_item_id, normalize_chat_usage, reasoning_from_chat,
+    chat_message_text, custom_input, message_item_with_id, new_call_id, new_item_id,
+    normalize_chat_usage, reasoning_from_chat, reasoning_item_with_id,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -120,9 +120,20 @@ impl ChatSseConverter {
                 && !reasoning.is_empty()
             {
                 self.ensure_reasoning(&mut out);
-                if let Some(state) = &mut self.reasoning {
+                let (output_index, item_id) = {
+                    let state = self.reasoning.as_mut().expect("reasoning state exists");
                     state.content.push_str(&reasoning);
-                }
+                    (state.output_index, state.item_id.clone())
+                };
+                out.push_str(&self.event(
+                    "response.reasoning_summary_text.delta",
+                    json!({
+                        "output_index":output_index,
+                        "summary_index":0,
+                        "item_id":item_id,
+                        "delta":reasoning
+                    }),
+                ));
             }
             if let Some(content) = chat_message_text(delta.get("content"))
                 && !content.is_empty()
@@ -311,16 +322,23 @@ impl ChatSseConverter {
         let mut out = String::new();
         if let Some(state) = &self.reasoning {
             let output_index = state.output_index;
-            let item = json!({
-                "id":state.item_id,
-                "type":"reasoning",
-                "summary":[],
-                "encrypted_content":encode_reasoning(&state.content),
-                "status":"completed"
-            });
+            let item_id = state.item_id.clone();
+            let content = state.content.clone();
+            out.push_str(&self.event(
+                "response.reasoning_summary_text.done",
+                json!({
+                    "output_index":output_index,
+                    "summary_index":0,
+                    "item_id":item_id,
+                    "text":content
+                }),
+            ));
             out.push_str(&self.event(
                 "response.output_item.done",
-                json!({"output_index":output_index,"item":item}),
+                json!({
+                    "output_index":output_index,
+                    "item":reasoning_item_with_id(&item_id, &content)
+                }),
             ));
         }
         if let Some(state) = &self.text {
@@ -441,13 +459,7 @@ impl ChatSseConverter {
         if let Some(state) = &self.reasoning {
             output.push((
                 state.output_index,
-                json!({
-                    "id":state.item_id,
-                    "type":"reasoning",
-                    "summary":[],
-                    "encrypted_content":encode_reasoning(&state.content),
-                    "status":"completed"
-                }),
+                reasoning_item_with_id(&state.item_id, &state.content),
             ));
         }
         if let Some(state) = &self.text {
