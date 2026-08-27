@@ -53,11 +53,13 @@ mDNS 依赖组播, 跨 VLAN 或容器网络可能不可见.
 
 `lnd-core` 是中心 HTTP 注册表, 不是 mDNS. Codex Switch 只做 client, 不会在本机嵌入 `lnd-server`.
 
-填写:
+在 `节点` 页勾选 `启用 LND`, 再打开 `LND 设置` 填写:
 
 - lnd server URL, 例如 `http://192.168.1.2:8765`
 - bearer token
 - 可选 discovery domain
+
+点 `保存` 后重新启动服务才会生效. 点 `取消` 会丢弃弹窗中的未保存修改.
 
 service type 为 `_codex-switch._tcp`. lnd-server 能看到指纹和地址, 看不到私钥, 也不能代替配对.
 

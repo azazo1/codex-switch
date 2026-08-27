@@ -4,6 +4,14 @@ use eframe::egui;
 
 impl CodexSwitchApp {
     pub(super) fn peers_ui(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::vertical()
+            .id_salt("peers")
+            .max_height(ui.available_height())
+            .show(ui, |ui| self.peers_content_ui(ui));
+        self.lnd_settings_window(ui.ctx());
+    }
+
+    fn peers_content_ui(&mut self, ui: &mut egui::Ui) {
         ui.heading("本机节点");
         ui.horizontal(|ui| {
             ui.label("节点 ID");
@@ -54,29 +62,17 @@ impl CodexSwitchApp {
                     bool_setting(self.mdns_discovery_enabled),
                 );
             }
-        });
-        ui.horizontal(|ui| {
-            ui.label("lnd server");
-            if ui.text_edit_singleline(&mut self.lnd_server_url).lost_focus() {
-                self.save_peer_setting("lnd_server_url", self.lnd_server_url.clone());
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label("lnd token");
             if ui
-                .add(egui::TextEdit::singleline(&mut self.lnd_bearer_token).password(true))
-                .lost_focus()
+                .checkbox(&mut self.lnd_discovery_enabled, "启用 LND")
+                .changed()
             {
-                self.save_peer_setting("lnd_bearer_token", self.lnd_bearer_token.clone());
+                self.save_peer_setting(
+                    "lnd_discovery_enabled",
+                    bool_setting(self.lnd_discovery_enabled),
+                );
             }
-        });
-        ui.horizontal(|ui| {
-            ui.label("lnd domain");
-            if ui
-                .text_edit_singleline(&mut self.lnd_discovery_domain)
-                .lost_focus()
-            {
-                self.save_peer_setting("lnd_discovery_domain", self.lnd_discovery_domain.clone());
+            if ui.button("LND 设置").clicked() {
+                self.open_lnd_settings_window();
             }
         });
         ui.label("发现只负责找地址, 不会自动配对.");
@@ -185,6 +181,10 @@ impl CodexSwitchApp {
             .runtime
             .block_on(self.state.store.mdns_discovery_enabled())
             .unwrap_or(false);
+        self.lnd_discovery_enabled = self
+            .runtime
+            .block_on(self.state.store.lnd_discovery_enabled())
+            .unwrap_or(false);
         self.lnd_server_url = self
             .runtime
             .block_on(self.state.store.lnd_server_url())
@@ -240,6 +240,98 @@ impl CodexSwitchApp {
             return;
         }
         self.status = "节点设置已保存, 重新启动服务后生效".to_string();
+    }
+
+    fn open_lnd_settings_window(&mut self) {
+        self.lnd_settings_url = self.lnd_server_url.clone();
+        self.lnd_settings_token = self.lnd_bearer_token.clone();
+        self.lnd_settings_domain = self.lnd_discovery_domain.clone();
+        self.lnd_settings_open = true;
+    }
+
+    fn lnd_settings_window(&mut self, ctx: &egui::Context) {
+        if !self.lnd_settings_open {
+            return;
+        }
+        let mut open = self.lnd_settings_open;
+        let mut save_requested = false;
+        let mut cancel_requested = false;
+        egui::Window::new("LND 设置")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label("填写已有 lnd-server, Codex Switch 只做 client.");
+                ui.horizontal(|ui| {
+                    ui.label("lnd server");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.lnd_settings_url)
+                            .hint_text("http://192.168.1.2:8765"),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label("lnd token");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.lnd_settings_token)
+                            .password(true)
+                            .hint_text("bearer token"),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label("lnd domain");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.lnd_settings_domain)
+                            .hint_text("可选 discovery domain"),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("保存").clicked() {
+                        save_requested = true;
+                    }
+                    if ui.button("取消").clicked() {
+                        cancel_requested = true;
+                    }
+                });
+            });
+        if save_requested {
+            self.save_lnd_settings();
+        } else if cancel_requested || !open {
+            self.lnd_settings_open = false;
+        } else {
+            self.lnd_settings_open = open;
+        }
+    }
+
+    fn save_lnd_settings(&mut self) {
+        let url = self.lnd_settings_url.trim().to_string();
+        let token = self.lnd_settings_token.trim().to_string();
+        let domain = self.lnd_settings_domain.trim().to_string();
+        let result = self.runtime.block_on(async {
+            self.state.store.set_setting("lnd_server_url", &url).await?;
+            self.state
+                .store
+                .set_setting("lnd_bearer_token", &token)
+                .await?;
+            self.state
+                .store
+                .set_setting("lnd_discovery_domain", &domain)
+                .await?;
+            anyhow::Ok(())
+        });
+        match result {
+            Ok(()) => {
+                self.lnd_server_url = url;
+                self.lnd_bearer_token = token;
+                self.lnd_discovery_domain = domain;
+                self.lnd_settings_open = false;
+                self.status = "LND 设置已保存, 重新启动服务后生效".to_string();
+            }
+            Err(err) => {
+                self.status = format!("保存 LND 设置失败: {err}");
+                self.lnd_settings_open = true;
+            }
+        }
     }
 
     fn pair_direct_peer(&mut self) {

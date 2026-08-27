@@ -72,6 +72,14 @@ impl Store {
             == Some("true"))
     }
 
+    pub async fn lnd_discovery_enabled(&self) -> anyhow::Result<bool> {
+        Ok(self
+            .get_setting("lnd_discovery_enabled")
+            .await?
+            .as_deref()
+            == Some("true"))
+    }
+
     pub async fn lnd_server_url(&self) -> anyhow::Result<Option<String>> {
         Ok(self
             .get_setting("lnd_server_url")

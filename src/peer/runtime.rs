@@ -54,8 +54,9 @@ impl PeerRuntime {
                 *slot = Some(mdns);
             }
         }
-        if let (Some(server_url), Some(token)) =
-            (store.lnd_server_url().await?, store.lnd_bearer_token().await?)
+        if store.lnd_discovery_enabled().await?
+            && let (Some(server_url), Some(token)) =
+                (store.lnd_server_url().await?, store.lnd_bearer_token().await?)
         {
             let domain = store.lnd_discovery_domain().await?;
             let discovered = self.discovered.clone();

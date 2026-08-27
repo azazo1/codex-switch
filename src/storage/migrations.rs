@@ -98,6 +98,9 @@ impl Store {
         if self.get_setting("mdns_discovery_enabled").await?.is_none() {
             self.set_setting("mdns_discovery_enabled", "false").await?;
         }
+        if self.get_setting("lnd_discovery_enabled").await?.is_none() {
+            self.set_setting("lnd_discovery_enabled", "false").await?;
+        }
         self.ensure_default_schedule_group().await?;
         Ok(())
     }
