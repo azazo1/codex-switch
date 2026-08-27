@@ -303,7 +303,7 @@ impl Store {
     }
 }
 
-fn append_request_log_filters(builder: &mut QueryBuilder<'_, Sqlite>, filter: &RequestLogFilter) {
+fn append_request_log_filters(builder: &mut QueryBuilder<Sqlite>, filter: &RequestLogFilter) {
     let mut has_where = false;
     macro_rules! begin_clause {
         () => {{
@@ -459,7 +459,7 @@ fn append_request_log_filters(builder: &mut QueryBuilder<'_, Sqlite>, filter: &R
 }
 
 fn push_i64_min(
-    builder: &mut QueryBuilder<'_, Sqlite>,
+    builder: &mut QueryBuilder<Sqlite>,
     has_where: &mut bool,
     column: &'static str,
     value: Option<i64>,
@@ -473,7 +473,7 @@ fn push_i64_min(
 }
 
 fn push_i64_max(
-    builder: &mut QueryBuilder<'_, Sqlite>,
+    builder: &mut QueryBuilder<Sqlite>,
     has_where: &mut bool,
     column: &'static str,
     value: Option<i64>,
@@ -487,7 +487,7 @@ fn push_i64_max(
 }
 
 fn push_f64_min(
-    builder: &mut QueryBuilder<'_, Sqlite>,
+    builder: &mut QueryBuilder<Sqlite>,
     has_where: &mut bool,
     column: &'static str,
     value: Option<f64>,
@@ -501,7 +501,7 @@ fn push_f64_min(
 }
 
 fn push_f64_max(
-    builder: &mut QueryBuilder<'_, Sqlite>,
+    builder: &mut QueryBuilder<Sqlite>,
     has_where: &mut bool,
     column: &'static str,
     value: Option<f64>,
@@ -514,7 +514,7 @@ fn push_f64_max(
     }
 }
 
-fn begin_static_clause(builder: &mut QueryBuilder<'_, Sqlite>, has_where: &mut bool) {
+fn begin_static_clause(builder: &mut QueryBuilder<Sqlite>, has_where: &mut bool) {
     if *has_where {
         builder.push(" AND ");
     } else {

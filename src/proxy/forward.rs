@@ -30,7 +30,7 @@ use std::io;
 use std::time::Instant;
 use tokio::sync::watch;
 
-mod auth;
+pub(crate) mod auth;
 mod error_policy;
 mod headers;
 mod logging;
@@ -87,7 +87,7 @@ impl OpenAiEndpoint {
 pub async fn handle_models(state: AppState, headers: HeaderMap, uri: Uri, model_id: Option<String>) -> Response {
     let anthropic = headers.contains_key("anthropic-version");
     let temporary_key_id = match validate_local_access(&state, &headers, anthropic).await {
-        Ok(LocalAccess::Primary) => None,
+        Ok(LocalAccess::Primary | LocalAccess::Peer) => None,
         Ok(LocalAccess::Temporary { id }) => Some(id),
         Err(response) => return response,
     };
@@ -140,7 +140,7 @@ pub async fn handle_openai(
     )
     .await
     {
-        Ok(LocalAccess::Primary) => None,
+        Ok(LocalAccess::Primary | LocalAccess::Peer) => None,
         Ok(LocalAccess::Temporary { id }) => Some(id),
         Err(response) => return response,
     };
@@ -483,7 +483,8 @@ async fn forward_with_upstream(
         Some(multimodal) => multimodal,
         None => upstream.unknown_modality_policy == UnknownModalityPolicy::Multimodal,
     };
-    if upstream.strip_multimodal_for_text_models
+    if upstream.kind != UpstreamKind::PeerNode
+        && upstream.strip_multimodal_for_text_models
         && let Some(client_wire_api) = request.endpoint_kind.client_wire_api()
         && !model_is_multimodal
     {
@@ -504,7 +505,9 @@ async fn forward_with_upstream(
     } else {
         upstream.wire_api
     };
-    let mut protocol_request = if let Some(client_wire_api) = request.endpoint_kind.client_wire_api() {
+    let mut protocol_request = if upstream.kind == UpstreamKind::PeerNode {
+        None
+    } else if let Some(client_wire_api) = request.endpoint_kind.client_wire_api() {
         Some(
             PreparedProtocolRequest::new(
                 client_wire_api,
@@ -532,7 +535,10 @@ async fn forward_with_upstream(
     if upstream.kind == UpstreamKind::CodexOauth && !request.endpoint_kind.is_count_tokens() {
         target_body = transform::normalize_oauth_body(&target_body, request.compact)?;
     }
-    if upstream.wire_api == WireApi::ChatCompletions && upstream.filter_chat_server_tools {
+    if upstream.kind != UpstreamKind::PeerNode
+        && upstream.wire_api == WireApi::ChatCompletions
+        && upstream.filter_chat_server_tools
+    {
         let (filtered, dropped) = compat::filter_chat_server_tools(&target_body)?;
         if dropped > 0 {
             tracing::info!(
@@ -553,7 +559,11 @@ async fn forward_with_upstream(
     );
     let keepalive_body = target_body.clone();
 
-    let http = request.state.http_for_upstream(&upstream)?;
+    let http = if upstream.kind == UpstreamKind::PeerNode {
+        request.state.http_for_peer_upstream(&upstream).await?
+    } else {
+        request.state.http_for_upstream(&upstream)?
+    };
     let mut upstream_request = http
         .request(
             reqwest::Method::from_bytes(request.method.as_str().as_bytes())?,
@@ -806,6 +816,10 @@ fn target_url(
     };
     if upstream.kind == UpstreamKind::CodexOauth {
         format!("https://chatgpt.com/backend-api/codex{endpoint}")
+    } else if upstream.kind == UpstreamKind::PeerNode {
+        let base = upstream.base_url.trim_end_matches('/');
+        let incoming = request.uri.path();
+        format!("{base}{incoming}")
     } else {
         transform::build_endpoint(&upstream.base_url, endpoint)
     }

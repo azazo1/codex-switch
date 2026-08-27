@@ -24,7 +24,9 @@ impl Store {
             );
             let mut tx = self.pool().begin().await?;
             for statement in migration.statements {
-                sqlx::query(statement).execute(&mut *tx).await?;
+                sqlx::query(sqlx::AssertSqlSafe(*statement))
+                    .execute(&mut *tx)
+                    .await?;
             }
             sqlx::query(
                 "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
@@ -78,6 +80,23 @@ impl Store {
         }
         if self.get_setting("tray_badge_metric_secondary").await?.is_none() {
             self.set_setting("tray_badge_metric_secondary", "none").await?;
+        }
+        if self.get_setting("peer_listen_enabled").await?.is_none() {
+            self.set_setting("peer_listen_enabled", "false").await?;
+        }
+        if self.get_setting("peer_bind_addr").await?.is_none() {
+            self.set_setting("peer_bind_addr", crate::peer::protocol::DEFAULT_PEER_BIND_ADDR)
+                .await?;
+        }
+        if self.get_setting("peer_max_hops").await?.is_none() {
+            self.set_setting(
+                "peer_max_hops",
+                &crate::peer::protocol::DEFAULT_PEER_MAX_HOPS.to_string(),
+            )
+            .await?;
+        }
+        if self.get_setting("mdns_discovery_enabled").await?.is_none() {
+            self.set_setting("mdns_discovery_enabled", "false").await?;
         }
         self.ensure_default_schedule_group().await?;
         Ok(())
@@ -456,6 +475,35 @@ fn migrations() -> &'static [Migration] {
                 "ALTER TABLE upstreams ADD COLUMN unknown_modality_policy TEXT NOT NULL DEFAULT 'text_only'",
             ],
         },
+        Migration {
+            version: 20,
+            name: "peer_nodes",
+            statements: &[
+                "CREATE TABLE IF NOT EXISTS node_peers (
+                node_id TEXT PRIMARY KEY,
+                fingerprint TEXT NOT NULL,
+                public_key TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                addresses TEXT NOT NULL DEFAULT '[]',
+                discovery_source TEXT NOT NULL DEFAULT 'direct',
+                upstream_id TEXT NOT NULL UNIQUE,
+                paired_at TEXT NOT NULL,
+                last_seen_at TEXT,
+                FOREIGN KEY (upstream_id) REFERENCES upstreams(id) ON DELETE CASCADE
+            )",
+                "CREATE INDEX IF NOT EXISTS idx_node_peers_upstream ON node_peers(upstream_id)",
+                "CREATE TABLE IF NOT EXISTS peer_pairing_requests (
+                id TEXT PRIMARY KEY,
+                node_id TEXT NOT NULL UNIQUE,
+                fingerprint TEXT NOT NULL,
+                public_key TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                addresses TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )",
+            ],
+        },
     ]
 }
 
@@ -476,7 +524,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 19);
+        assert_eq!(rows.len(), 20);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -554,6 +602,8 @@ mod tests {
             rows[18].get::<String, _>("name"),
             "upstream_unknown_modality_policy"
         );
+        assert_eq!(rows[19].get::<i64, _>("version"), 20);
+        assert_eq!(rows[19].get::<String, _>("name"), "peer_nodes");
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
             Some("127.0.0.1:15721")
@@ -582,6 +632,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 19);
+        assert_eq!(count, 20);
     }
 }

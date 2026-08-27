@@ -6,7 +6,8 @@ Codex Switch 是一个本地桌面中转工具. 它提供 OpenAI 和 Anthropic �
 
 ## 主要能力
 
-- 管理 Responses, Chat Completions 和 Anthropic Messages API Key 上游以及 Codex OAuth 账号.
+- 管理 Responses, Chat Completions 和 Anthropic Messages API Key 上游, Codex OAuth 账号, 以及已配对的 Codex Switch 节点.
+- 通过 IP 直连, mDNS 或 lnd-core 发现其他节点, 确认指纹后再用 mTLS 转发全部流量.
 - 创建带成功请求次数, token 用量和过期时间限制的临时本地访问 key.
 - 代理 Responses, Chat Completions, Anthropic Messages, Images 和 Models 请求, 并双向转换文本, 图片, 工具调用, reasoning/thinking 和流式事件.
 - 使用固定, 随机, 加权轮询, 失败切换或模型映射选择上游.
@@ -54,6 +55,7 @@ Invoke-RestMethod -Uri "http://127.0.0.1:15721/v1/models" -Headers $headers
 | 桌面应用和仪表盘 | [应用使用指南](docs/app-guide.md) |
 | 本地代理和客户端接入 | [代理接入指南](docs/proxy-guide.md) |
 | API Key 上游 | [上游管理指南](docs/upstream-guide.md) |
+| 节点发现和可信转发 | [节点转发指南](docs/peer-guide.md) |
 | Codex OAuth | [OAuth 使用指南](docs/oauth-guide.md) |
 | 模型调度和路由 | [调度组配置指南](docs/scheduler-guide.md) |
 | Prompt cache 保活 | [缓存保持配置指南](docs/cache-keepalive-guide.md) |
@@ -78,8 +80,9 @@ Linux 构建依赖和 macOS 打包方式见[构建与发布指南](docs/build-re
 
 ## 安全说明
 
-- 默认回环监听适合本机使用. 服务本身不提供 TLS, 不应直接暴露到公网.
-- API Key, OAuth token, NewApi 凭据, 本地访问 key 和临时 key 当前都以明文保存在本地 SQLite 中. 数据库和备份应按密钥文件保护.
+- 默认回环监听适合本机使用. 本地客户端口是明文 HTTP, 不应直接暴露到公网.
+- 节点之间使用独立 TLS 口和配对证书, 发现到的节点不会自动获得转发权限.
+- API Key, OAuth token, NewApi 凭据, 本地访问 key, 临时 key 和节点私钥当前都以明文保存在本地 SQLite 中. 数据库和备份应按密钥文件保护.
 - 本地访问 key 刷新后立即生效, 使用旧 key 的客户端会返回 `401`.
 - 请求日志不保存 prompt 或完整响应正文, 但会保存模型, endpoint, 错误文本, token 和耗时等元数据.
 - macOS 和 Windows 发布产物当前都未进行代码签名.

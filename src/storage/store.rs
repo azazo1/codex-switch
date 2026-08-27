@@ -51,7 +51,7 @@ impl Store {
     }
 }
 
-async fn pragma_i64(pool: &SqlitePool, statement: &str) -> anyhow::Result<i64> {
+async fn pragma_i64(pool: &SqlitePool, statement: &'static str) -> anyhow::Result<i64> {
     let row = sqlx::query(statement).fetch_one(pool).await?;
     Ok(row.get(0))
 }

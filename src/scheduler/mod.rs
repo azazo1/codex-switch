@@ -344,7 +344,11 @@ fn affinity_key_from_body(
         hasher.update(model.as_bytes());
     }
     hasher.update(raw.as_bytes());
-    Some(format!("{:x}", hasher.finalize()))
+    Some(hex_digest(&hasher.finalize()))
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn find_string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {

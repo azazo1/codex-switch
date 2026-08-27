@@ -13,6 +13,7 @@ mod live;
 mod logging;
 mod oauth;
 mod notification;
+mod peer;
 mod pricing;
 mod proxy;
 mod quota;

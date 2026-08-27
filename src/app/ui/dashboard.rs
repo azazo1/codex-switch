@@ -31,6 +31,14 @@ impl CodexSwitchApp {
             }
         });
         ui.label(format!("Base URL: http://{}/v1", self.bind_addr));
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!("节点指纹: {}", self.node_fingerprint));
+            if self.peer_listen_enabled {
+                ui.label(format!("节点口: {}", self.peer_bind_addr));
+            } else {
+                ui.label("节点口: 关闭");
+            }
+        });
         ui.horizontal(|ui| {
             ui.label("本地访问 key");
             if ui

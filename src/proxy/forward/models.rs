@@ -341,7 +341,9 @@ async fn query_upstream_models(
     upstream: &Upstream,
 ) -> anyhow::Result<Vec<Value>> {
     match upstream.kind {
-        UpstreamKind::RelayApiKey => query_relay_models(state, headers, upstream).await,
+        UpstreamKind::RelayApiKey | UpstreamKind::PeerNode => {
+            query_relay_models(state, headers, upstream).await
+        }
         UpstreamKind::CodexOauth => Ok(vec![fallback_model(upstream)]),
     }
 }
@@ -351,8 +353,17 @@ async fn query_relay_models(
     headers: &HeaderMap,
     upstream: &Upstream,
 ) -> anyhow::Result<Vec<Value>> {
-    let target_url = transform::build_endpoint(&upstream.base_url, "/models");
-    let mut request = state.http_for_upstream(upstream)?.get(target_url);
+    let target_url = if upstream.kind == UpstreamKind::PeerNode {
+        format!("{}/v1/models", upstream.base_url.trim_end_matches('/'))
+    } else {
+        transform::build_endpoint(&upstream.base_url, "/models")
+    };
+    let http = if upstream.kind == UpstreamKind::PeerNode {
+        state.http_for_peer_upstream(upstream).await?
+    } else {
+        state.http_for_upstream(upstream)?
+    };
+    let mut request = http.get(target_url);
     if upstream.wire_api == crate::core::models::WireApi::AnthropicMessages {
         request = request.query(&[("limit", "1000")]);
     }

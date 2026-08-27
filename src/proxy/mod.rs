@@ -1,10 +1,11 @@
 mod compat;
 mod debug;
-mod forward;
+pub(crate) mod forward;
 mod multimodal;
-mod router;
+pub(crate) mod router;
 mod server;
 pub(crate) mod transform;
 pub(crate) mod upstream_auth;
 
 pub use server::{ServerHandle, start_server};
+pub use server::start_peer_listener;

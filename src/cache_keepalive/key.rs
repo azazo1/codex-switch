@@ -20,7 +20,11 @@ pub(super) fn session_key(
     hasher.update(endpoint.as_bytes());
     hasher.update(raw_session.as_bytes());
     hasher.update(cacheable_prefix_fingerprint(&value).as_bytes());
-    Some(format!("{:x}", hasher.finalize()))
+    Some(hex_digest(&hasher.finalize()))
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn cacheable_prefix_fingerprint(value: &Value) -> String {

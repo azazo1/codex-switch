@@ -227,15 +227,23 @@ fn upstream_available(upstream: &Upstream, endpoint_kind: OpenAiEndpoint, compac
             OpenAiEndpoint::Responses
             | OpenAiEndpoint::ChatCompletions
             | OpenAiEndpoint::AnthropicMessages => {
-                upstream.kind == UpstreamKind::CodexOauth || !upstream.base_url.is_empty()
+                matches!(
+                    upstream.kind,
+                    UpstreamKind::CodexOauth | UpstreamKind::PeerNode
+                ) || !upstream.base_url.is_empty()
             }
             OpenAiEndpoint::AnthropicCountTokens => {
-                upstream.kind == UpstreamKind::CodexOauth
-                    || upstream.wire_api != WireApi::ChatCompletions && !upstream.base_url.is_empty()
+                matches!(
+                    upstream.kind,
+                    UpstreamKind::CodexOauth | UpstreamKind::PeerNode
+                ) || upstream.wire_api != WireApi::ChatCompletions && !upstream.base_url.is_empty()
             }
             OpenAiEndpoint::Images => {
-                upstream.kind == UpstreamKind::RelayApiKey
-                    && upstream.wire_api != WireApi::AnthropicMessages
+                matches!(
+                    upstream.kind,
+                    UpstreamKind::RelayApiKey | UpstreamKind::PeerNode
+                ) && (upstream.kind == UpstreamKind::PeerNode
+                    || upstream.wire_api != WireApi::AnthropicMessages)
                     && !upstream.base_url.is_empty()
             }
         }

@@ -1,8 +1,8 @@
 # 上游管理指南
 
-上游代表实际接收模型请求的账号或服务. Codex Switch 支持 `Relay API Key` 和 `Codex OAuth` 两类上游. API Key 上游可以使用 OpenAI Responses, Chat Completions 或 Anthropic Messages.
+上游代表实际接收模型请求的账号或服务. Codex Switch 支持 `Relay API Key`, `Codex OAuth` 和 `PeerNode` 三类上游. API Key 上游可以使用 OpenAI Responses, Chat Completions 或 Anthropic Messages. 节点上游把请求转到另一台已配对的 Codex Switch.
 
-Codex OAuth 的完整流程见[OAuth 使用指南](oauth-guide.md). 本文重点说明 API Key 上游和通用调度字段.
+Codex OAuth 的完整流程见[OAuth 使用指南](oauth-guide.md). 节点配对和发现见[节点转发指南](peer-guide.md). 本文重点说明 API Key 上游和通用调度字段.
 
 ## 添加 API Key 上游
 
@@ -158,7 +158,7 @@ Codex 发来的模型名必须是上游认识的模型 ID. 可以选择下面任
 
 ## 删除上游
 
-删除操作不可撤销. 它会删除上游记录, 对应凭据, 缓存保持设置, 余额提醒设置, 调度组成员关系, 以及直接指向该上游的模型路由规则.
+删除操作不可撤销. 它会删除上游记录, 对应凭据, 缓存保持设置, 余额提醒设置, 调度组成员关系, 直接指向该上游的模型路由规则, 以及节点配对记录.
 
 历史请求日志仍可能保留上游名称或 ID. 删除前应检查当前调度组, 避免入口组失去所有可用候选.
 

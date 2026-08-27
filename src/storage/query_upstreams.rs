@@ -204,6 +204,9 @@ impl Store {
     }
 
     pub async fn delete_upstream(&self, id: &str) -> anyhow::Result<()> {
+        if let Some(peer) = self.get_node_peer_by_upstream(id).await? {
+            self.delete_node_peer(&peer.node_id).await?;
+        }
         sqlx::query("DELETE FROM upstream_cache_keepalive_settings WHERE upstream_id = ?1")
             .bind(id)
             .execute(self.pool())

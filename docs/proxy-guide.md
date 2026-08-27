@@ -114,6 +114,7 @@ Chat Completions 上游的 compact 依赖转换能力, 应在实际中转站上�
 
 - 客户端 query string 当前不会附加到上游 URL.
 - 只转发经过筛选的请求头, 任意自定义头不保证保留.
-- 服务没有 TLS, 速率限制或请求体大小限制.
+- 本地客户端口没有 TLS, 速率限制或请求体大小限制.
+- 节点之间使用独立 TLS 口, 详见[节点转发指南](peer-guide.md).
 - WebSocket Responses 尚未实现.
 - 非回环监听需要自行提供可信网络边界.

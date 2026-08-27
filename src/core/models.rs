@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum UpstreamKind {
     RelayApiKey,
     CodexOauth,
+    PeerNode,
 }
 
 impl UpstreamKind {
@@ -12,12 +13,14 @@ impl UpstreamKind {
         match self {
             Self::RelayApiKey => "relay_api_key",
             Self::CodexOauth => "codex_oauth",
+            Self::PeerNode => "peer_node",
         }
     }
 
     pub fn from_str(value: &str) -> Self {
         match value {
             "codex_oauth" => Self::CodexOauth,
+            "peer_node" => Self::PeerNode,
             _ => Self::RelayApiKey,
         }
     }
@@ -302,6 +305,84 @@ impl Upstream {
             updated_at: now,
         }
     }
+
+    pub fn new_peer_node(name: String, base_url: String) -> Self {
+        let now = Utc::now();
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            kind: UpstreamKind::PeerNode,
+            name,
+            base_url,
+            wire_api: WireApi::Responses,
+            api_key_auth_scheme: ApiKeyAuthScheme::Bearer,
+            supports_compact: true,
+            filter_chat_server_tools: false,
+            strip_multimodal_for_text_models: false,
+            unknown_modality_policy: UnknownModalityPolicy::TextOnly,
+            error_retry_policy: ErrorRetryPolicy::Off,
+            enabled: true,
+            priority: 0,
+            weight: 1,
+            proxy_url: None,
+            balance_provider: BalanceProvider::Unsupported,
+            chatgpt_account_id: None,
+            email: None,
+            plan_type: None,
+            token_expires_at: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PeerDiscoverySource {
+    Direct,
+    Mdns,
+    Lnd,
+}
+
+impl PeerDiscoverySource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::Mdns => "mdns",
+            Self::Lnd => "lnd",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "mdns" => Self::Mdns,
+            "lnd" => Self::Lnd,
+            _ => Self::Direct,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodePeer {
+    pub node_id: String,
+    pub fingerprint: String,
+    pub public_key: String,
+    pub display_name: String,
+    pub addresses: Vec<String>,
+    pub discovery_source: PeerDiscoverySource,
+    pub upstream_id: String,
+    pub paired_at: DateTime<Utc>,
+    pub last_seen_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerPairingRequest {
+    pub id: String,
+    pub node_id: String,
+    pub fingerprint: String,
+    pub public_key: String,
+    pub display_name: String,
+    pub addresses: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

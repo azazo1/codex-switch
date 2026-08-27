@@ -15,6 +15,13 @@ impl ServerHandle {
     }
 }
 
+pub async fn start_peer_listener(
+    bind_addr: String,
+    state: AppState,
+) -> anyhow::Result<crate::peer::server::PeerServerHandle> {
+    crate::peer::server::start_peer_server(bind_addr, state).await
+}
+
 pub async fn start_server(bind_addr: String, state: AppState) -> anyhow::Result<ServerHandle> {
     let addr = bind_addr
         .parse::<std::net::SocketAddr>()

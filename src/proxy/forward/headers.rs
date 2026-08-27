@@ -47,6 +47,15 @@ pub(super) async fn apply_headers(
                 .header("Session_Id", uuid::Uuid::new_v4().to_string())
                 .header("Accept", "application/json");
         }
+        UpstreamKind::PeerNode => {
+            let hops = crate::peer::protocol::append_hop(
+                headers
+                    .get(crate::peer::HOP_HEADER)
+                    .and_then(|value| value.to_str().ok()),
+                &state.peers.identity().node_id,
+            )?;
+            request = request.header(crate::peer::HOP_HEADER, crate::peer::protocol::encode_hops(&hops));
+        }
     }
     Ok(request)
 }

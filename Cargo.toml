@@ -12,21 +12,35 @@ base64 = "0.23"
 bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 directories = "6"
+ed25519-dalek = { version = "3", features = ["pkcs8", "alloc", "rand_core", "pem"] }
 eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "glow", "persistence", "wayland", "x11"] }
 futures-util = "0.3"
+hostname = "0.4"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "server-auto", "http1"] }
+if-addrs = "0.15"
+lnd = { package = "lnd-core", version = "0.1.1" }
+mdns-sd = "0.21"
 notify-rust = "4"
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-tls-native-roots", "rustls-tls-webpki-roots", "stream", "system-proxy"] }
+rand = "0.10"
+rcgen = "0.14"
+reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls", "stream", "system-proxy"] }
 resvg = { version = "0.48.1", default-features = false }
 rfd = "0.17"
 ron = { version = "0.12", features = ["integer128"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pki-types = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
-sqlx = { version = "0.9", features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "sqlite", "chrono", "uuid"] }
 thiserror = "2"
 tiktoken-rs = "0.12"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time"] }
+tokio-rustls = "0.26"
 tokio-stream = "0.1"
+tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.7", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-appender = "0.2"
@@ -35,6 +49,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tray-icon = "0.24.2"
 url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
+x509-parser = "0.18"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"

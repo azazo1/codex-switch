@@ -5,11 +5,12 @@ use crate::balance;
 use crate::cache_keepalive::CacheKeepaliveSessionSnapshot;
 use crate::core::model_capabilities::ModelCapabilityCache;
 use crate::core::models::{
-    ApiKeyAuthScheme, BalanceProvider, BalanceSnapshot, DashboardStats, DatabaseInfo, ProviderStats,
-    QuotaSnapshot, RequestLog, ScheduleGroup, ScheduleGroupChild, ScheduleGroupMember,
-    ScheduleRouteRule, TemporaryAccessKey, Upstream, UpstreamBalanceAlertSettings,
-    UpstreamCacheKeepaliveSettings, WireApi,
+    ApiKeyAuthScheme, BalanceProvider, BalanceSnapshot, DashboardStats, DatabaseInfo, NodePeer,
+    PeerPairingRequest, ProviderStats, QuotaSnapshot, RequestLog, ScheduleGroup,
+    ScheduleGroupChild, ScheduleGroupMember, ScheduleRouteRule, TemporaryAccessKey, Upstream,
+    UpstreamBalanceAlertSettings, UpstreamCacheKeepaliveSettings, WireApi,
 };
+use crate::peer::discovery::DiscoveredPeer;
 use crate::live::{LiveOutputSettings, LiveRequestSnapshot};
 use crate::pricing;
 use crate::proxy::{self, ServerHandle};
@@ -61,11 +62,13 @@ mod token_amount;
 mod tokens;
 mod upstream_editor;
 mod upstreams;
+mod peers;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Dashboard,
     Upstreams,
+    Peers,
     Scheduler,
     CacheKeepalive,
     ActiveConnections,
@@ -372,6 +375,7 @@ enum UiTaskEvent {
     },
     PriceCacheFetched(anyhow::Result<usize>),
     PriceCacheOnceFetched(anyhow::Result<pricing::PriceFetchSummary>),
+    PeerPaired(anyhow::Result<String>),
     Tray(TrayCommand),
 }
 
@@ -382,6 +386,7 @@ pub struct CodexSwitchApp {
     task_rx: UnboundedReceiver<UiTaskEvent>,
     tab: Tab,
     server: Option<ServerHandle>,
+    peer_server: Option<crate::peer::server::PeerServerHandle>,
     tray: Option<TrayController>,
     tray_init_failed: bool,
     tray_badge_metric: TrayBadgeMetric,
@@ -406,6 +411,7 @@ pub struct CodexSwitchApp {
     last_live_output_rate_refresh_at: Instant,
     last_seen_cache_keepalive_version: u64,
     last_seen_balance_snapshot_version: u64,
+    last_seen_peer_version: u64,
     last_cache_keepalive_refresh_at: Instant,
     price_fetch_started: bool,
     price_fetch_pending: bool,
@@ -463,6 +469,21 @@ pub struct CodexSwitchApp {
     quota_snapshots: Vec<(String, Option<QuotaSnapshot>)>,
     balance_snapshots: Vec<(String, Option<BalanceSnapshot>)>,
     upstream_editor: Option<UpstreamEditor>,
+    node_fingerprint: String,
+    node_id: String,
+    node_display_name: String,
+    peer_listen_enabled: bool,
+    peer_bind_addr: String,
+    mdns_discovery_enabled: bool,
+    lnd_server_url: String,
+    lnd_bearer_token: String,
+    lnd_discovery_domain: String,
+    peer_direct_address: String,
+    peer_direct_fingerprint: String,
+    pairing_pending: bool,
+    node_peers: Vec<NodePeer>,
+    pairing_requests: Vec<PeerPairingRequest>,
+    discovered_peers: Vec<DiscoveredPeer>,
     temporary_access_keys: Vec<TemporaryAccessKey>,
     temp_keys_ui: temp_keys::TempKeysUiState,
 }
@@ -514,6 +535,7 @@ impl CodexSwitchApp {
         let last_seen_live_stream_version = state.events.live_stream_version();
         let last_seen_cache_keepalive_version = state.events.cache_keepalive_version();
         let last_seen_balance_snapshot_version = state.events.balance_snapshot_version();
+        let last_seen_peer_version = state.events.peer_version();
         let tray_badge_metric = runtime
             .block_on(state.store.get_setting("tray_badge_metric"))
             .ok()
@@ -533,6 +555,7 @@ impl CodexSwitchApp {
             task_rx,
             tab: Tab::Dashboard,
             server: None,
+            peer_server: None,
             tray: None,
             tray_init_failed: false,
             tray_badge_metric,
@@ -557,6 +580,7 @@ impl CodexSwitchApp {
             last_live_output_rate_refresh_at: Instant::now(),
             last_seen_cache_keepalive_version,
             last_seen_balance_snapshot_version,
+            last_seen_peer_version,
             last_cache_keepalive_refresh_at: Instant::now(),
             price_fetch_started: false,
             price_fetch_pending: false,
@@ -614,6 +638,21 @@ impl CodexSwitchApp {
             quota_snapshots: Vec::new(),
             balance_snapshots: Vec::new(),
             upstream_editor: None,
+            node_fingerprint: String::new(),
+            node_id: String::new(),
+            node_display_name: String::new(),
+            peer_listen_enabled: false,
+            peer_bind_addr: crate::peer::protocol::DEFAULT_PEER_BIND_ADDR.to_string(),
+            mdns_discovery_enabled: false,
+            lnd_server_url: String::new(),
+            lnd_bearer_token: String::new(),
+            lnd_discovery_domain: String::new(),
+            peer_direct_address: String::new(),
+            peer_direct_fingerprint: String::new(),
+            pairing_pending: false,
+            node_peers: Vec::new(),
+            pairing_requests: Vec::new(),
+            discovered_peers: Vec::new(),
             temporary_access_keys: Vec::new(),
             temp_keys_ui: temp_keys::TempKeysUiState::default(),
         };
@@ -635,6 +674,11 @@ impl CodexSwitchApp {
         if cache_keepalive_version != self.last_seen_cache_keepalive_version {
             self.last_seen_cache_keepalive_version = cache_keepalive_version;
             self.refresh_cache_keepalive_sessions();
+        }
+        let peer_version = self.state.events.peer_version();
+        if peer_version != self.last_seen_peer_version {
+            self.last_seen_peer_version = peer_version;
+            self.refresh_peer_views();
         }
         let balance_snapshot_version = self.state.events.balance_snapshot_version();
         if balance_snapshot_version != self.last_seen_balance_snapshot_version {
@@ -868,6 +912,16 @@ impl CodexSwitchApp {
                         Err(err) => self.status = format!("模型信息获取失败: {err}"),
                     }
                 }
+                UiTaskEvent::PeerPaired(result) => {
+                    self.pairing_pending = false;
+                    match result {
+                        Ok(message) => {
+                            self.status = message;
+                            self.refresh_all_if_visible();
+                        }
+                        Err(err) => self.status = format!("节点配对失败: {err}"),
+                    }
+                }
                 UiTaskEvent::PriceCacheOnceFetched(result) => {
                     self.price_fetch_pending = false;
                     match result {
@@ -926,6 +980,7 @@ impl CodexSwitchApp {
                 self.balance_snapshots = data.balance_snapshots;
                 self.last_seen_balance_snapshot_version =
                     self.state.events.balance_snapshot_version();
+                self.refresh_peer_views();
                 self.temporary_access_keys = self
                     .runtime
                     .block_on(self.state.store.list_temporary_access_keys())
@@ -1005,6 +1060,12 @@ impl CodexSwitchApp {
         {
             Ok(handle) => {
                 self.server = Some(handle);
+                if let Err(err) = self.start_peer_services() {
+                    self.stop_server();
+                    self.status = format!("节点服务启动失败: {err}");
+                    self.sync_tray_service_state();
+                    return;
+                }
                 self.status = format!("服务已启动: http://{bind_addr}");
                 self.sync_tray_service_state();
             }
@@ -1016,11 +1077,43 @@ impl CodexSwitchApp {
     }
 
     fn stop_server(&mut self) {
+        self.stop_peer_services();
         if let Some(handle) = self.server.take() {
             handle.stop();
             self.status = "服务已停止".to_string();
         }
         self.sync_tray_service_state();
+    }
+
+    fn start_peer_services(&mut self) -> anyhow::Result<()> {
+        self.stop_peer_services();
+        let listen_enabled = self
+            .runtime
+            .block_on(self.state.store.peer_listen_enabled())?;
+        self.peer_listen_enabled = listen_enabled;
+        if listen_enabled {
+            let bind_addr = self
+                .runtime
+                .block_on(self.state.store.peer_bind_addr())?;
+            self.peer_bind_addr = bind_addr.clone();
+            let handle = self
+                .runtime
+                .block_on(proxy::start_peer_listener(bind_addr, self.state.clone()))?;
+            self.peer_server = Some(handle);
+        }
+        self.runtime.block_on(
+            self.state
+                .peers
+                .start_discovery(&self.state.store, self.state.events.clone()),
+        )?;
+        Ok(())
+    }
+
+    fn stop_peer_services(&mut self) {
+        self.state.peers.stop_discovery();
+        if let Some(handle) = self.peer_server.take() {
+            handle.stop();
+        }
     }
 
     fn refresh_local_key(&mut self, key: String) {
@@ -1180,6 +1273,7 @@ impl eframe::App for CodexSwitchApp {
                 tab_button(ui, &mut self.tab, Tab::Dashboard, "仪表盘");
                 tab_button(ui, &mut self.tab, Tab::TempKeys, "临时 Key");
                 tab_button(ui, &mut self.tab, Tab::Upstreams, "上游");
+                tab_button(ui, &mut self.tab, Tab::Peers, "节点");
                 tab_button(ui, &mut self.tab, Tab::Scheduler, "调度组");
                 tab_button(
                     ui,
@@ -1219,6 +1313,7 @@ impl eframe::App for CodexSwitchApp {
         egui::CentralPanel::default().show(ui, |ui| match self.tab {
             Tab::Dashboard => self.dashboard_ui(ui),
             Tab::Upstreams => self.upstreams_ui(ui),
+            Tab::Peers => self.peers_ui(ui),
             Tab::Scheduler => self.scheduler_ui(ui),
             Tab::CacheKeepalive => self.cache_keepalive_ui(ui),
             Tab::ActiveConnections => self.active_connections_ui(ui),

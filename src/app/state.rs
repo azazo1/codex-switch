@@ -1,9 +1,10 @@
 use crate::app::http;
 use crate::cache_keepalive::CacheKeepaliveRuntime;
 use crate::core::model_capabilities::ModelCapabilityCache;
-use crate::core::models::Upstream;
+use crate::core::models::{Upstream, UpstreamKind};
 use crate::live::LiveRequestStore;
 use crate::oauth::OAuthAccountService;
+use crate::peer::PeerRuntime;
 use crate::scheduler::SchedulerRuntime;
 use crate::storage::{Store, credentials::CredentialStore};
 use anyhow::Context;
@@ -29,6 +30,7 @@ pub struct AppState {
     pub scheduler: SchedulerRuntime,
     pub live_requests: LiveRequestStore,
     pub cache_keepalive: CacheKeepaliveRuntime,
+    pub peers: PeerRuntime,
 }
 
 #[derive(Clone, Default)]
@@ -37,6 +39,7 @@ pub struct AppEvents {
     live_stream_version: Arc<AtomicU64>,
     cache_keepalive_version: Arc<AtomicU64>,
     balance_snapshot_version: Arc<AtomicU64>,
+    peer_version: Arc<AtomicU64>,
     repaint_requester: Arc<Mutex<Option<RepaintRequester>>>,
 }
 
@@ -76,6 +79,15 @@ impl AppEvents {
 
     pub fn balance_snapshot_version(&self) -> u64 {
         self.balance_snapshot_version.load(Ordering::Relaxed)
+    }
+
+    pub fn bump_peers(&self) {
+        self.peer_version.fetch_add(1, Ordering::Relaxed);
+        self.request_repaint();
+    }
+
+    pub fn peer_version(&self) -> u64 {
+        self.peer_version.load(Ordering::Relaxed)
     }
 
     pub fn set_repaint_requester<F>(&self, repaint: F)
@@ -118,6 +130,7 @@ impl AppState {
             http.clone(),
             events.clone(),
         );
+        let peers = PeerRuntime::new(&store).await?;
         let state = Self {
             store,
             model_capabilities,
@@ -128,6 +141,7 @@ impl AppState {
             scheduler: SchedulerRuntime::default(),
             live_requests: LiveRequestStore::default(),
             cache_keepalive,
+            peers,
         };
         state.cache_keepalive.start();
         crate::balance_alert::start(state.clone());
@@ -135,10 +149,26 @@ impl AppState {
     }
 
     pub fn http_for_upstream(&self, upstream: &Upstream) -> anyhow::Result<reqwest::Client> {
+        if upstream.kind == UpstreamKind::PeerNode {
+            anyhow::bail!("peer node requests must use a pinned tls client");
+        }
         match upstream.proxy_url.as_deref() {
             Some(proxy_url) if !proxy_url.trim().is_empty() => http::build_client(Some(proxy_url)),
             _ => Ok(self.http.clone()),
         }
+    }
+
+    pub async fn http_for_peer_upstream(
+        &self,
+        upstream: &Upstream,
+    ) -> anyhow::Result<reqwest::Client> {
+        let peer = self
+            .store
+            .get_node_peer_by_upstream(&upstream.id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("peer node is not paired"))?;
+        let public_key = crate::peer::identity::decode_public_key(&peer.public_key)?;
+        crate::peer::client::pinned_client(&self.peers.identity(), public_key)
     }
 }
 

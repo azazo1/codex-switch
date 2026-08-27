@@ -19,23 +19,29 @@ pub struct ProxyState {
 }
 
 pub fn build_router(state: AppState) -> Router {
+    Router::new()
+        .fallback_service(build_api_router(state))
+        .layer(middleware::from_fn(rewrite_incoming_api_path))
+}
+
+pub fn build_api_router(state: AppState) -> Router {
     let state = Arc::new(ProxyState { app: state });
-    let api = Router::new()
+    Router::new()
         .route("/health", get(health))
         .route("/v1/models", get(models))
         .route("/models", get(models))
-        .route("/v1/models/:id", get(model))
-        .route("/models/:id", get(model))
+        .route("/v1/models/{id}", get(model))
+        .route("/models/{id}", get(model))
         .route("/v1/responses", post(responses).get(ws_placeholder))
-        .route("/v1/responses/*subpath", post(responses_subpath))
+        .route("/v1/responses/{*subpath}", post(responses_subpath))
         .route("/responses", post(responses).get(ws_placeholder))
-        .route("/responses/*subpath", post(responses_subpath))
+        .route("/responses/{*subpath}", post(responses_subpath))
         .route(
             "/backend-api/codex/responses",
             post(responses).get(ws_placeholder),
         )
         .route(
-            "/backend-api/codex/responses/*subpath",
+            "/backend-api/codex/responses/{*subpath}",
             post(responses_subpath),
         )
         .route("/v1/chat/completions", post(chat_completions))
@@ -44,16 +50,12 @@ pub fn build_router(state: AppState) -> Router {
         .route("/messages", post(messages))
         .route("/v1/messages/count_tokens", post(count_tokens))
         .route("/messages/count_tokens", post(count_tokens))
-        .route("/v1/images/*subpath", post(images))
-        .route("/images/*subpath", post(images))
+        .route("/v1/images/{*subpath}", post(images))
+        .route("/images/{*subpath}", post(images))
         .layer(DefaultBodyLimit::disable())
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
-        .with_state(state);
-
-    Router::new()
-        .fallback_service(api)
-        .layer(middleware::from_fn(rewrite_incoming_api_path))
+        .with_state(state)
 }
 
 async fn rewrite_incoming_api_path(mut request: Request, next: Next) -> Response {
@@ -2124,6 +2126,7 @@ mod tests {
             events.clone(),
         );
         let oauth_accounts = crate::oauth::OAuthAccountService::new(store.clone());
+        let peers = crate::peer::PeerRuntime::new(&store).await.unwrap();
         AppState {
             store,
             model_capabilities: Default::default(),
@@ -2134,6 +2137,7 @@ mod tests {
             scheduler: Default::default(),
             live_requests: Default::default(),
             cache_keepalive,
+            peers,
         }
     }
 
@@ -2237,7 +2241,7 @@ mod tests {
             mode,
         };
         let router = Router::new()
-            .route("/*path", get(mock_handler).post(mock_handler))
+            .route("/{*path}", get(mock_handler).post(mock_handler))
             .layer(DefaultBodyLimit::disable())
             .with_state(state);
         (spawn_server(router).await, hits)

@@ -185,7 +185,11 @@ impl CodexSwitchApp {
             self.status = "上游名称不能为空".to_string();
             return;
         }
-        if upstream.kind == UpstreamKind::RelayApiKey && upstream.base_url.is_empty() {
+        if matches!(
+            upstream.kind,
+            UpstreamKind::RelayApiKey | UpstreamKind::PeerNode
+        ) && upstream.base_url.is_empty()
+        {
             self.status = "Base URL 不能为空".to_string();
             return;
         }
@@ -323,6 +327,7 @@ impl UpstreamEditor {
         match self.upstream.kind {
             UpstreamKind::RelayApiKey => self.relay_form_ui(ui),
             UpstreamKind::CodexOauth => self.oauth_form_ui(ui),
+            UpstreamKind::PeerNode => self.peer_form_ui(ui),
         }
     }
 
@@ -421,6 +426,14 @@ impl UpstreamEditor {
             &mut self.min_cacheable_tokens_input,
             &mut self.max_cacheable_tokens_input,
         );
+    }
+
+    fn peer_form_ui(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("节点 URL");
+            ui.text_edit_singleline(&mut self.upstream.base_url);
+        });
+        ui.label("节点上游走独立 mTLS, 不会使用本地访问 key, 也不会做协议转换.");
     }
 
     fn oauth_form_ui(&mut self, ui: &mut egui::Ui) {
