@@ -223,7 +223,7 @@ impl CodexSwitchApp {
             self.status = format!("保存节点显示名失败: {err}");
             return;
         }
-        self.status = "节点显示名已保存, 重启节点口后生效".to_string();
+        self.status = "节点显示名已保存, 重启节点监听后生效".to_string();
     }
 
     fn save_peer_setting(&mut self, key: &str, value: String) {
@@ -234,7 +234,7 @@ impl CodexSwitchApp {
             self.status = format!("保存节点设置失败: {err}");
             return;
         }
-        self.status = "节点设置已保存, 重新启动服务后生效".to_string();
+        self.status = "节点设置已保存, 重启节点监听后生效".to_string();
     }
 
     fn open_lnd_settings_window(&mut self) {
@@ -320,7 +320,7 @@ impl CodexSwitchApp {
                 self.lnd_bearer_token = token;
                 self.lnd_discovery_domain = domain;
                 self.lnd_settings_open = false;
-                self.status = "LND 设置已保存, 重新启动服务后生效".to_string();
+                self.status = "LND 设置已保存, 重启节点监听后生效".to_string();
             }
             Err(err) => {
                 self.status = format!("保存 LND 设置失败: {err}");

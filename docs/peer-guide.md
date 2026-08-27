@@ -59,7 +59,7 @@ mDNS 依赖组播, 跨 VLAN 或容器网络可能不可见.
 - bearer token
 - 可选 discovery domain
 
-点 `保存` 后重新启动服务才会生效. 点 `取消` 会丢弃弹窗中的未保存修改.
+点 `保存` 后重启节点监听才会生效. 点 `取消` 会丢弃未保存修改.
 
 service type 为 `_codex-switch._tcp`. lnd-server 能看到指纹和地址, 看不到私钥, 也不能代替配对.
 
