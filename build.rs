@@ -48,7 +48,7 @@ impl GitMetadata {
             git_output(manifest_dir, &["describe", "--tags", "--abbrev=0", "HEAD"])
                 .unwrap_or(fallback_tag)
         });
-        let commit = git_output(manifest_dir, &["rev-parse", "--short=6", "HEAD"]);
+        let commit = git_output(manifest_dir, &["rev-parse", "--short=7", "HEAD"]);
         let dirty = commit.is_some() && git_is_dirty(manifest_dir);
 
         Self {

@@ -1,3 +1,4 @@
+[private]
 default:
     @just --list
 
@@ -22,7 +23,7 @@ run:
 [macos]
 dist:
     cargo build --locked --release --bins
-    bash scripts/package-macos.sh target/release "dist/codex-switch-macos-$(uname -m).dmg"
+    bash scripts/dist-macos.sh target/release
 
 [linux]
 dist:

@@ -33,7 +33,6 @@ jobs:
       tag_name: ${{ steps.release_context.outputs.tag_name }}
       source_ref: ${{ steps.release_context.outputs.source_ref }}
       version: ${{ steps.release_version.outputs.version }}
-      package_version: ${{ steps.package_version.outputs.package_version }}
 
     steps:
       - name: 解析发布上下文
@@ -67,13 +66,13 @@ jobs:
           echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
 
       - name: 检出版本来源
-        if: steps.release_context.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
+        if: steps.release_context.outputs.is_release == 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.release_context.outputs.source_ref }}
 
       - name: 安装 Rust 工具链
-        if: steps.release_context.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
+        if: steps.release_context.outputs.is_release == 'true'
         uses: dtolnay/rust-toolchain@stable
 
       - name: 校验 tag 和包版本
@@ -96,18 +95,6 @@ jobs:
           fi
 
           echo "version=$package_version" >> "$GITHUB_OUTPUT"
-
-      - name: 解析包版本
-        id: package_version
-        if: steps.release_context.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
-        shell: bash
-        run: |
-          set -euo pipefail
-          package_version="$(
-            cargo metadata --locked --no-deps --format-version 1 |
-              jq -er '.packages[] | select(.name == "codex-switch") | .version'
-          )"
-          echo "package_version=$package_version" >> "$GITHUB_OUTPUT"
 
   test:
     name: 测试
@@ -155,37 +142,31 @@ jobs:
             runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             platform: linux
-            archive: linux-x86_64.tar.gz
           - name: Linux arm64
             id: linux-aarch64
             runner: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             platform: linux
-            archive: linux-aarch64.tar.gz
           - name: Windows x64
             id: windows-x86_64
             runner: windows-2025
             target: x86_64-pc-windows-msvc
             platform: windows
-            archive: windows-x86_64.zip
           - name: Windows arm64
             id: windows-aarch64
             runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             platform: windows
-            archive: windows-aarch64.zip
           - name: macOS x64
             id: macos-x86_64
             runner: macos-15-intel
             target: x86_64-apple-darwin
             platform: macos
-            archive: macos-x86_64.dmg
           - name: macOS arm64
             id: macos-aarch64
             runner: macos-15
             target: aarch64-apple-darwin
             platform: macos
-            archive: macos-aarch64.dmg
 
     steps:
       - name: 检出目标提交
@@ -193,6 +174,7 @@ jobs:
         with:
           ref: ${{ needs.version.outputs.source_ref }}
           fetch-depth: 0
+          fetch-tags: true
 
       - name: 安装 Linux 依赖
         if: matrix.platform == 'linux'
@@ -223,7 +205,7 @@ jobs:
         run: cargo build --locked --release --bins --target ${{ matrix.target }}
 
       - name: 校验 Linux 二进制文件
-        if: (needs.version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch') && matrix.platform == 'linux'
+        if: matrix.platform == 'linux'
         shell: bash
         run: |
           set -euo pipefail
@@ -232,7 +214,7 @@ jobs:
           file "$binary" | grep -q 'ELF'
 
       - name: 校验 Windows 二进制文件
-        if: (needs.version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch') && matrix.platform == 'windows'
+        if: matrix.platform == 'windows'
         shell: pwsh
         run: |
           $binary = "target/${{ matrix.target }}/release/codex-switch.exe"
@@ -300,7 +282,7 @@ jobs:
           }
 
       - name: 校验 macOS 二进制文件
-        if: (needs.version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch') && matrix.platform == 'macos'
+        if: matrix.platform == 'macos'
         shell: bash
         run: |
           set -euo pipefail
@@ -309,31 +291,26 @@ jobs:
           file "$binary" | grep -q 'Mach-O'
 
       - name: 打包 Linux 产物
-        if: (needs.version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch') && matrix.platform == 'linux'
+        if: matrix.platform == 'linux'
         shell: bash
         run: |
           set -euo pipefail
           bash scripts/dist-linux.sh "target/${{ matrix.target }}/release"
 
       - name: 打包 Windows 产物
-        if: (needs.version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch') && matrix.platform == 'windows'
+        if: matrix.platform == 'windows'
         shell: pwsh
         run: |
           & scripts/dist-windows.ps1 -ProfileDir "target/${{ matrix.target }}/release"
 
       - name: 打包 macOS DMG
-        if: (needs.version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch') && matrix.platform == 'macos'
-        env:
-          VERSION: ${{ needs.version.outputs.version || needs.version.outputs.package_version }}
+        if: matrix.platform == 'macos'
         shell: bash
         run: |
           set -euo pipefail
-          bash scripts/package-macos.sh \
-            "target/${{ matrix.target }}/release" \
-            "dist/codex-switch-$VERSION-${{ matrix.archive }}"
+          bash scripts/dist-macos.sh "target/${{ matrix.target }}/release"
 
       - name: 上传构建产物
-        if: needs.version.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: artifact-${{ matrix.id }}
@@ -374,7 +351,7 @@ jobs:
         run: |
           set -euo pipefail
           tag_ref="refs/tags/$TAG_NAME"
-          manual_notes="docs/release-notes/$VERSION.md"
+          manual_notes="docs/changelog/$VERSION.md"
 
           if [[ ! -s "$manual_notes" ]]; then
             echo "缺少 release notes: $manual_notes" >&2
@@ -414,8 +391,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          manual_notes="docs/release-notes/$VERSION.md"
-          base_tag_file="docs/release-notes/$VERSION-base.txt"
+          manual_notes="docs/changelog/$VERSION.md"
+          base_tag_file="docs/changelog/$VERSION-base.txt"
           api_args=(
             --method POST
             "repos/$GITHUB_REPOSITORY/releases/generate-notes"

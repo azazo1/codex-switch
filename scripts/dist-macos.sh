@@ -12,7 +12,5 @@ case "$arch" in
   arm64) arch="aarch64" ;;
 esac
 
-output="dist/codex-switch-$version-linux-$arch.tar.gz"
-mkdir -p dist
-tar -C "$profile_dir" -czf "$output" codex-switch
-echo "created $output"
+output="dist/codex-switch-$version-macos-$arch.dmg"
+bash "$script_dir/package-macos.sh" "$profile_dir" "$output"

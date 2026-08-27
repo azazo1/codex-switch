@@ -2,12 +2,9 @@ param(
     [string]$ProfileDir = "target/release"
 )
 
-$metadata = cargo metadata --locked --no-deps --format-version 1 | Out-String | ConvertFrom-Json
-$Version = $metadata.packages |
-    Where-Object { $_.name -eq "codex-switch" } |
-    Select-Object -First 1 -ExpandProperty version
+$Version = (& "$PSScriptRoot/build-version.ps1" | Out-String).Trim()
 if (-not $Version) {
-    throw "failed to resolve codex-switch version from cargo metadata"
+    throw "failed to resolve build version"
 }
 
 $binary = Join-Path $ProfileDir "codex-switch.exe"

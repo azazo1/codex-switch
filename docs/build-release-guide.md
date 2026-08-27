@@ -28,9 +28,9 @@ just dist
 
 输出位于 `dist/`.
 
-归档文件名中的版本号自动从 `Cargo.toml` 读取.
+归档文件名使用自动生成的构建版本号. 精确 tag 使用包版本, 例如 `codex-switch-0.11.0-linux-x86_64.tar.gz`; 非 tag commit 会在最近版本后追加 7 位短 hash, 例如 `codex-switch-0.11.0-a1b2c3d-linux-x86_64.tar.gz`.
 
-构建产物会自动显示版本和构建 commit: 精确 tag 显示 `vX.Y.Z`, 非 tag 显示 `vX.Y.Z-<6 位 commit>`, 工作区有未提交改动时使用 `^` 分隔.
+构建产物会自动显示版本和构建 commit: 精确 tag 显示 `vX.Y.Z`, 非 tag 显示 `vX.Y.Z-<7 位 commit>`, 工作区有未提交改动时使用 `^` 分隔.
 
 Windows 构建会将 `assets/app-icon.ico` 内嵌到 `.exe` 中. 图标包含从 16x16 到 256x256 的多档尺寸.
 
@@ -77,19 +77,21 @@ Bundle 最低系统版本为 macOS 12.0. Bundle 版本读取 `Cargo.toml` 中的
 | Windows | `x86_64-pc-windows-msvc` | `aarch64-pc-windows-msvc` |
 | macOS | `x86_64-apple-darwin` | `aarch64-apple-darwin` |
 
-tag push 或手动填写已有 tag 的 `workflow_dispatch` 会进入发布流程. `workflow_dispatch` 留空 tag 时只构建并上传 Actions artifact, 不会创建 release.
+普通 push, pull request 和留空 tag 的 `workflow_dispatch` 都会构建, 校验, 打包并上传 Actions artifact, 不会创建 release. tag push 或手动填写已有 tag 的 `workflow_dispatch` 会在同一套矩阵成功后进入发布流程.
 
-Release job 会先重新获取远端 tag object, 校验它是 annotated tag 且 annotation 与 `docs/release-notes/<version>.md` 完全一致, 再生成 notes. Release 完全由 Actions 创建或更新, 本地 `gh` 不参与发布.
+构建和测试 job 使用 `Swatinem/rust-cache` 缓存依赖与编译结果. 缓存只用于加速, 不是发布正确性来源, 干净 runner 也必须能完整构建.
 
-Release 标题包含项目名和版本. 正文优先读取 `docs/release-notes/<version>.md`, 后面附加 GitHub 自动生成的提交和 PR 说明. 可选的 `<version>-base.txt` 用于指定累计 notes 的起始 tag. Workflow 重跑时会更新正文并覆盖同名资产.
+Release job 会先重新获取远端 tag object, 校验它是 annotated tag 且 annotation 与 `docs/changelog/<version>.md` 完全一致, 再生成 notes. Release 完全由 Actions 创建或更新, 本地 `gh` 不参与发布.
+
+Release 标题包含项目名和版本. 正文优先读取 `docs/changelog/<version>.md`, 后面用 `---` 分隔并附加 GitHub 自动生成的提交和 PR 说明. 可选的 `<version>-base.txt` 用于指定累计 notes 的起始 tag. Workflow 重跑时会更新正文并覆盖同名资产.
 
 ## 发布一个版本
 
-先让 `Cargo.toml` 中的版本与计划 tag 一致, 再提交版本变更. Workflow 会通过 `cargo metadata` 严格校验 `v<package-version>` 格式, 版本不一致时不会执行构建矩阵. 使用 annotated tag 保存 release 正文:
+先让 `Cargo.toml` 中的版本与计划 tag 一致, 写好 `docs/changelog/<version>.md`, 再提交这些文件. Workflow 会通过 `cargo metadata` 严格校验 `v<package-version>` 格式, 版本不一致时不会执行构建矩阵. 使用 annotated tag 保存 release 正文:
 
 ```shell
-git tag -a v0.8.0 --cleanup=verbatim -F docs/release-notes/0.8.0.md
-git push origin main v0.8.0
+git tag -a v0.11.0 --cleanup=verbatim -F docs/changelog/0.11.0.md
+git push origin main v0.11.0
 ```
 
 tag push 后, 在 GitHub Actions 中等待六个平台全部构建成功. Release job 会附加:
@@ -99,7 +101,7 @@ tag push 后, 在 GitHub Actions 中等待六个平台全部构建成功. Releas
 - macOS x64 和 arm64 的 `.dmg`.
 - 包含全部归档 SHA-256 摘要的 `SHA256SUMS`.
 
-归档名称包含包版本, 系统和架构. Release 创建前会检查六个归档是否齐全.
+归档名称包含自动生成的构建版本号, 系统和架构. Release 创建前会检查六个归档是否齐全.
 
 需要重跑已有 tag 的发布时, 在 Actions 页面选择 `workflow_dispatch` 并填写同一个 tag. 留空 tag 只构建并上传 artifact.
 

@@ -39,7 +39,7 @@ mod tests {
     #[test]
     fn exact_clean_tag_uses_the_tag_only() {
         assert_eq!(
-            format_build_version("v0.4.0", Some("abc123"), true, false),
+            format_build_version("v0.4.0", Some("a1b2c3d"), true, false),
             "v0.4.0"
         );
     }
@@ -47,16 +47,16 @@ mod tests {
     #[test]
     fn clean_non_tag_build_includes_its_commit() {
         assert_eq!(
-            format_build_version("v0.4.0", Some("abc123"), false, false),
-            "v0.4.0-abc123"
+            format_build_version("v0.4.0", Some("a1b2c3d"), false, false),
+            "v0.4.0-a1b2c3d"
         );
     }
 
     #[test]
     fn dirty_build_marks_its_commit_with_a_caret() {
         assert_eq!(
-            format_build_version("v0.4.0", Some("abc123"), true, true),
-            "v0.4.0^abc123"
+            format_build_version("v0.4.0", Some("a1b2c3d"), true, true),
+            "v0.4.0^a1b2c3d"
         );
     }
 }

@@ -13,14 +13,10 @@ plist_path="$contents_dir/Info.plist"
 iconset_dir="$package_dir/CodexSwitch.iconset"
 icns_path="$package_dir/AppIcon.icns"
 dmg_root="$package_dir/dmg-root"
-version="${3:-}"
-
-if [[ -z "$version" ]]; then
-  version="$(
-    cargo metadata --locked --no-deps --format-version 1 |
-      jq -er '.packages[] | select(.name == "codex-switch") | .version'
-  )"
-fi
+version="$(
+  cargo metadata --locked --no-deps --format-version 1 |
+    jq -er '.packages[] | select(.name == "codex-switch") | .version'
+)"
 
 cleanup() {
     rm -rf "$iconset_dir" "$dmg_root"
