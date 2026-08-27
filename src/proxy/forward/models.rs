@@ -358,22 +358,33 @@ async fn query_relay_models(
     } else {
         transform::build_endpoint(&upstream.base_url, "/models")
     };
-    let http = if upstream.kind == UpstreamKind::PeerNode {
-        state.http_for_peer_upstream(upstream).await?
-    } else {
-        state.http_for_upstream(upstream)?
-    };
-    let mut request = http.get(target_url);
-    if upstream.wire_api == crate::core::models::WireApi::AnthropicMessages {
-        request = request.query(&[("limit", "1000")]);
-    }
     let client_wire_api = headers
         .contains_key("anthropic-version")
         .then_some(crate::core::models::WireApi::AnthropicMessages);
-    let request = apply_headers(state, upstream, request, headers, client_wire_api).await?;
-    let response = request.send().await?;
-    let status = response.status();
-    let value = response.json::<Value>().await?;
+    let (status, value) = if upstream.kind == crate::core::models::UpstreamKind::PeerNode {
+        let http = state.http_for_peer_upstream(upstream).await?;
+        let request_headers = super::headers::peer_request_headers(state, headers, client_wire_api)?;
+        let response = http
+            .send("GET", &target_url, request_headers, Vec::new())
+            .await?;
+        let status = reqwest::StatusCode::from_u16(response.status.as_u16())?;
+        let bytes = response.bytes().await?;
+        (
+            status,
+            serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null),
+        )
+    } else {
+        let http = state.http_for_upstream(upstream)?;
+        let mut request = http.get(target_url);
+        if upstream.wire_api == crate::core::models::WireApi::AnthropicMessages {
+            request = request.query(&[("limit", "1000")]);
+        }
+        let request = apply_headers(state, upstream, request, headers, client_wire_api).await?;
+        let response = request.send().await?;
+        let status = response.status();
+        let value = response.json::<Value>().await?;
+        (status, value)
+    };
     if !status.is_success() {
         anyhow::bail!(
             "{}",

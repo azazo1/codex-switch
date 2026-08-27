@@ -161,7 +161,7 @@ impl AppState {
     pub async fn http_for_peer_upstream(
         &self,
         upstream: &Upstream,
-    ) -> anyhow::Result<reqwest::Client> {
+    ) -> anyhow::Result<crate::peer::client::PeerHttpClient> {
         let peer = self
             .store
             .get_node_peer_by_upstream(&upstream.id)

@@ -42,6 +42,19 @@ where
     builder.body(Body::from_stream(stream)).unwrap()
 }
 
+pub(super) fn from_http_headers(headers: &hyper::HeaderMap) -> reqwest::header::HeaderMap {
+    let mut result = reqwest::header::HeaderMap::new();
+    for (name, value) in headers {
+        if let (Ok(name), Ok(value)) = (
+            reqwest::header::HeaderName::from_bytes(name.as_str().as_bytes()),
+            reqwest::header::HeaderValue::from_bytes(value.as_bytes()),
+        ) {
+            result.append(name, value);
+        }
+    }
+    result
+}
+
 pub(super) fn to_axum_headers(headers: &reqwest::header::HeaderMap) -> HeaderMap {
     let mut result = HeaderMap::new();
     for (name, value) in headers {

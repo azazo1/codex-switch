@@ -48,16 +48,45 @@ pub(super) async fn apply_headers(
                 .header("Accept", "application/json");
         }
         UpstreamKind::PeerNode => {
-            let hops = crate::peer::protocol::append_hop(
-                headers
-                    .get(crate::peer::HOP_HEADER)
-                    .and_then(|value| value.to_str().ok()),
-                &state.peers.identity().node_id,
-            )?;
-            request = request.header(crate::peer::HOP_HEADER, crate::peer::protocol::encode_hops(&hops));
+            request = request.header(crate::peer::HOP_HEADER, peer_hop_value(state, headers)?);
         }
     }
     Ok(request)
+}
+
+pub(super) fn peer_request_headers(
+    state: &AppState,
+    headers: &HeaderMap,
+    client_wire_api: Option<WireApi>,
+) -> anyhow::Result<hyper::HeaderMap> {
+    let preserve_anthropic = client_wire_api == Some(WireApi::AnthropicMessages);
+    let mut request = hyper::HeaderMap::new();
+    for (name, value) in headers {
+        let name_str = name.as_str().to_ascii_lowercase();
+        if should_forward_header(&name_str, preserve_anthropic)
+            && let (Ok(name), Ok(value)) = (
+                hyper::header::HeaderName::from_bytes(name.as_str().as_bytes()),
+                hyper::header::HeaderValue::from_bytes(value.as_bytes()),
+            )
+        {
+            request.append(name, value);
+        }
+    }
+    request.insert(
+        crate::peer::HOP_HEADER,
+        hyper::header::HeaderValue::from_str(&peer_hop_value(state, headers)?)?,
+    );
+    Ok(request)
+}
+
+fn peer_hop_value(state: &AppState, headers: &HeaderMap) -> anyhow::Result<String> {
+    let hops = crate::peer::protocol::append_hop(
+        headers
+            .get(crate::peer::HOP_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        &state.peers.identity().node_id,
+    )?;
+    Ok(crate::peer::protocol::encode_hops(&hops))
 }
 
 fn should_forward_header(name: &str, preserve_anthropic: bool) -> bool {

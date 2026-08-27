@@ -3,7 +3,6 @@ use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, PKCS_ED25519}
 use rustls::DigitallySignedStruct;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::CryptoProvider;
-use rustls::crypto::verify_tls13_signature_with_raw_key;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::{ClientConfig, ServerConfig, SignatureScheme};
@@ -28,10 +27,7 @@ pub fn certificate_for_identity(identity: &NodeIdentity) -> anyhow::Result<(Cert
     let mut distinguished_name = DistinguishedName::new();
     distinguished_name.push(DnType::CommonName, identity.fingerprint());
     params.distinguished_name = distinguished_name;
-    params.key_usages = vec![
-        rcgen::KeyUsagePurpose::DigitalSignature,
-        rcgen::KeyUsagePurpose::KeyEncipherment,
-    ];
+    params.key_usages = vec![rcgen::KeyUsagePurpose::DigitalSignature];
     params.extended_key_usages = vec![
         rcgen::ExtendedKeyUsagePurpose::ServerAuth,
         rcgen::ExtendedKeyUsagePurpose::ClientAuth,
@@ -144,7 +140,7 @@ impl ClientCertVerifier for AnyEd25519ClientCertVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        verify_tls13_signature(message, cert, dss)
+        verify_peer_tls13_signature(message, cert, dss)
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
@@ -202,7 +198,7 @@ impl ServerCertVerifier for PeerServerCertVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        verify_tls13_signature(message, cert, dss)
+        verify_peer_tls13_signature(message, cert, dss)
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
@@ -210,28 +206,17 @@ impl ServerCertVerifier for PeerServerCertVerifier {
     }
 }
 
-fn verify_tls13_signature(
+fn verify_peer_tls13_signature(
     message: &[u8],
     cert: &CertificateDer<'_>,
     dss: &DigitallySignedStruct,
 ) -> Result<HandshakeSignatureValid, rustls::Error> {
-    let public_key = public_key_from_cert(cert).map_err(to_tls_error)?;
-    let spki = rustls::pki_types::SubjectPublicKeyInfoDer::from(ed25519_spki(&public_key).to_vec());
-    verify_tls13_signature_with_raw_key(
+    rustls::crypto::verify_tls13_signature(
         message,
-        &spki,
+        cert,
         dss,
         &rustls::crypto::ring::default_provider().signature_verification_algorithms,
     )
-}
-
-fn ed25519_spki(public_key: &[u8; 32]) -> [u8; 44] {
-    let mut spki = [0_u8; 44];
-    spki[..12].copy_from_slice(&[
-        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
-    ]);
-    spki[12..].copy_from_slice(public_key);
-    spki
 }
 
 fn to_tls_error(err: anyhow::Error) -> rustls::Error {

@@ -19,11 +19,12 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures_util::StreamExt;
-use headers::apply_headers;
+use futures_util::stream::BoxStream;
+use headers::{apply_headers, peer_request_headers};
 use logging::{
     ActiveRequestGuard, AttemptLog, LiveRequestGuard, StreamLogDraft, record_attempt_log,
 };
-use response::{build_response, build_stream_response, to_axum_headers};
+use response::{build_response, build_stream_response, from_http_headers, to_axum_headers};
 use select::selection_plan;
 use serde_json::{Value, json};
 use std::io;
@@ -559,26 +560,6 @@ async fn forward_with_upstream(
     );
     let keepalive_body = target_body.clone();
 
-    let http = if upstream.kind == UpstreamKind::PeerNode {
-        request.state.http_for_peer_upstream(&upstream).await?
-    } else {
-        request.state.http_for_upstream(&upstream)?
-    };
-    let mut upstream_request = http
-        .request(
-            reqwest::Method::from_bytes(request.method.as_str().as_bytes())?,
-            &target_url,
-        )
-        .body(target_body);
-    upstream_request =
-        apply_headers(
-            request.state,
-            &upstream,
-            upstream_request,
-            &request.headers,
-            request.endpoint_kind.client_wire_api(),
-        )
-        .await?;
     if let Some(query) = request.uri.query() {
         tracing::debug!(query, "client query observed");
     }
@@ -593,9 +574,58 @@ async fn forward_with_upstream(
     request.state.events.bump_live_streams();
     let mut active_guard =
         ActiveRequestGuard::new(request.state.clone(), request.request_id.clone());
-    let response = send_upstream_request(upstream_request, &mut terminate_rx).await?;
-    let status = StatusCode::from_u16(response.status().as_u16())?;
-    let response_headers = response.headers().clone();
+    let (status, response_headers, _content_type, body, stream) = if upstream.kind
+        == UpstreamKind::PeerNode
+    {
+        send_peer_upstream(
+            request,
+            &upstream,
+            &target_url,
+            target_body,
+            &mut terminate_rx,
+        )
+        .await?
+    } else {
+        let http = request.state.http_for_upstream(&upstream)?;
+        let mut upstream_request = http
+            .request(
+                reqwest::Method::from_bytes(request.method.as_str().as_bytes())?,
+                &target_url,
+            )
+            .body(target_body);
+        upstream_request = apply_headers(
+            request.state,
+            &upstream,
+            upstream_request,
+            &request.headers,
+            request.endpoint_kind.client_wire_api(),
+        )
+        .await?;
+        let response = send_upstream_request(upstream_request, &mut terminate_rx).await?;
+        let status = StatusCode::from_u16(response.status().as_u16())?;
+        let response_headers = response.headers().clone();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let streaming = content_type.contains("text/event-stream");
+        if streaming {
+            (
+                status,
+                response_headers,
+                content_type,
+                None,
+                Some(Box::pin(response.bytes_stream().map(|item| {
+                    item.map_err(io::Error::other)
+                })) as BoxStream<'static, Result<Bytes, io::Error>>),
+            )
+        } else {
+            let bytes = read_response_bytes(response, &mut terminate_rx).await?;
+            (status, response_headers, content_type, Some(bytes), None)
+        }
+    };
     if upstream.kind == UpstreamKind::CodexOauth
         && let Some(snapshot) =
             quota::snapshot_from_headers(&upstream.id, &to_axum_headers(&response_headers))
@@ -603,14 +633,7 @@ async fn forward_with_upstream(
         let _ = request.state.store.save_quota_snapshot(&snapshot).await;
     }
 
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default()
-        .to_string();
-
-    let streaming = content_type.contains("text/event-stream");
+    let streaming = stream.is_some();
     if request
         .state
         .live_requests
@@ -626,11 +649,11 @@ async fn forward_with_upstream(
             keepalive_body,
             effective_model: effective_model.clone(),
             status,
-            response,
             protocol_bridge: protocol_request
                 .take()
                 .map(|prepared| prepared.sse_bridge)
                 .filter(|_| status.is_success()),
+            upstream_stream: stream.expect("streaming response is missing body stream"),
             active_guard,
             terminate_rx,
             temporary_key_id: request.temporary_key_id.clone(),
@@ -647,7 +670,7 @@ async fn forward_with_upstream(
             response: build_stream_response(status, response_headers, stream),
         })
     } else {
-        let bytes = read_response_bytes(response, &mut terminate_rx).await?;
+        let bytes = body.unwrap_or_default();
         debug::log_body(
             "upstream_response",
             &request.request_id,
@@ -738,6 +761,66 @@ async fn forward_with_upstream(
             log_on_return: true,
             response: build_response(client_status, response_headers, response_body),
         })
+    }
+}
+
+async fn send_peer_upstream(
+    request: &ForwardRequest<'_>,
+    upstream: &Upstream,
+    target_url: &str,
+    body: Vec<u8>,
+    terminate_rx: &mut watch::Receiver<bool>,
+) -> anyhow::Result<(
+    StatusCode,
+    reqwest::header::HeaderMap,
+    String,
+    Option<Bytes>,
+    Option<BoxStream<'static, Result<Bytes, io::Error>>>,
+)> {
+    let http = request.state.http_for_peer_upstream(upstream).await?;
+    let headers = peer_request_headers(
+        request.state,
+        &request.headers,
+        request.endpoint_kind.client_wire_api(),
+    )?;
+    let url = if let Some(query) = request.uri.query() {
+        format!("{target_url}?{query}")
+    } else {
+        target_url.to_string()
+    };
+    let send_future = http.send(request.method.as_str(), &url, headers, body);
+    tokio::pin!(send_future);
+    let response = loop {
+        tokio::select! {
+            changed = terminate_rx.changed() => {
+                if termination_requested(changed, terminate_rx) {
+                    anyhow::bail!("terminated by user");
+                }
+            }
+            response = &mut send_future => {
+                break response?;
+            }
+        }
+    };
+    let status = StatusCode::from_u16(response.status.as_u16())?;
+    let response_headers = from_http_headers(&response.headers);
+    let content_type = response
+        .headers
+        .get(hyper::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    if content_type.contains("text/event-stream") {
+        Ok((
+            status,
+            response_headers,
+            content_type,
+            None,
+            Some(Box::pin(response.bytes_stream())),
+        ))
+    } else {
+        let bytes = response.bytes().await?;
+        Ok((status, response_headers, content_type, Some(bytes), None))
     }
 }
 
@@ -848,8 +931,8 @@ struct LiveResponseStreamInput<'a> {
     keepalive_body: Vec<u8>,
     effective_model: Option<String>,
     status: StatusCode,
-    response: reqwest::Response,
     protocol_bridge: Option<ProtocolSseBridge>,
+    upstream_stream: BoxStream<'static, Result<Bytes, io::Error>>,
     active_guard: ActiveRequestGuard,
     terminate_rx: watch::Receiver<bool>,
     temporary_key_id: Option<String>,
@@ -864,8 +947,8 @@ fn build_live_response_stream(
         keepalive_body,
         effective_model,
         status,
-        response,
         protocol_bridge,
+        mut upstream_stream,
         active_guard,
         mut terminate_rx,
         temporary_key_id,
@@ -898,7 +981,6 @@ fn build_live_response_stream(
         let mut first_token_ms = None;
         let mut usage = TokenUsage::default();
         let mut sse_buffer = Vec::new();
-        let mut upstream_stream = response.bytes_stream();
         let mut protocol_bridge = protocol_bridge;
         let mut error_rewriter = (!convert_protocol
             && upstream.error_retry_policy != ErrorRetryPolicy::Off)

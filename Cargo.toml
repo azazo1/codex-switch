@@ -17,7 +17,7 @@ eframe = { version = "0.36", default-features = false, features = ["accesskit", 
 futures-util = "0.3"
 hostname = "0.4"
 http-body-util = "0.1"
-hyper = { version = "1", features = ["http1", "server"] }
+hyper = { version = "1", features = ["http1", "client", "server"] }
 hyper-util = { version = "0.1", features = ["tokio", "server-auto", "http1"] }
 if-addrs = "0.15"
 lnd = { package = "lnd-core", version = "0.1.1" }
