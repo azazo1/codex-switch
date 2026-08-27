@@ -38,15 +38,14 @@ impl CodexSwitchApp {
             }
         });
         ui.horizontal(|ui| {
-            if ui
-                .checkbox(&mut self.peer_listen_enabled, "启用节点 TLS 口")
-                .changed()
-            {
-                self.save_peer_setting("peer_listen_enabled", bool_setting(self.peer_listen_enabled));
-            }
-            ui.label("节点地址");
-            if ui.text_edit_singleline(&mut self.peer_bind_addr).lost_focus() {
-                self.save_peer_setting("peer_bind_addr", self.peer_bind_addr.clone());
+            ui.label("监听节点请求");
+            ui.text_edit_singleline(&mut self.peer_bind_addr);
+            if self.peer_server.is_none() {
+                if ui.button("启动").clicked() {
+                    self.start_peer_server();
+                }
+            } else if ui.button("停止").clicked() {
+                self.stop_peer_server();
             }
         });
         ui.label("节点口只接受已配对证书的 mTLS, 不要把它和本地明文代理口混用.");
@@ -169,10 +168,6 @@ impl CodexSwitchApp {
         self.node_id = identity.node_id.clone();
         self.node_fingerprint = identity.fingerprint();
         self.node_display_name = identity.display_name.clone();
-        self.peer_listen_enabled = self
-            .runtime
-            .block_on(self.state.store.peer_listen_enabled())
-            .unwrap_or(false);
         self.peer_bind_addr = self
             .runtime
             .block_on(self.state.store.peer_bind_addr())

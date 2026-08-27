@@ -81,9 +81,6 @@ impl Store {
         if self.get_setting("tray_badge_metric_secondary").await?.is_none() {
             self.set_setting("tray_badge_metric_secondary", "none").await?;
         }
-        if self.get_setting("peer_listen_enabled").await?.is_none() {
-            self.set_setting("peer_listen_enabled", "false").await?;
-        }
         if self.get_setting("peer_bind_addr").await?.is_none() {
             self.set_setting("peer_bind_addr", crate::peer::protocol::DEFAULT_PEER_BIND_ADDR)
                 .await?;

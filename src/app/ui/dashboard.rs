@@ -33,7 +33,7 @@ impl CodexSwitchApp {
         ui.label(format!("Base URL: http://{}/v1", self.bind_addr));
         ui.horizontal_wrapped(|ui| {
             ui.label(format!("节点指纹: {}", self.node_fingerprint));
-            if self.peer_listen_enabled {
+            if self.peer_server.is_some() {
                 ui.label(format!("节点口: {}", self.peer_bind_addr));
             } else {
                 ui.label("节点口: 关闭");

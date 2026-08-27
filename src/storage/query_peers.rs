@@ -40,14 +40,6 @@ impl Store {
             .await
     }
 
-    pub async fn peer_listen_enabled(&self) -> anyhow::Result<bool> {
-        Ok(self
-            .get_setting("peer_listen_enabled")
-            .await?
-            .as_deref()
-            == Some("true"))
-    }
-
     pub async fn peer_bind_addr(&self) -> anyhow::Result<String> {
         Ok(self
             .get_setting("peer_bind_addr")

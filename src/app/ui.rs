@@ -472,7 +472,6 @@ pub struct CodexSwitchApp {
     node_fingerprint: String,
     node_id: String,
     node_display_name: String,
-    peer_listen_enabled: bool,
     peer_bind_addr: String,
     mdns_discovery_enabled: bool,
     lnd_discovery_enabled: bool,
@@ -646,7 +645,6 @@ impl CodexSwitchApp {
             node_fingerprint: String::new(),
             node_id: String::new(),
             node_display_name: String::new(),
-            peer_listen_enabled: false,
             peer_bind_addr: crate::peer::protocol::DEFAULT_PEER_BIND_ADDR.to_string(),
             mdns_discovery_enabled: false,
             lnd_discovery_enabled: false,
@@ -836,6 +834,7 @@ impl CodexSwitchApp {
 
     fn exit_app(&mut self, ctx: &egui::Context) {
         self.exit_requested = true;
+        self.stop_peer_server();
         self.stop_server();
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
@@ -1070,12 +1069,6 @@ impl CodexSwitchApp {
         {
             Ok(handle) => {
                 self.server = Some(handle);
-                if let Err(err) = self.start_peer_services() {
-                    self.stop_server();
-                    self.status = format!("节点服务启动失败: {err}");
-                    self.sync_tray_service_state();
-                    return;
-                }
                 self.status = format!("服务已启动: http://{bind_addr}");
                 self.sync_tray_service_state();
             }
@@ -1087,7 +1080,6 @@ impl CodexSwitchApp {
     }
 
     fn stop_server(&mut self) {
-        self.stop_peer_services();
         if let Some(handle) = self.server.take() {
             handle.stop();
             self.status = "服务已停止".to_string();
@@ -1095,34 +1087,47 @@ impl CodexSwitchApp {
         self.sync_tray_service_state();
     }
 
-    fn start_peer_services(&mut self) -> anyhow::Result<()> {
-        self.stop_peer_services();
-        let listen_enabled = self
-            .runtime
-            .block_on(self.state.store.peer_listen_enabled())?;
-        self.peer_listen_enabled = listen_enabled;
-        if listen_enabled {
-            let bind_addr = self
-                .runtime
-                .block_on(self.state.store.peer_bind_addr())?;
-            self.peer_bind_addr = bind_addr.clone();
-            let handle = self
-                .runtime
-                .block_on(proxy::start_peer_listener(bind_addr, self.state.clone()))?;
-            self.peer_server = Some(handle);
+    fn start_peer_server(&mut self) {
+        if self.peer_server.is_some() {
+            self.status = "节点监听已经在运行".to_string();
+            return;
         }
-        self.runtime.block_on(
-            self.state
-                .peers
-                .start_discovery(&self.state.store, self.state.events.clone()),
-        )?;
-        Ok(())
+        let bind_addr = self.peer_bind_addr.clone();
+        if let Err(err) = self
+            .runtime
+            .block_on(self.state.store.set_setting("peer_bind_addr", &bind_addr))
+        {
+            self.status = format!("保存节点监听地址失败: {err}");
+            return;
+        }
+        match self.runtime.block_on(proxy::start_peer_listener(
+            bind_addr.clone(),
+            self.state.clone(),
+        )) {
+            Ok(handle) => {
+                self.peer_server = Some(handle);
+                if let Err(err) = self.runtime.block_on(
+                    self.state
+                        .peers
+                        .start_discovery(&self.state.store, self.state.events.clone()),
+                ) {
+                    self.stop_peer_server();
+                    self.status = format!("节点发现启动失败: {err}");
+                    return;
+                }
+                self.status = format!("节点监听已启动: {bind_addr}");
+            }
+            Err(err) => {
+                self.status = format!("节点监听启动失败: {err}");
+            }
+        }
     }
 
-    fn stop_peer_services(&mut self) {
+    fn stop_peer_server(&mut self) {
         self.state.peers.stop_discovery();
         if let Some(handle) = self.peer_server.take() {
             handle.stop();
+            self.status = "节点监听已停止".to_string();
         }
     }
 
