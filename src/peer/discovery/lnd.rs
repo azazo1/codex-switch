@@ -131,11 +131,9 @@ fn discovered_from_lnd(node: &lnd::DiscoveredNode, local_node_id: &str) -> Optio
     let addresses = node
         .lan_addrs
         .iter()
-        .map(|addr| match addr.ip() {
-            std::net::IpAddr::V4(ip) => format!("https://{ip}:{}", addr.port()),
-            std::net::IpAddr::V6(ip) => format!("https://[{ip}]:{}", addr.port()),
-        })
+        .filter_map(|addr| super::format_peer_https_addr(addr.ip(), addr.port()))
         .collect::<Vec<_>>();
+    let addresses = super::prefer_reachable_peer_addresses(addresses);
     if addresses.is_empty() {
         return None;
     }

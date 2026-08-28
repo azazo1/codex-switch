@@ -151,11 +151,9 @@ fn discovered_from_mdns(
     let addresses = info
         .get_addresses()
         .iter()
-        .map(|ip| match ip.to_ip_addr() {
-            IpAddr::V4(ip) => format!("https://{ip}:{port}"),
-            IpAddr::V6(ip) => format!("https://[{ip}]:{port}"),
-        })
+        .filter_map(|ip| super::format_peer_https_addr(ip.to_ip_addr(), port))
         .collect::<Vec<_>>();
+    let addresses = super::prefer_reachable_peer_addresses(addresses);
     if addresses.is_empty() {
         return None;
     }

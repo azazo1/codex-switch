@@ -47,7 +47,7 @@
 
 开启 `启用 mDNS` 后, 同局域网可以零配置看到其他 Codex Switch. 服务名为 `_codex-switch._tcp.local.`. TXT 只包含 `id`, `fp`, `name`, `ver`.
 
-mDNS 依赖组播, 跨 VLAN 或容器网络可能不可见.
+mDNS 依赖组播, 跨 VLAN 或容器网络可能不可见. 一个节点有多个地址时, 会优先显示同子网且能连上的地址.
 
 ### lnd
 
