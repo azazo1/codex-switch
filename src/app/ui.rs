@@ -686,7 +686,7 @@ impl CodexSwitchApp {
         let peer_version = self.state.events.peer_version();
         if peer_version != self.last_seen_peer_version {
             self.last_seen_peer_version = peer_version;
-            self.refresh_peer_views();
+            self.refresh_peer_lists();
         }
         let balance_snapshot_version = self.state.events.balance_snapshot_version();
         if balance_snapshot_version != self.last_seen_balance_snapshot_version {

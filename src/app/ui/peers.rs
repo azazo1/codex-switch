@@ -164,9 +164,12 @@ impl CodexSwitchApp {
     }
 
     pub(super) fn refresh_peer_views(&mut self) {
+        self.reload_peer_settings();
+        self.refresh_peer_lists();
+    }
+
+    fn reload_peer_settings(&mut self) {
         let identity = self.state.peers.identity();
-        self.node_id = identity.node_id.clone();
-        self.node_fingerprint = identity.fingerprint();
         self.node_display_name = identity.display_name.clone();
         self.peer_bind_addr = self
             .runtime
@@ -198,6 +201,12 @@ impl CodexSwitchApp {
             .ok()
             .flatten()
             .unwrap_or_default();
+    }
+
+    pub(super) fn refresh_peer_lists(&mut self) {
+        let identity = self.state.peers.identity();
+        self.node_id = identity.node_id.clone();
+        self.node_fingerprint = identity.fingerprint();
         self.node_peers = self
             .runtime
             .block_on(self.state.store.list_node_peers())
