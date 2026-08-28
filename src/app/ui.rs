@@ -952,6 +952,25 @@ impl CodexSwitchApp {
         }
     }
 
+    fn refresh_from_button(&mut self) {
+        self.restart_peer_discovery();
+        self.refresh_all();
+    }
+
+    fn restart_peer_discovery(&mut self) {
+        if self.peer_server.is_none() {
+            self.state.peers.stop_discovery();
+            return;
+        }
+        if let Err(err) = self.runtime.block_on(
+            self.state
+                .peers
+                .start_discovery(&self.state.store, self.state.events.clone()),
+        ) {
+            self.status = format!("刷新节点发现失败: {err}");
+        }
+    }
+
     fn refresh_all(&mut self) {
         let log_limit = self.log_page_size as i64;
         let log_offset = (self.log_page * self.log_page_size) as i64;
@@ -1306,7 +1325,7 @@ impl eframe::App for CodexSwitchApp {
                 );
                 tab_button(ui, &mut self.tab, Tab::Logs, "日志");
                 if ui.button("刷新").clicked() {
-                    self.refresh_all();
+                    self.refresh_from_button();
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("退出").clicked() {
