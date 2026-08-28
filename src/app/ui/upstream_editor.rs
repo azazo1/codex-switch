@@ -247,6 +247,9 @@ impl CodexSwitchApp {
             Ok(()) => {
                 self.status = "上游已保存".to_string();
                 self.upstream_editor = None;
+                if upstream.kind == UpstreamKind::PeerNode {
+                    self.state.events.bump_peers();
+                }
                 self.refresh_all();
             }
             Err(err) => {

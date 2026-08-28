@@ -39,6 +39,11 @@ impl Store {
     }
 
     pub async fn save_upstream(&self, upstream: &Upstream) -> anyhow::Result<()> {
+        let base_url = if upstream.kind == UpstreamKind::PeerNode {
+            crate::peer::protocol::parse_peer_address(&upstream.base_url)?
+        } else {
+            upstream.base_url.clone()
+        };
         sqlx::query(
             "INSERT INTO upstreams (
                 id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, strip_multimodal_for_text_models, unknown_modality_policy, error_retry_policy,
@@ -70,7 +75,7 @@ impl Store {
         .bind(&upstream.id)
         .bind(upstream.kind.as_str())
         .bind(&upstream.name)
-        .bind(&upstream.base_url)
+        .bind(&base_url)
         .bind(upstream.wire_api.as_str())
         .bind(upstream.api_key_auth_scheme.as_str())
         .bind(i64::from(upstream.supports_compact))
@@ -91,6 +96,10 @@ impl Store {
         .bind(Utc::now().to_rfc3339())
         .execute(self.pool())
         .await?;
+        if upstream.kind == UpstreamKind::PeerNode {
+            self.sync_paired_peer_address(&upstream.id, &base_url)
+                .await?;
+        }
         Ok(())
     }
 

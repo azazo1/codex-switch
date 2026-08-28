@@ -162,6 +162,23 @@ impl Store {
         Ok(())
     }
 
+    pub async fn sync_paired_peer_address(
+        &self,
+        upstream_id: &str,
+        address: &str,
+    ) -> anyhow::Result<()> {
+        let Some(mut peer) = self.get_node_peer_by_upstream(upstream_id).await? else {
+            return Ok(());
+        };
+        if peer.addresses.first().map(String::as_str) == Some(address) {
+            return Ok(());
+        }
+        peer.addresses.retain(|item| item != address);
+        peer.addresses.insert(0, address.to_string());
+        peer.last_seen_at = Some(Utc::now());
+        self.save_node_peer(&peer).await
+    }
+
     pub async fn touch_node_peer(
         &self,
         node_id: &str,
@@ -459,5 +476,32 @@ mod tests {
         assert!(!created_again);
         assert_eq!(upstream.id, saved.id);
         assert_eq!(saved.kind, crate::core::models::UpstreamKind::PeerNode);
+    }
+
+    #[tokio::test]
+    async fn saving_peer_upstream_updates_paired_address() {
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-peer-url-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let store = Store::open(&path).await.unwrap();
+        let identity = crate::peer::identity::NodeIdentity::generate("peer-a".to_string()).unwrap();
+        let payload = PeerIdentityPayload::from_identity(
+            &identity,
+            vec!["https://192.168.1.8:15722".to_string()],
+        );
+        let (peer, mut upstream, _) = store
+            .upsert_paired_peer(&payload, PeerDiscoverySource::Direct, None)
+            .await
+            .unwrap();
+        upstream.base_url = "10.0.0.2:15722".to_string();
+        store.save_upstream(&upstream).await.unwrap();
+        let updated = store.get_node_peer(&peer.node_id).await.unwrap().unwrap();
+        let saved = store.get_upstream(&upstream.id).await.unwrap().unwrap();
+        assert_eq!(saved.base_url, "https://10.0.0.2:15722");
+        assert_eq!(
+            updated.addresses.first().map(String::as_str),
+            Some("https://10.0.0.2:15722")
+        );
     }
 }
