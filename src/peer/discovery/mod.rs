@@ -61,10 +61,25 @@ pub fn format_peer_https_addr(ip: IpAddr, port: u16) -> Option<String> {
     })
 }
 
-pub fn prefer_reachable_peer_addresses(addresses: Vec<String>) -> Vec<String> {
+pub fn prefer_reachable_peer_addresses_cached(
+    addresses: Vec<String>,
+    previous: Option<&[String]>,
+) -> Vec<String> {
     let ranked = rank_peer_addresses(addresses, &local_nets());
     if ranked.len() <= 1 {
         return ranked;
+    }
+    if let Some(previous) = previous
+        && previous == ranked.as_slice()
+    {
+        return ranked;
+    }
+    if let Some(previous) = previous
+        && previous.first().is_some_and(|first| ranked.contains(first))
+        && previous.iter().all(|address| ranked.contains(address))
+        && ranked.iter().all(|address| previous.contains(address))
+    {
+        return previous.to_vec();
     }
     if let Some(index) = ranked.iter().position(|address| probe_peer_address(address)) {
         let mut ordered = ranked;
@@ -160,16 +175,20 @@ fn local_nets() -> Vec<LocalNet> {
         .collect()
 }
 
-pub fn merge_discovered(existing: &mut Vec<DiscoveredPeer>, incoming: DiscoveredPeer) {
+pub fn merge_discovered(existing: &mut Vec<DiscoveredPeer>, incoming: DiscoveredPeer) -> bool {
     if let Some(current) = existing
         .iter_mut()
         .find(|item| item.node_id == incoming.node_id && item.source == incoming.source)
     {
+        if current == &incoming {
+            return false;
+        }
         *current = incoming;
-        return;
+        return true;
     }
     existing.push(incoming);
     existing.sort_by(|left, right| left.display_name.cmp(&right.display_name));
+    true
 }
 
 pub fn remove_discovered(

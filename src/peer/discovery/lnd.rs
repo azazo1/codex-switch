@@ -50,7 +50,7 @@ impl LndDiscovery {
         if let Ok(nodes) = client.list(filter.clone()).await {
             if let Ok(mut items) = discovered.lock() {
                 for node in nodes {
-                    if let Some(peer) = discovered_from_lnd(&node, &identity.node_id) {
+                    if let Some(peer) = discovered_from_lnd(&node, &identity.node_id, None) {
                         merge_discovered(&mut items, peer);
                     }
                 }
@@ -73,23 +73,48 @@ impl LndDiscovery {
                         let Ok(envelope) = event else { continue; };
                         match envelope.event {
                             DiscoveryEvent::Snapshot { nodes } => {
-                                if let Ok(mut items) = discovered.lock() {
+                                let changed = if let Ok(mut items) = discovered.lock() {
                                     items.retain(|item| item.source != PeerDiscoverySource::Lnd);
                                     for node in nodes {
-                                        if let Some(peer) = discovered_from_lnd(&node, &local_node_id) {
+                                        if let Some(peer) =
+                                            discovered_from_lnd(&node, &local_node_id, None)
+                                        {
                                             merge_discovered(&mut items, peer);
                                         }
                                     }
+                                    true
+                                } else {
+                                    false
+                                };
+                                if changed {
+                                    on_change();
                                 }
-                                on_change();
                             }
                             DiscoveryEvent::Upsert { node } => {
-                                if let Some(peer) = discovered_from_lnd(&node, &local_node_id)
-                                    && let Ok(mut items) = discovered.lock()
-                                {
-                                    merge_discovered(&mut items, peer);
+                                let previous = discovered.lock().ok().and_then(|items| {
+                                    items
+                                        .iter()
+                                        .find(|item| {
+                                            item.source == PeerDiscoverySource::Lnd
+                                                && item.node_id == node.node_id
+                                        })
+                                        .cloned()
+                                });
+                                let changed = discovered_from_lnd(
+                                    &node,
+                                    &local_node_id,
+                                    previous.as_ref(),
+                                )
+                                .and_then(|peer| {
+                                    discovered
+                                        .lock()
+                                        .ok()
+                                        .map(|mut items| merge_discovered(&mut items, peer))
+                                })
+                                .unwrap_or(false);
+                                if changed {
+                                    on_change();
                                 }
-                                on_change();
                             }
                             DiscoveryEvent::Remove { node } => {
                                 if let Ok(mut items) = discovered.lock() {
@@ -118,7 +143,11 @@ impl LndDiscovery {
     }
 }
 
-fn discovered_from_lnd(node: &lnd::DiscoveredNode, local_node_id: &str) -> Option<DiscoveredPeer> {
+fn discovered_from_lnd(
+    node: &lnd::DiscoveredNode,
+    local_node_id: &str,
+    previous: Option<&DiscoveredPeer>,
+) -> Option<DiscoveredPeer> {
     if node.node_id == local_node_id {
         return None;
     }
@@ -133,7 +162,10 @@ fn discovered_from_lnd(node: &lnd::DiscoveredNode, local_node_id: &str) -> Optio
         .iter()
         .filter_map(|addr| super::format_peer_https_addr(addr.ip(), addr.port()))
         .collect::<Vec<_>>();
-    let addresses = super::prefer_reachable_peer_addresses(addresses);
+    let addresses = super::prefer_reachable_peer_addresses_cached(
+        addresses,
+        previous.map(|peer| peer.addresses.as_slice()),
+    );
     if addresses.is_empty() {
         return None;
     }

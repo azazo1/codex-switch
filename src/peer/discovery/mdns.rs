@@ -67,18 +67,26 @@ impl MdnsDiscovery {
                 while !stop_thread.load(Ordering::Relaxed) {
                     match receiver.recv_timeout(Duration::from_millis(500)) {
                         Ok(ServiceEvent::ServiceResolved(info)) => {
-                            match discovered_from_mdns(&info, &local_node_id) {
+                            let previous = discovered.lock().ok().and_then(|items| {
+                                items
+                                    .iter()
+                                    .find(|item| {
+                                        item.source == PeerDiscoverySource::Mdns
+                                            && info
+                                                .get_property_val_str("id")
+                                                .is_some_and(|id| item.node_id == id)
+                                    })
+                                    .cloned()
+                            });
+                            match discovered_from_mdns(&info, &local_node_id, previous.as_ref()) {
                                 Some(peer) => {
-                                    tracing::info!(
-                                        node_id = %peer.node_id,
-                                        fingerprint = %peer.fingerprint,
-                                        addresses = ?peer.addresses,
-                                        "mdns resolved peer"
-                                    );
-                                    if let Ok(mut items) = discovered.lock() {
-                                        merge_discovered(&mut items, peer);
+                                    let changed = discovered
+                                        .lock()
+                                        .ok()
+                                        .is_some_and(|mut items| merge_discovered(&mut items, peer));
+                                    if changed {
+                                        on_change();
                                     }
-                                    on_change();
                                 }
                                 None => {
                                     tracing::debug!(
@@ -137,6 +145,7 @@ impl MdnsDiscovery {
 fn discovered_from_mdns(
     info: &mdns_sd::ResolvedService,
     local_node_id: &str,
+    previous: Option<&DiscoveredPeer>,
 ) -> Option<DiscoveredPeer> {
     let node_id = info.get_property_val_str("id")?.to_string();
     if node_id == local_node_id {
@@ -153,7 +162,10 @@ fn discovered_from_mdns(
         .iter()
         .filter_map(|ip| super::format_peer_https_addr(ip.to_ip_addr(), port))
         .collect::<Vec<_>>();
-    let addresses = super::prefer_reachable_peer_addresses(addresses);
+    let addresses = super::prefer_reachable_peer_addresses_cached(
+        addresses,
+        previous.map(|peer| peer.addresses.as_slice()),
+    );
     if addresses.is_empty() {
         return None;
     }
