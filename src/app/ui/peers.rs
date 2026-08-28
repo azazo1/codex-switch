@@ -390,7 +390,7 @@ impl CodexSwitchApp {
             Ok(()) => {
                 self.status = format!("已更新 {} 的地址", discovered.display_name);
                 self.state.events.bump_peers();
-                self.refresh_peer_lists();
+                self.refresh_all();
             }
             Err(err) => self.status = format!("更新节点地址失败: {err}"),
         }
