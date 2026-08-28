@@ -123,10 +123,18 @@ impl CodexSwitchApp {
         } else {
             let discovered = self.discovered_peers.clone();
             for item in discovered {
-                let paired = self
+                let (is_paired, can_update) = match self
                     .node_peers
                     .iter()
-                    .any(|peer| peer.node_id == item.node_id);
+                    .find(|peer| peer.node_id == item.node_id)
+                {
+                    Some(peer) => (
+                        true,
+                        peer.fingerprint == item.fingerprint
+                            && peer_addresses_differ(peer, &item),
+                    ),
+                    None => (false, false),
+                };
                 ui.horizontal(|ui| {
                     ui.label(format!(
                         "{}  {}  {}  {}",
@@ -135,8 +143,11 @@ impl CodexSwitchApp {
                         source_label(item.source),
                         item.addresses.first().cloned().unwrap_or_default()
                     ));
-                    if paired {
+                    if is_paired {
                         ui.label("已配对");
+                        if can_update && ui.button("更新").clicked() {
+                            self.update_discovered_peer_address(item);
+                        }
                     } else if ui
                         .add_enabled(!self.pairing_pending, egui::Button::new("配对"))
                         .clicked()
@@ -366,6 +377,25 @@ impl CodexSwitchApp {
         });
     }
 
+    fn update_discovered_peer_address(
+        &mut self,
+        discovered: crate::peer::discovery::DiscoveredPeer,
+    ) {
+        match self.runtime.block_on(self.state.store.update_paired_peer_addresses(
+            &discovered.node_id,
+            &discovered.fingerprint,
+            &discovered.addresses,
+            discovered.source,
+        )) {
+            Ok(()) => {
+                self.status = format!("已更新 {} 的地址", discovered.display_name);
+                self.state.events.bump_peers();
+                self.refresh_peer_lists();
+            }
+            Err(err) => self.status = format!("更新节点地址失败: {err}"),
+        }
+    }
+
     fn pair_discovered_peer(&mut self, discovered: crate::peer::discovery::DiscoveredPeer) {
         if self.pairing_pending {
             return;
@@ -417,6 +447,20 @@ impl CodexSwitchApp {
 
 fn bool_setting(value: bool) -> String {
     if value { "true" } else { "false" }.to_string()
+}
+
+fn peer_addresses_differ(
+    peer: &crate::core::models::NodePeer,
+    discovered: &crate::peer::discovery::DiscoveredPeer,
+) -> bool {
+    canonical_peer_addresses(&peer.addresses) != canonical_peer_addresses(&discovered.addresses)
+}
+
+fn canonical_peer_addresses(addresses: &[String]) -> Vec<String> {
+    addresses
+        .iter()
+        .filter_map(|address| crate::peer::protocol::parse_peer_address(address).ok())
+        .collect()
 }
 
 fn source_label(source: PeerDiscoverySource) -> &'static str {

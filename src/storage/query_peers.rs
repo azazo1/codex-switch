@@ -3,7 +3,9 @@ use crate::peer::identity::{
     NODE_DISPLAY_NAME_SETTING, NODE_ID_SETTING, NODE_PRIVATE_KEY_SETTING, NodeIdentity,
     default_display_name,
 };
-use crate::peer::protocol::{DEFAULT_PEER_BIND_ADDR, DEFAULT_PEER_MAX_HOPS, PAIRING_TTL_SECS};
+use crate::peer::protocol::{
+    DEFAULT_PEER_BIND_ADDR, DEFAULT_PEER_MAX_HOPS, PAIRING_TTL_SECS, parse_peer_address,
+};
 use crate::storage::Store;
 use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
@@ -177,6 +179,31 @@ impl Store {
         peer.addresses.insert(0, address.to_string());
         peer.last_seen_at = Some(Utc::now());
         self.save_node_peer(&peer).await
+    }
+
+    pub async fn update_paired_peer_addresses(
+        &self,
+        node_id: &str,
+        fingerprint: &str,
+        addresses: &[String],
+        source: PeerDiscoverySource,
+    ) -> anyhow::Result<()> {
+        let Some(peer) = self.get_node_peer(node_id).await? else {
+            anyhow::bail!("peer is not paired");
+        };
+        if peer.fingerprint != fingerprint {
+            anyhow::bail!("peer fingerprint does not match the discovered node");
+        }
+        let canonical = canonicalize_peer_addresses(addresses)?;
+        let Some(mut upstream) = self.get_upstream(&peer.upstream_id).await? else {
+            anyhow::bail!("paired peer is missing upstream");
+        };
+        upstream.base_url = canonical
+            .first()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("discovered peer has no address"))?;
+        self.save_upstream(&upstream).await?;
+        self.touch_node_peer(node_id, &canonical, source).await
     }
 
     pub async fn touch_node_peer(
@@ -388,6 +415,20 @@ impl Store {
     }
 }
 
+fn canonicalize_peer_addresses(addresses: &[String]) -> anyhow::Result<Vec<String>> {
+    let mut canonical = Vec::new();
+    for address in addresses {
+        let parsed = parse_peer_address(address)?;
+        if !canonical.contains(&parsed) {
+            canonical.push(parsed);
+        }
+    }
+    if canonical.is_empty() {
+        anyhow::bail!("discovered peer has no address");
+    }
+    Ok(canonical)
+}
+
 fn row_to_node_peer(row: sqlx::sqlite::SqliteRow) -> anyhow::Result<NodePeer> {
     let paired_at: String = row.get("paired_at");
     let last_seen_at: Option<String> = row.get("last_seen_at");
@@ -503,5 +544,37 @@ mod tests {
             updated.addresses.first().map(String::as_str),
             Some("https://10.0.0.2:15722")
         );
+    }
+
+    #[tokio::test]
+    async fn updating_paired_addresses_from_discovery_changes_upstream() {
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-peer-update-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let store = Store::open(&path).await.unwrap();
+        let identity = crate::peer::identity::NodeIdentity::generate("peer-a".to_string()).unwrap();
+        let payload = PeerIdentityPayload::from_identity(
+            &identity,
+            vec!["https://10.0.0.2:15722".to_string()],
+        );
+        let (peer, _, _) = store
+            .upsert_paired_peer(&payload, PeerDiscoverySource::Direct, None)
+            .await
+            .unwrap();
+        store
+            .update_paired_peer_addresses(
+                &peer.node_id,
+                &peer.fingerprint,
+                &["10.0.0.8:15723".to_string()],
+                PeerDiscoverySource::Mdns,
+            )
+            .await
+            .unwrap();
+        let updated = store.get_node_peer(&peer.node_id).await.unwrap().unwrap();
+        let upstream = store.get_upstream(&peer.upstream_id).await.unwrap().unwrap();
+        assert_eq!(upstream.base_url, "https://10.0.0.8:15723");
+        assert_eq!(updated.addresses, vec!["https://10.0.0.8:15723".to_string()]);
+        assert_eq!(updated.discovery_source, PeerDiscoverySource::Mdns);
     }
 }
