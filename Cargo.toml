@@ -20,7 +20,7 @@ http-body-util = "0.1"
 hyper = { version = "1", features = ["http1", "client", "server"] }
 hyper-util = { version = "0.1", features = ["tokio", "server-auto", "http1"] }
 if-addrs = "0.15"
-lnd = { package = "lnd-core", version = "0.1.1" }
+lnd = { package = "lnd-core", version = "0.1.2" }
 mdns-sd = "0.21"
 notify-rust = "4"
 rand = "0.10"

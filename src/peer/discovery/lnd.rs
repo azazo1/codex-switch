@@ -7,10 +7,12 @@ use futures_util::StreamExt;
 use lnd::{AnnounceHandle, AnnounceSpec, DiscoveryEvent, DiscoveryFilter, LndClient};
 use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
+use tokio::task::JoinHandle;
 
 pub struct LndDiscovery {
     _announce: AnnounceHandle,
     watch_shutdown: watch::Sender<bool>,
+    watch_task: JoinHandle<()>,
 }
 
 impl LndDiscovery {
@@ -60,11 +62,12 @@ impl LndDiscovery {
         let (tx, mut rx) = watch::channel(false);
         let local_node_id = identity.node_id.clone();
         let mut watch = client.watch(filter);
-        tokio::spawn(async move {
+        let watch_task = tokio::spawn(async move {
             loop {
                 tokio::select! {
-                    _ = rx.changed() => {
-                        if *rx.borrow() {
+                    biased;
+                    result = rx.changed() => {
+                        if result.is_err() || *rx.borrow() {
                             break;
                         }
                     }
@@ -135,11 +138,20 @@ impl LndDiscovery {
         Ok(Self {
             _announce: announce,
             watch_shutdown: tx,
+            watch_task,
         })
     }
 
     pub fn stop(self) {
         let _ = self.watch_shutdown.send(true);
+        self.watch_task.abort();
+    }
+}
+
+impl Drop for LndDiscovery {
+    fn drop(&mut self) {
+        let _ = self.watch_shutdown.send(true);
+        self.watch_task.abort();
     }
 }
 

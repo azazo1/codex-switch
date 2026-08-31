@@ -3160,9 +3160,9 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "lnd-core"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2b3ff3db0fabc7d6414d5be5719a2fc74a98fe583251a7bbc9a3e8e6e818336"
+checksum = "7325afdb1404e27d95b674cb6a7f62c9824aa692ef68add6ecffa3831f5684c7"
 dependencies = [
  "anyhow",
  "async-stream",
