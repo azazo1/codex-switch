@@ -1,12 +1,17 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
+use block2::RcBlock;
 use objc2::rc::Retained;
-use objc2::{define_class, msg_send, DeclaredClass, MainThreadMarker};
+use objc2::runtime::{AnyObject, Bool};
+use objc2::{define_class, msg_send, AnyThread, DeclaredClass, MainThreadMarker};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSColor, NSFont, NSImage, NSImageView, NSLineBreakMode,
-    NSStatusBarButton, NSStatusItem, NSTextAlignment, NSTextField, NSView,
+    NSAttributedStringNSStringDrawing, NSAutoresizingMaskOptions, NSColor, NSFont,
+    NSFontAttributeName, NSForegroundColorAttributeName, NSImage, NSImageView, NSStatusBarButton,
+    NSStatusItem, NSView,
 };
-use objc2_foundation::{NSString, NSPoint, NSRect, NSSize};
+use objc2_foundation::{
+    NSAttributedString, NSAttributedStringKey, NSDictionary, NSPoint, NSRect, NSSize, NSString,
+};
 
 const ICON_WIDTH: f64 = 18.0;
 const TEXT_MARGIN: f64 = 2.0;
@@ -16,13 +21,16 @@ const TWO_LINE_OVERLAP: f64 = 2.0;
 
 #[derive(Debug)]
 pub(crate) struct TrayTitleViewIvars {
-    first_label: Retained<NSTextField>,
-    second_label: Retained<NSTextField>,
+    first_view: Retained<NSImageView>,
+    second_view: Retained<NSImageView>,
     status_item: Retained<NSStatusItem>,
     button: Retained<NSStatusBarButton>,
     icon_view: Retained<NSImageView>,
     button_height: f64,
     last_width: Cell<f64>,
+    last_first: RefCell<Option<String>>,
+    last_second: RefCell<Option<String>>,
+    last_font_size: Cell<f64>,
 }
 
 define_class!(
@@ -67,8 +75,8 @@ impl TrayTitleView {
         button: Retained<NSStatusBarButton>,
         button_height: f64,
     ) -> Retained<Self> {
-        let first_label = make_label(mtm, "");
-        let second_label = make_label(mtm, "");
+        let first_view = make_image_view(mtm);
+        let second_view = make_image_view(mtm);
         let icon_view = match button.image() {
             Some(image) => NSImageView::imageViewWithImage(&image, mtm),
             None => NSImageView::initWithFrame(
@@ -86,13 +94,16 @@ impl TrayTitleView {
             NSSize::new(icon_width, button_height),
         ));
         let this = mtm.alloc().set_ivars(TrayTitleViewIvars {
-            first_label,
-            second_label,
+            first_view,
+            second_view,
             status_item,
             button,
             icon_view,
             button_height,
             last_width: Cell::new(0.0),
+            last_first: RefCell::new(None),
+            last_second: RefCell::new(None),
+            last_font_size: Cell::new(0.0),
         });
         let view: Retained<Self> = unsafe {
             msg_send![
@@ -101,8 +112,8 @@ impl TrayTitleView {
             ]
         };
         view.addSubview(&view.ivars().icon_view);
-        view.addSubview(&view.ivars().first_label);
-        view.addSubview(&view.ivars().second_label);
+        view.addSubview(&view.ivars().first_view);
+        view.addSubview(&view.ivars().second_view);
         view
     }
 
@@ -130,22 +141,25 @@ impl TrayTitleView {
             ONE_LINE_FONT_SIZE
         };
         let font = NSFont::systemFontOfSize(font_size);
-        let color = NSColor::labelColor();
+        let refresh = self.ivars().last_first.borrow().as_deref() != first
+            || self.ivars().last_second.borrow().as_deref() != second
+            || self.ivars().last_font_size.get() != font_size;
 
-        self.apply_label(&self.ivars().first_label, first, &font, &color);
-        self.apply_label(&self.ivars().second_label, second, &font, &color);
+        let first_size = apply_text_image(&self.ivars().first_view, first, &font, refresh);
+        let second_size = apply_text_image(&self.ivars().second_view, second, &font, refresh);
+        if refresh {
+            *self.ivars().last_first.borrow_mut() = first.map(str::to_string);
+            *self.ivars().last_second.borrow_mut() = second.map(str::to_string);
+            self.ivars().last_font_size.set(font_size);
+        }
 
-        let mut max_text_width: f64 = 0.0;
+        let max_text_width = first_size.width.max(second_size.width);
         let mut measured_height: f64 = font_size * 1.1;
         if first.is_some() {
-            let size = self.ivars().first_label.frame().size;
-            max_text_width = max_text_width.max(size.width);
-            measured_height = measured_height.max(size.height);
+            measured_height = measured_height.max(first_size.height);
         }
         if second.is_some() {
-            let size = self.ivars().second_label.frame().size;
-            max_text_width = max_text_width.max(size.width);
-            measured_height = measured_height.max(size.height);
+            measured_height = measured_height.max(second_size.height);
         }
 
         let line_height = measured_height;
@@ -162,26 +176,29 @@ impl TrayTitleView {
             NSSize::new(icon_width, height),
         ));
         let text_x = icon_x + icon_width + TEXT_MARGIN;
-        let text_width = max_text_width + TEXT_MARGIN;
+        let text_right = text_x + max_text_width + TEXT_MARGIN;
         if line_count >= 2 {
             let middle = height / 2.0;
             let overlap = TWO_LINE_OVERLAP / 2.0;
-            self.ivars().first_label.setFrame(NSRect::new(
-                NSPoint::new(text_x, middle - overlap),
-                NSSize::new(text_width, line_height),
-            ));
-            self.ivars().second_label.setFrame(NSRect::new(
-                NSPoint::new(text_x, middle - line_height + overlap),
-                NSSize::new(text_width, line_height),
-            ));
+            set_view_frame(
+                &self.ivars().first_view,
+                first_size,
+                text_right,
+                middle - overlap,
+            );
+            set_view_frame(
+                &self.ivars().second_view,
+                second_size,
+                text_right,
+                middle - line_height + overlap,
+            );
         } else {
             let y = ((height - line_height) / 2.0).max(0.0);
-            let frame = NSRect::new(NSPoint::new(text_x, y), NSSize::new(text_width, line_height));
             if first.is_some() {
-                self.ivars().first_label.setFrame(frame);
+                set_view_frame(&self.ivars().first_view, first_size, text_right, y);
             }
             if second.is_some() {
-                self.ivars().second_label.setFrame(frame);
+                set_view_frame(&self.ivars().second_view, second_size, text_right, y);
             }
         }
 
@@ -199,33 +216,74 @@ impl TrayTitleView {
             NSSize::new(width, height),
         ));
     }
+}
 
-    fn apply_label(
-        &self,
-        label: &NSTextField,
-        text: Option<&str>,
-        font: &NSFont,
-        color: &NSColor,
-    ) {
-        label.setFont(Some(font));
-        label.setTextColor(Some(color));
-        label.setStringValue(&NSString::from_str(text.unwrap_or("")));
-        label.setHidden(text.is_none());
-        if text.is_some() {
-            label.sizeToFit();
+fn make_image_view(mtm: MainThreadMarker) -> Retained<NSImageView> {
+    let view = NSImageView::initWithFrame(
+        mtm.alloc(),
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
+    );
+    view.setEditable(false);
+    view
+}
+
+fn apply_text_image(
+    view: &NSImageView,
+    text: Option<&str>,
+    font: &NSFont,
+    refresh: bool,
+) -> NSSize {
+    match text {
+        None => {
+            if refresh {
+                view.setImage(None);
+            }
+            view.setHidden(true);
+            NSSize::new(0.0, 0.0)
+        }
+        Some(text) => {
+            if refresh {
+                view.setImage(Some(&render_text_template(text, font)));
+            }
+            view.setHidden(false);
+            view.image().map_or(NSSize::new(0.0, 0.0), |img| img.size())
         }
     }
 }
 
-fn make_label(mtm: MainThreadMarker, text: &str) -> Retained<NSTextField> {
-    let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
-    label.setBezeled(false);
-    label.setBordered(false);
-    label.setDrawsBackground(false);
-    label.setEditable(false);
-    label.setSelectable(false);
-    label.setAlignment(NSTextAlignment::Right);
-    label.setLineBreakMode(NSLineBreakMode::ByClipping);
-    label.setUsesSingleLineMode(true);
-    label
+fn set_view_frame(view: &NSImageView, size: NSSize, text_right: f64, y: f64) {
+    view.setFrame(NSRect::new(
+        NSPoint::new((text_right - size.width).max(0.0), y),
+        size,
+    ));
+}
+
+fn render_text_template(text: &str, font: &NSFont) -> Retained<NSImage> {
+    let color = NSColor::blackColor();
+    let font_obj: &AnyObject = font;
+    let color_obj: &AnyObject = &color;
+    // SAFETY: 属性名是 AppKit 的常量 static; attrs 只包含 NSFont 和 NSColor,
+    // 分别对应 font 与 foreground. 黑色文字作为 template 遮罩.
+    let attrs: Retained<NSDictionary<NSAttributedStringKey, AnyObject>> = unsafe {
+        NSDictionary::from_slices(
+            &[NSFontAttributeName, NSForegroundColorAttributeName],
+            &[font_obj, color_obj],
+        )
+    };
+    let attributed = unsafe {
+        NSAttributedString::initWithString_attributes(
+            NSAttributedString::alloc(),
+            &NSString::from_str(text),
+            Some(&attrs),
+        )
+    };
+    let measured = attributed.size();
+    let size = NSSize::new(measured.width.ceil().max(1.0), measured.height.ceil().max(1.0));
+    let block = RcBlock::new(move |_rect: NSRect| {
+        attributed.drawAtPoint(NSPoint::new(0.0, 0.0));
+        Bool::YES
+    });
+    let image = NSImage::imageWithSize_flipped_drawingHandler(size, false, &block);
+    image.setTemplate(true);
+    image
 }
