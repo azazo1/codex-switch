@@ -1,3 +1,5 @@
+pub mod fx;
+
 use crate::app::AppState;
 use crate::core::model_capabilities::model_multimodal_from_item;
 use crate::core::models::{ModelPrice, TokenUsage};

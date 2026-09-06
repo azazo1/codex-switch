@@ -373,8 +373,14 @@ enum UiTaskEvent {
         upstream_id: String,
         result: anyhow::Result<()>,
     },
-    PriceCacheFetched(anyhow::Result<usize>),
-    PriceCacheOnceFetched(anyhow::Result<pricing::PriceFetchSummary>),
+    PriceCacheFetched {
+        price: anyhow::Result<usize>,
+        fx: anyhow::Result<Option<pricing::fx::UsdCnyRate>>,
+    },
+    PriceCacheOnceFetched {
+        price: anyhow::Result<pricing::PriceFetchSummary>,
+        fx: anyhow::Result<Option<pricing::fx::UsdCnyRate>>,
+    },
     PeerPaired(anyhow::Result<String>),
     Tray(TrayCommand),
 }
@@ -449,6 +455,8 @@ pub struct CodexSwitchApp {
     log_estimated_cost_usd: Vec<Option<f64>>,
     price_cache_count: i64,
     price_cache_age_seconds: Option<i64>,
+    usd_cny_rate: Option<pricing::fx::UsdCnyRate>,
+    currency_display_mode: tokens::CurrencyDisplayMode,
     database_info: DatabaseInfo,
     token_display_mode: tokens::TokenDisplayMode,
     debug_log_enabled: bool,
@@ -552,6 +560,10 @@ impl CodexSwitchApp {
             .flatten()
             .and_then(|value| value.parse().ok())
             .unwrap_or(TrayBadgeMetric::None);
+        let usd_cny_rate = runtime
+            .block_on(pricing::fx::load_usd_cny_rate(&state))
+            .ok()
+            .flatten();
         let mut app = Self {
             runtime,
             state,
@@ -622,6 +634,8 @@ impl CodexSwitchApp {
             log_estimated_cost_usd: Vec::new(),
             price_cache_count: 0,
             price_cache_age_seconds: None,
+            usd_cny_rate,
+            currency_display_mode: tokens::CurrencyDisplayMode::Usd,
             database_info: DatabaseInfo::default(),
             token_display_mode: tokens::TokenDisplayMode::Human,
             debug_log_enabled: rotation_config.enabled,
@@ -937,14 +951,15 @@ impl CodexSwitchApp {
                         Err(err) => self.status = format!("余额查询失败: {err}"),
                     }
                 }
-                UiTaskEvent::PriceCacheFetched(result) => {
+                UiTaskEvent::PriceCacheFetched { price, fx } => {
                     self.price_fetch_pending = false;
-                    match result {
+                    let fx_suffix = self.apply_fx_result(&fx);
+                    match price {
                         Ok(count) => {
-                            self.status = format!("模型信息已获取: {count} 条");
+                            self.status = format!("模型信息已获取: {count} 条{fx_suffix}");
                             self.refresh_all_if_visible();
                         }
-                        Err(err) => self.status = format!("模型信息获取失败: {err}"),
+                        Err(err) => self.status = format!("模型信息获取失败: {err}{fx_suffix}"),
                     }
                 }
                 UiTaskEvent::PeerPaired(result) => {
@@ -957,19 +972,24 @@ impl CodexSwitchApp {
                         Err(err) => self.status = format!("节点配对失败: {err}"),
                     }
                 }
-                UiTaskEvent::PriceCacheOnceFetched(result) => {
+                UiTaskEvent::PriceCacheOnceFetched { price, fx } => {
                     self.price_fetch_pending = false;
-                    match result {
+                    let fx_suffix = self.apply_fx_result(&fx);
+                    match price {
                         Ok(summary) => {
                             if summary.fetched {
-                                self.status = format!("模型信息已获取: {} 条", summary.count);
+                                self.status =
+                                    format!("模型信息已获取: {} 条{fx_suffix}", summary.count);
                                 self.refresh_all_if_visible();
                             } else if summary.count > 0 {
-                                self.status = format!("模型信息缓存可用: {} 条", summary.count);
+                                self.status =
+                                    format!("模型信息缓存可用: {} 条{fx_suffix}", summary.count);
                             }
                         }
                         Err(err) => {
-                            self.status = format!("模型信息获取失败, 将使用已有缓存: {err}");
+                            self.status = format!(
+                                "模型信息获取失败, 将使用已有缓存: {err}{fx_suffix}"
+                            );
                         }
                     }
                 }
@@ -1285,12 +1305,15 @@ impl CodexSwitchApp {
             return;
         }
         self.price_fetch_pending = true;
-        self.status = "正在获取模型信息".to_string();
+        self.status = "正在获取模型信息和汇率".to_string();
         let state = self.state.clone();
         let tx = self.task_tx.clone();
         self.runtime.spawn(async move {
-            let result = pricing::fetch_price_cache(&state).await;
-            let _ = tx.send(UiTaskEvent::PriceCacheFetched(result));
+            let (price, fx) = tokio::join!(
+                pricing::fetch_price_cache(&state),
+                async { pricing::fx::fetch_usd_cny_rate(&state).await.map(Some) }
+            );
+            let _ = tx.send(UiTaskEvent::PriceCacheFetched { price, fx });
         });
     }
 
@@ -1304,9 +1327,27 @@ impl CodexSwitchApp {
         let state = self.state.clone();
         let tx = self.task_tx.clone();
         self.runtime.spawn(async move {
-            let result = pricing::fetch_price_cache_once(&state).await;
-            let _ = tx.send(UiTaskEvent::PriceCacheOnceFetched(result));
+            let (price, fx) = tokio::join!(
+                pricing::fetch_price_cache_once(&state),
+                pricing::fx::ensure_usd_cny_rate(&state, pricing::fx::RATE_MAX_AGE_SECS)
+            );
+            let _ = tx.send(UiTaskEvent::PriceCacheOnceFetched { price, fx });
         });
+    }
+
+    /// 应用汇率获取结果, 返回用于拼接状态文本的后缀.
+    fn apply_fx_result(&mut self, fx: &anyhow::Result<Option<pricing::fx::UsdCnyRate>>) -> String {
+        match fx {
+            Ok(Some(rate)) => {
+                self.usd_cny_rate = Some(*rate);
+                format!(", 汇率 1 USD = {:.4} CNY", rate.rate)
+            }
+            Ok(None) => String::new(),
+            Err(err) => {
+                tracing::warn!(error = %err, "USD/CNY exchange rate fetch failed");
+                format!(", 汇率获取失败: {err}")
+            }
+        }
     }
 }
 

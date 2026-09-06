@@ -25,6 +25,8 @@ impl CodexSwitchApp {
         self.log_cleanup_window(ui.ctx());
         self.log_pagination_ui(ui);
         let mut token_display_mode = self.token_display_mode;
+        let mut currency_display_mode = self.currency_display_mode;
+        let usd_cny_rate = self.usd_cny_rate;
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -37,7 +39,8 @@ impl CodexSwitchApp {
                         ui.strong("模型");
                         ui.strong("推理强度");
                         ui.strong("TOKEN");
-                        ui.strong("费用");
+                        ui.strong("费用")
+                            .on_hover_text("点击费用数值可在美元和人民币之间切换");
                         ui.strong("首 TOKEN");
                         ui.strong("耗时");
                         ui.strong("时间");
@@ -52,6 +55,8 @@ impl CodexSwitchApp {
                             log_token_cell(ui, &mut token_display_mode, log);
                             log_cost_cell(
                                 ui,
+                                &mut currency_display_mode,
+                                usd_cny_rate,
                                 self.log_estimated_cost_usd.get(index).copied().flatten(),
                             );
                             ui.label(format_optional_duration(log.first_token_ms));
@@ -62,6 +67,7 @@ impl CodexSwitchApp {
                     });
             });
         self.token_display_mode = token_display_mode;
+        self.currency_display_mode = currency_display_mode;
     }
 
     fn log_cleanup_button(&mut self, ui: &mut egui::Ui) {
@@ -769,10 +775,15 @@ fn log_token_cell(ui: &mut egui::Ui, mode: &mut tokens::TokenDisplayMode, log: &
     });
 }
 
-fn log_cost_cell(ui: &mut egui::Ui, cost: Option<f64>) {
+fn log_cost_cell(
+    ui: &mut egui::Ui,
+    mode: &mut tokens::CurrencyDisplayMode,
+    rate: Option<crate::pricing::fx::UsdCnyRate>,
+    cost: Option<f64>,
+) {
     match cost {
         Some(value) => {
-            ui.label(tokens::format_usd(value));
+            tokens::cost_value(ui, mode, rate, value);
         }
         None => {
             ui.label("-").on_hover_text("无价格缓存");

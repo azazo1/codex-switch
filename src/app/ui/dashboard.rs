@@ -73,12 +73,24 @@ impl CodexSwitchApp {
         ui.horizontal_wrapped(|ui| {
             ui.label(format!("总请求: {}", self.stats.total_requests));
             tokens::usage_tokens(ui, &mut self.token_display_mode, &self.stats.total_usage);
-            tokens::estimated_cost(ui, "总估算", self.total_estimated_cost_usd);
+            tokens::estimated_cost(
+                ui,
+                &mut self.currency_display_mode,
+                self.usd_cny_rate,
+                "总估算",
+                self.total_estimated_cost_usd,
+            );
         });
         ui.horizontal_wrapped(|ui| {
             ui.label(format!("今日请求: {}", self.stats.today_requests));
             tokens::usage_tokens(ui, &mut self.token_display_mode, &self.stats.today_usage);
-            tokens::estimated_cost(ui, "今日估算", self.today_estimated_cost_usd);
+            tokens::estimated_cost(
+                ui,
+                &mut self.currency_display_mode,
+                self.usd_cny_rate,
+                "今日估算",
+                self.today_estimated_cost_usd,
+            );
         });
         ui.horizontal_wrapped(|ui| {
             ui.label(format!("模型信息缓存: {} 条", self.price_cache_count));
@@ -90,14 +102,26 @@ impl CodexSwitchApp {
             };
             if ui
                 .add_enabled(!self.price_fetch_pending, egui::Button::new(label))
+                .on_hover_text("同时获取模型价格缓存和美元人民币汇率")
                 .clicked()
             {
                 self.fetch_price_cache();
+            }
+            let response = ui.label(usd_cny_rate_text(self.usd_cny_rate));
+            match self.usd_cny_rate {
+                Some(rate) => response.on_hover_text(format!(
+                    "获取于 {} 前",
+                    format_age_text(rate.age_seconds(chrono::Utc::now().timestamp()))
+                )),
+                None => response
+                    .on_hover_text("尚未获取汇率, 点击\"获取模型信息\"按钮获取"),
             }
         });
         ui.separator();
         ui.heading("按上游统计");
         let mut token_display_mode = self.token_display_mode;
+        let mut currency_display_mode = self.currency_display_mode;
+        let usd_cny_rate = self.usd_cny_rate;
         let mut query_balance = None;
         egui::Grid::new("provider_stats_grid")
             .striped(true)
@@ -128,10 +152,15 @@ impl CodexSwitchApp {
                         .provider_estimated_cost_usd
                         .get(&item.upstream_id)
                         .copied()
-                        .flatten()
-                        .map(tokens::format_usd)
-                        .unwrap_or_else(|| "无价格缓存".to_string());
-                    ui.label(cost);
+                        .flatten();
+                    match cost {
+                        Some(cost) => {
+                            tokens::cost_value(ui, &mut currency_display_mode, usd_cny_rate, cost);
+                        }
+                        None => {
+                            ui.label("无价格缓存");
+                        }
+                    }
                     cache_keepalive_label(ui, self.cache_keepalive_settings.get(&item.upstream_id));
                     balance_snapshot_label(
                         ui,
@@ -160,6 +189,7 @@ impl CodexSwitchApp {
             self.query_selected_balance(&id);
         }
         self.token_display_mode = token_display_mode;
+        self.currency_display_mode = currency_display_mode;
         ui.separator();
         ui.heading("SQLite 数据库");
         ui.horizontal_wrapped(|ui| {
@@ -405,6 +435,25 @@ fn price_cache_age_text(age_seconds: Option<i64>) -> String {
         Some(age) if age < 86_400 => format!("{} 小时前更新", age / 3600),
         Some(age) => format!("{} 天前更新", age / 86_400),
         None => "尚未缓存模型信息".to_string(),
+    }
+}
+
+fn usd_cny_rate_text(rate: Option<crate::pricing::fx::UsdCnyRate>) -> String {
+    match rate {
+        Some(rate) => format!("汇率: 1 USD = {:.4} CNY", rate.rate),
+        None => "汇率: 未获取".to_string(),
+    }
+}
+
+fn format_age_text(age_seconds: i64) -> String {
+    if age_seconds < 60 {
+        "刚刚".to_string()
+    } else if age_seconds < 3600 {
+        format!("{} 分钟", age_seconds / 60)
+    } else if age_seconds < 86_400 {
+        format!("{} 小时", age_seconds / 3600)
+    } else {
+        format!("{} 天", age_seconds / 86_400)
     }
 }
 

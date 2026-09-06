@@ -45,14 +45,89 @@ pub(super) fn token_number(ui: &mut egui::Ui, mode: &mut TokenDisplayMode, value
     }
 }
 
-pub(super) fn estimated_cost(ui: &mut egui::Ui, label: &str, value: Option<f64>) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CurrencyDisplayMode {
+    Usd,
+    Cny,
+}
+
+impl CurrencyDisplayMode {
+    fn toggle(&mut self) {
+        *self = match self {
+            Self::Usd => Self::Cny,
+            Self::Cny => Self::Usd,
+        };
+    }
+}
+
+pub(super) fn estimated_cost(
+    ui: &mut egui::Ui,
+    mode: &mut CurrencyDisplayMode,
+    rate: Option<crate::pricing::fx::UsdCnyRate>,
+    label: &str,
+    value: Option<f64>,
+) {
     match value {
         Some(value) => {
-            ui.label(format!("{label}: {}", format_usd(value)));
+            let text = format!("{label}: {}", format_cost(value, *mode, rate));
+            let response = ui
+                .add(egui::Label::new(text).sense(egui::Sense::click()))
+                .on_hover_text(cost_hover_text(*mode, rate));
+            if response.clicked() {
+                mode.toggle();
+            }
         }
         None => {
             ui.label(format!("{label}: 无价格缓存"));
         }
+    }
+}
+
+pub(super) fn cost_value(
+    ui: &mut egui::Ui,
+    mode: &mut CurrencyDisplayMode,
+    rate: Option<crate::pricing::fx::UsdCnyRate>,
+    value: f64,
+) {
+    let response = ui
+        .add(egui::Label::new(format_cost(value, *mode, rate)).sense(egui::Sense::click()))
+        .on_hover_text(cost_hover_text(*mode, rate));
+    if response.clicked() {
+        mode.toggle();
+    }
+}
+
+fn cost_hover_text(
+    mode: CurrencyDisplayMode,
+    rate: Option<crate::pricing::fx::UsdCnyRate>,
+) -> String {
+    match (mode, rate) {
+        (CurrencyDisplayMode::Usd, Some(rate)) => {
+            format!("汇率 1 USD = {:.4} CNY, 点击切换为人民币显示", rate.rate)
+        }
+        (CurrencyDisplayMode::Usd, None) => {
+            "尚未获取汇率, 可通过\"获取模型信息\"按钮获取, 点击切换显示".to_string()
+        }
+        (CurrencyDisplayMode::Cny, Some(rate)) => {
+            format!("汇率 1 USD = {:.4} CNY, 点击切换为美元显示", rate.rate)
+        }
+        (CurrencyDisplayMode::Cny, None) => {
+            "尚未获取汇率, 暂时显示美元, 点击切换显示".to_string()
+        }
+    }
+}
+
+pub(super) fn format_cost(
+    value: f64,
+    mode: CurrencyDisplayMode,
+    rate: Option<crate::pricing::fx::UsdCnyRate>,
+) -> String {
+    match mode {
+        CurrencyDisplayMode::Usd => format_usd(value),
+        CurrencyDisplayMode::Cny => match rate {
+            Some(rate) => format_amount(value * rate.rate, "¥"),
+            None => format_usd(value),
+        },
     }
 }
 
@@ -64,14 +139,18 @@ pub(super) fn format_tokens(mode: TokenDisplayMode, value: i64) -> String {
 }
 
 pub(super) fn format_usd(value: f64) -> String {
+    format_amount(value, "$")
+}
+
+fn format_amount(value: f64, prefix: &str) -> String {
     if value == 0.0 {
-        "$0".to_string()
+        format!("{prefix}0")
     } else if value.abs() < 0.0001 {
-        format!("${value:.6}")
+        format!("{prefix}{value:.6}")
     } else if value.abs() < 1.0 {
-        format!("${value:.4}")
+        format!("{prefix}{value:.4}")
     } else {
-        format!("${value:.2}")
+        format!("{prefix}{value:.2}")
     }
 }
 
@@ -94,7 +173,10 @@ fn human_tokens(value: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{TokenDisplayMode, format_tokens, format_usd};
+    use super::{
+        CurrencyDisplayMode, TokenDisplayMode, format_cost, format_tokens, format_usd,
+    };
+    use crate::pricing::fx::UsdCnyRate;
 
     #[test]
     fn formats_tokens_for_human_and_raw_modes() {
@@ -108,5 +190,17 @@ mod tests {
         assert_eq!(format_usd(0.0), "$0");
         assert_eq!(format_usd(0.0000123), "$0.000012");
         assert_eq!(format_usd(0.12345), "$0.1235");
+    }
+
+    #[test]
+    fn formats_cost_by_currency_mode() {
+        let rate = Some(UsdCnyRate { rate: 7.2, fetched_at: 0 });
+        assert_eq!(format_cost(1.5, CurrencyDisplayMode::Usd, rate), "$1.50");
+        assert_eq!(format_cost(1.5, CurrencyDisplayMode::Cny, rate), "¥10.80");
+        assert_eq!(format_cost(1.5, CurrencyDisplayMode::Cny, None), "$1.50");
+        assert_eq!(
+            format_cost(0.0000123, CurrencyDisplayMode::Cny, rate),
+            "¥0.000089"
+        );
     }
 }
