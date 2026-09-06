@@ -73,7 +73,7 @@ impl CodexSwitchApp {
         {
             Ok(settings) => settings,
             Err(err) => {
-                self.status = format!("读取余额提醒设置失败: {err}");
+                self.status = format!("读取余额刷新设置失败: {err}");
                 UpstreamBalanceAlertSettings::new(upstream.id.clone())
             }
         };
@@ -150,9 +150,15 @@ impl CodexSwitchApp {
         let mut balance_alert = editor.balance_alert;
         balance_alert.upstream_id = upstream.id.clone();
         balance_alert.interval_seconds = balance_alert.interval_seconds.max(60);
+        if !balance_alert.enabled {
+            balance_alert.alert_enabled = false;
+        }
         if !balance_alert.threshold.is_finite() || balance_alert.threshold < 0.0 {
-            self.status = "余额提醒阈值必须是大于等于 0 的数字".to_string();
-            return;
+            if balance_alert.alert_enabled {
+                self.status = "余额提醒阈值必须是大于等于 0 的数字".to_string();
+                return;
+            }
+            balance_alert.threshold = 5.0;
         }
         let mut cache_keepalive = editor.cache_keepalive;
         cache_keepalive.upstream_id = upstream.id.clone();
@@ -179,6 +185,7 @@ impl CodexSwitchApp {
             cache_keepalive.enabled = false;
             cache_keepalive.mode = CacheKeepaliveMode::Off;
             balance_alert.enabled = false;
+            balance_alert.alert_enabled = false;
         }
 
         if upstream.name.is_empty() {
@@ -468,22 +475,37 @@ fn error_retry_policy_label(policy: ErrorRetryPolicy) -> &'static str {
 
 fn balance_alert_form(ui: &mut egui::Ui, settings: &mut UpstreamBalanceAlertSettings) {
     ui.separator();
-    ui.heading("余额不足提醒");
+    ui.heading("余额自动刷新");
     ui.horizontal(|ui| {
-        ui.checkbox(&mut settings.enabled, "启用系统提醒");
-        ui.label("余额阈值");
-        ui.add(
-            egui::DragValue::new(&mut settings.threshold)
-                .range(0.0..=f64::MAX)
-                .speed(0.5)
-                .max_decimals(4),
-        );
+        if ui
+            .checkbox(&mut settings.enabled, "启用自动刷新")
+            .on_hover_text("按检查间隔查询并覆盖余额快照, 不要求开启系统提醒")
+            .changed()
+            && !settings.enabled
+        {
+            settings.alert_enabled = false;
+        }
         ui.label("检查间隔秒");
         ui.add(
             egui::DragValue::new(&mut settings.interval_seconds)
                 .range(60..=i64::MAX)
                 .speed(60),
         );
+    });
+    ui.add_enabled_ui(settings.enabled, |ui| {
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut settings.alert_enabled, "启用系统提醒")
+                .on_hover_text("关闭时只定时刷新余额快照, 不比较阈值, 也不发送系统通知");
+            ui.add_enabled_ui(settings.alert_enabled, |ui| {
+                ui.label("余额阈值");
+                ui.add(
+                    egui::DragValue::new(&mut settings.threshold)
+                        .range(0.0..=f64::MAX)
+                        .speed(0.5)
+                        .max_decimals(4),
+                );
+            });
+        });
     });
 }
 

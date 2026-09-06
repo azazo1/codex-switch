@@ -12,8 +12,8 @@ Codex Switch 是一个本地桌面中转工具. 它提供 OpenAI 和 Anthropic �
 - 代理 Responses, Chat Completions, Anthropic Messages, Images 和 Models 请求, 并双向转换文本, 图片, 工具调用, reasoning/thinking 和流式事件.
 - 使用固定, 随机, 加权轮询, 失败切换或模型映射选择上游.
 - 查看活跃请求, 流式输出尾部, token 用量, 首 token 延迟和请求耗时.
-- 查询 Codex 额度和多个中转平台的余额.
-- 为低余额发送系统通知, 为长上下文会话保持 prompt cache.
+- 查询 Codex 额度和多个中转平台的余额, 并可按上游定时刷新余额快照.
+- 可选地为低余额发送系统通知, 为长上下文会话保持 prompt cache.
 - 使用本地 SQLite 保存设置, 统计, 日志和凭据.
 
 ## 下载
@@ -59,7 +59,7 @@ Invoke-RestMethod -Uri "http://127.0.0.1:15721/v1/models" -Headers $headers
 | Codex OAuth | [OAuth 使用指南](docs/oauth-guide.md) |
 | 模型调度和路由 | [调度组配置指南](docs/scheduler-guide.md) |
 | Prompt cache 保活 | [缓存保持配置指南](docs/cache-keepalive-guide.md) |
-| 余额查询和系统提醒 | [余额提醒指南](docs/balance-alert-guide.md) |
+| 余额查询, 自动刷新和系统提醒 | [余额刷新与提醒指南](docs/balance-alert-guide.md) |
 | 运行中的请求 | [活跃连接指南](docs/active-connections-guide.md) |
 | 请求记录和筛选 | [日志使用指南](docs/logs-guide.md) |
 | SQLite, 凭据和备份 | [存储与备份指南](docs/storage-guide.md) |

@@ -779,6 +779,7 @@ pub struct BalanceSnapshot {
 pub struct UpstreamBalanceAlertSettings {
     pub upstream_id: String,
     pub enabled: bool,
+    pub alert_enabled: bool,
     pub threshold: f64,
     pub interval_seconds: i64,
     pub last_checked_at: Option<i64>,
@@ -790,6 +791,7 @@ impl UpstreamBalanceAlertSettings {
         Self {
             upstream_id,
             enabled: false,
+            alert_enabled: false,
             threshold: 5.0,
             interval_seconds: 1800,
             last_checked_at: None,

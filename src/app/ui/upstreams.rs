@@ -111,7 +111,7 @@ impl CodexSwitchApp {
                         ui.strong("Base URL");
                         ui.strong("缓存保持");
                         ui.strong("余额");
-                        ui.strong("余额提醒");
+                        ui.strong("余额刷新");
                         ui.strong("操作");
                         ui.end_row();
 
@@ -208,6 +208,11 @@ fn balance_alert_label(
     };
     if !settings.enabled {
         ui.label("关闭");
+        return;
+    }
+    if !settings.alert_enabled {
+        ui.label(format!("刷新 / {} 秒", settings.interval_seconds))
+            .on_hover_text("仅自动刷新余额, 不发送系统提醒");
         return;
     }
     let response = if settings.alert_active {

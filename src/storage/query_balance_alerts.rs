@@ -36,22 +36,26 @@ impl Store {
     ) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO upstream_balance_alert_settings (
-                upstream_id, enabled, threshold, interval_seconds, last_checked_at,
+                upstream_id, enabled, alert_enabled, threshold, interval_seconds, last_checked_at,
                 alert_active, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, NULL, 0, ?5)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, 0, ?6)
              ON CONFLICT(upstream_id) DO UPDATE SET
                 enabled = excluded.enabled,
+                alert_enabled = excluded.alert_enabled,
                 threshold = excluded.threshold,
                 interval_seconds = excluded.interval_seconds,
                 last_checked_at = CASE
                     WHEN upstream_balance_alert_settings.enabled != excluded.enabled
+                      OR upstream_balance_alert_settings.alert_enabled != excluded.alert_enabled
                       OR upstream_balance_alert_settings.threshold != excluded.threshold
                       OR upstream_balance_alert_settings.interval_seconds != excluded.interval_seconds
                     THEN NULL
                     ELSE upstream_balance_alert_settings.last_checked_at
                 END,
                 alert_active = CASE
-                    WHEN upstream_balance_alert_settings.enabled != excluded.enabled
+                    WHEN excluded.alert_enabled = 0
+                      OR upstream_balance_alert_settings.enabled != excluded.enabled
+                      OR upstream_balance_alert_settings.alert_enabled != excluded.alert_enabled
                       OR upstream_balance_alert_settings.threshold != excluded.threshold
                       OR upstream_balance_alert_settings.interval_seconds != excluded.interval_seconds
                     THEN 0
@@ -61,6 +65,7 @@ impl Store {
         )
         .bind(&settings.upstream_id)
         .bind(i64::from(settings.enabled))
+        .bind(i64::from(settings.alert_enabled))
         .bind(settings.threshold.max(0.0))
         .bind(settings.interval_seconds.max(60))
         .bind(Utc::now().to_rfc3339())
@@ -94,6 +99,7 @@ fn row_to_settings(row: sqlx::sqlite::SqliteRow) -> UpstreamBalanceAlertSettings
     UpstreamBalanceAlertSettings {
         upstream_id: row.get("upstream_id"),
         enabled: row.get::<i64, _>("enabled") != 0,
+        alert_enabled: row.get::<i64, _>("alert_enabled") != 0,
         threshold: row.get("threshold"),
         interval_seconds: row.get("interval_seconds"),
         last_checked_at: row.get("last_checked_at"),
@@ -124,6 +130,7 @@ mod tests {
 
         let mut settings = UpstreamBalanceAlertSettings::new(upstream.id.clone());
         settings.enabled = true;
+        settings.alert_enabled = true;
         settings.threshold = 12.5;
         settings.interval_seconds = 600;
         store.save_balance_alert_settings(&settings).await.unwrap();
@@ -134,6 +141,7 @@ mod tests {
 
         let saved = store.balance_alert_settings(&upstream.id).await.unwrap();
         assert!(saved.enabled);
+        assert!(saved.alert_enabled);
         assert_eq!(saved.threshold, 12.5);
         assert_eq!(saved.interval_seconds, 600);
         assert_eq!(saved.last_checked_at, Some(1234));

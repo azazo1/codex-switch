@@ -15,7 +15,7 @@ async fn run(state: AppState) {
     loop {
         ticker.tick().await;
         if let Err(err) = scan_once(&state).await {
-            tracing::warn!(error = %err, "balance alert scan failed");
+            tracing::warn!(error = %err, "balance refresh scan failed");
         }
     }
 }
@@ -36,52 +36,16 @@ async fn scan_once(state: &AppState) -> anyhow::Result<()> {
         tracing::info!(
             upstream_id = %upstream.id,
             upstream_name = %upstream.name,
-            threshold = setting.threshold,
-            "checking upstream balance alert"
+            interval_seconds = setting.interval_seconds,
+            alert_enabled = setting.alert_enabled,
+            "refreshing upstream balance"
         );
         match crate::balance::query_and_store(state, &upstream.id).await {
             Ok(snapshot) => {
-                let low = is_balance_low(&snapshot, setting.threshold);
-                let alert_active = if low && !setting.alert_active {
-                    let amount = format_balance(&snapshot);
-                    let body = format!(
-                        "上游 {} 当前余额为 {}, 已低于提醒阈值 {:.4}",
-                        upstream.name, amount, setting.threshold
-                    );
-                    let notified = match crate::notification::send(
-                        "上游余额不足".to_string(),
-                        body,
-                    )
-                    .await
-                    {
-                        Ok(()) => true,
-                        Err(err) => {
-                            tracing::warn!(
-                                upstream_id = %upstream.id,
-                                error = %err,
-                                "failed to send balance alert notification"
-                            );
-                            false
-                        }
-                    };
-                    tracing::warn!(
-                        upstream_id = %upstream.id,
-                        upstream_name = %upstream.name,
-                        remaining = snapshot.remaining,
-                        threshold = setting.threshold,
-                        "upstream balance is below alert threshold"
-                    );
-                    notified
-                } else if !low && setting.alert_active {
-                    tracing::info!(
-                        upstream_id = %upstream.id,
-                        upstream_name = %upstream.name,
-                        remaining = snapshot.remaining,
-                        "upstream balance alert recovered"
-                    );
-                    false
+                let alert_active = if setting.alert_enabled {
+                    evaluate_alert(&upstream.id, &upstream.name, &setting, &snapshot).await
                 } else {
-                    low
+                    false
                 };
                 state
                     .store
@@ -94,16 +58,65 @@ async fn scan_once(state: &AppState) -> anyhow::Result<()> {
                     upstream_id = %upstream.id,
                     upstream_name = %upstream.name,
                     error = %err,
-                    "failed to query upstream balance for alert"
+                    "failed to query upstream balance"
                 );
                 state
                     .store
-                    .mark_balance_alert_checked(&upstream.id, now, setting.alert_active)
+                    .mark_balance_alert_checked(
+                        &upstream.id,
+                        now,
+                        setting.alert_enabled && setting.alert_active,
+                    )
                     .await?;
             }
         }
     }
     Ok(())
+}
+
+async fn evaluate_alert(
+    upstream_id: &str,
+    upstream_name: &str,
+    setting: &UpstreamBalanceAlertSettings,
+    snapshot: &BalanceSnapshot,
+) -> bool {
+    let low = is_balance_low(snapshot, setting.threshold);
+    if low && !setting.alert_active {
+        let amount = format_balance(snapshot);
+        let body = format!(
+            "上游 {} 当前余额为 {}, 已低于提醒阈值 {:.4}",
+            upstream_name, amount, setting.threshold
+        );
+        let notified = match crate::notification::send("上游余额不足".to_string(), body).await {
+            Ok(()) => true,
+            Err(err) => {
+                tracing::warn!(
+                    upstream_id = %upstream_id,
+                    error = %err,
+                    "failed to send balance alert notification"
+                );
+                false
+            }
+        };
+        tracing::warn!(
+            upstream_id = %upstream_id,
+            upstream_name = %upstream_name,
+            remaining = snapshot.remaining,
+            threshold = setting.threshold,
+            "upstream balance is below alert threshold"
+        );
+        notified
+    } else if !low && setting.alert_active {
+        tracing::info!(
+            upstream_id = %upstream_id,
+            upstream_name = %upstream_name,
+            remaining = snapshot.remaining,
+            "upstream balance alert recovered"
+        );
+        false
+    } else {
+        low
+    }
 }
 
 fn is_due(settings: &UpstreamBalanceAlertSettings, now: i64) -> bool {

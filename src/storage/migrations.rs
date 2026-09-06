@@ -504,6 +504,14 @@ fn migrations() -> &'static [Migration] {
             )",
             ],
         },
+        Migration {
+            version: 21,
+            name: "upstream_balance_refresh_alert_enabled",
+            statements: &[
+                "ALTER TABLE upstream_balance_alert_settings ADD COLUMN alert_enabled INTEGER NOT NULL DEFAULT 0",
+                "UPDATE upstream_balance_alert_settings SET alert_enabled = enabled",
+            ],
+        },
     ]
 }
 
@@ -524,7 +532,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 20);
+        assert_eq!(rows.len(), 21);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -604,6 +612,11 @@ mod tests {
         );
         assert_eq!(rows[19].get::<i64, _>("version"), 20);
         assert_eq!(rows[19].get::<String, _>("name"), "peer_nodes");
+        assert_eq!(rows[20].get::<i64, _>("version"), 21);
+        assert_eq!(
+            rows[20].get::<String, _>("name"),
+            "upstream_balance_refresh_alert_enabled"
+        );
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
             Some("127.0.0.1:15721")
@@ -632,6 +645,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 20);
+        assert_eq!(count, 21);
     }
 }
