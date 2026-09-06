@@ -10,6 +10,7 @@ use eframe::egui;
 use objc2::rc::Retained;
 #[cfg(target_os = "macos")]
 use objc2::MainThreadMarker;
+use std::str::FromStr;
 use std::sync::Arc;
 #[cfg(target_os = "windows")]
 use std::time::Duration;
@@ -33,17 +34,28 @@ pub enum TrayBadgeMetric {
     TotalCps,
     TodayRequests,
     KeepaliveSessions,
+    ActiveUpstreamBalance,
+}
+
+#[derive(Default, Clone, Copy, Eq, PartialEq, Debug)]
+pub enum ConcurrentUnit {
+    Credit,
+    Yuan,
+    Usd,
+    #[default]
+    Unknown
 }
 
 impl TrayBadgeMetric {
     #[cfg(not(target_os = "windows"))]
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::None,
         Self::Connections,
         Self::TotalTps,
         Self::TotalCps,
         Self::TodayRequests,
         Self::KeepaliveSessions,
+        Self::ActiveUpstreamBalance,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -54,6 +66,7 @@ impl TrayBadgeMetric {
             Self::TotalCps => "total_cps",
             Self::TodayRequests => "today_requests",
             Self::KeepaliveSessions => "keepalive_sessions",
+            Self::ActiveUpstreamBalance => "active_upstream_balance"
         }
     }
 
@@ -65,6 +78,7 @@ impl TrayBadgeMetric {
             Self::TotalCps => "总字符速率",
             Self::TodayRequests => "今日请求数",
             Self::KeepaliveSessions => "缓存保持会话数",
+            Self::ActiveUpstreamBalance => "活跃上游余额"
         }
     }
 
@@ -87,7 +101,33 @@ impl std::str::FromStr for TrayBadgeMetric {
             "total_cps" => Ok(Self::TotalCps),
             "today_requests" => Ok(Self::TodayRequests),
             "keepalive_sessions" => Ok(Self::KeepaliveSessions),
+            "active_upstream_balance" => Ok(Self::ActiveUpstreamBalance),
             _ => Err(format!("unknown tray badge metric: {value}")),
+        }
+    }
+}
+
+impl FromStr for ConcurrentUnit {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        use ConcurrentUnit::*;
+        Ok(match s.to_ascii_uppercase().as_str() {
+            "USD" | "$" => Usd,
+            "CNY" | "RMB" | "元" | "¥" => Yuan,
+            "CREDITS" | "点" => Credit,
+            _ => Unknown,
+        })
+    }
+}
+
+impl ConcurrentUnit {
+    fn to_str(&self) -> &'static str {
+        match self {
+            Self::Credit => "点",
+            Self::Yuan => "¥",
+            Self::Usd => "$",
+            Self::Unknown => "$",
         }
     }
 }
@@ -136,6 +176,7 @@ pub struct TrayStats {
     pub total_cps: f64,
     pub today_requests: i64,
     pub keepalive_sessions: usize,
+    pub current_balance: Option<(f64, ConcurrentUnit)>,
 }
 
 impl TrayStats {
@@ -152,6 +193,7 @@ impl TrayStats {
             total_cps: 0.0,
             today_requests,
             keepalive_sessions,
+            current_balance: None
         };
         for item in snapshots.iter().filter(|item| item.finished_at.is_none()) {
             stats.active_connections += 1;
@@ -181,6 +223,15 @@ impl TrayStats {
             }
             TrayBadgeMetric::KeepaliveSessions => {
                 Some(format_badge_count(self.keepalive_sessions as u64))
+            }
+            TrayBadgeMetric::ActiveUpstreamBalance => {
+                self.current_balance.map(|(val, _)| {
+                    if val < 1.0 {
+                        format!("{:.2}", val)
+                    } else {
+                        format!("{:.1}", val)
+                    }
+                }).or_else(|| Some("-".to_string()))
             }
         }
     }
@@ -549,17 +600,18 @@ fn format_title(
 #[cfg(not(target_os = "windows"))]
 fn metric_line(stats: &TrayStats, metric: TrayBadgeMetric) -> Option<String> {
     let text = stats.badge_text(metric)?;
-    Some(format!("{text} {}", metric_unit(metric)))
+    Some(format!("{text} {}", metric_unit(stats, metric)))
 }
 
 #[cfg(not(target_os = "windows"))]
-fn metric_unit(metric: TrayBadgeMetric) -> &'static str {
+fn metric_unit(stats: &TrayStats, metric: TrayBadgeMetric) -> &'static str {
     match metric {
         TrayBadgeMetric::Connections => "连接",
         TrayBadgeMetric::TotalTps => "TPS",
         TrayBadgeMetric::TotalCps => "CPS",
         TrayBadgeMetric::TodayRequests => "请求",
         TrayBadgeMetric::KeepaliveSessions => "会话",
+        TrayBadgeMetric::ActiveUpstreamBalance => stats.current_balance.map_or(Default::default(), |x| x.1).to_str(),
         TrayBadgeMetric::None => "",
     }
 }
@@ -666,6 +718,7 @@ mod tests {
             total_cps: 45.6,
             today_requests: 1_234,
             keepalive_sessions: 5,
+            current_balance: None,
         };
 
         assert_eq!(stats.badge_text(TrayBadgeMetric::None), None);
@@ -703,6 +756,7 @@ mod tests {
             total_cps: 45.6,
             today_requests: 1_234,
             keepalive_sessions: 5,
+            current_balance: None,
         };
 
         assert_eq!(format_title(&stats, TrayBadgeMetric::None, TrayBadgeMetric::None), None);

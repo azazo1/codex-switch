@@ -862,12 +862,31 @@ impl CodexSwitchApp {
             return;
         }
         self.last_tray_stats_refresh_at = Instant::now();
-        let stats = TrayStats::from_live(
+        let mut stats = TrayStats::from_live(
             &self.live_connections,
             self.stats.today_requests,
             self.cache_keepalive_sessions.len(),
             self.server.is_some(),
         );
+
+        let active_upstream_id = self.live_connections
+            .iter()
+            .rfind(|item| item.finished_at.is_none())
+            .and_then(|item| {
+                self.upstreams.iter().find(|u| Some(&u.name) == item.upstream_name.as_ref()).map(|u| u.id.clone())
+            })
+            .or_else(|| self.logs.first().and_then(|log| log.upstream_id.clone()));
+
+        let current_balance = active_upstream_id.and_then(|id| {
+            self.balance_snapshots
+                .iter()
+                .find(|(uid, _)| uid == &id)
+                .and_then(|(_, snap)| snap.as_ref())
+                .filter(|snap| snap.is_valid)
+                .and_then(|snap| snap.remaining.map(|rem| (rem, snap.unit.clone().unwrap_or_default())))
+        });
+
+        stats.current_balance = current_balance.map(|x| (x.0, x.1.parse().unwrap()));
         if let Some(tray) = &mut self.tray {
             tray.set_stats(stats);
         }
