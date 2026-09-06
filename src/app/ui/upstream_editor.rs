@@ -15,6 +15,7 @@ const BALANCE_PROVIDERS: &[BalanceProvider] = &[
     BalanceProvider::SiliconFlowGlobal,
     BalanceProvider::OpenRouter,
     BalanceProvider::Novita,
+    BalanceProvider::Zhipu,
     BalanceProvider::Sub2Api,
     BalanceProvider::NewApi,
     BalanceProvider::Unsupported,

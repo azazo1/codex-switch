@@ -144,6 +144,7 @@ Codex 发来的模型名必须是上游认识的模型 ID. 可以选择下面任
 | `siliconflow_global` | SiliconFlow 全球站 |
 | `openrouter` | OpenRouter credits |
 | `novita` | Novita AI 余额 |
+| `zhipu` | 智谱 BigModel 官方余额 |
 | `sub2api` | Sub2Api 面板 |
 | `newapi` | NewApi 或 One API 面板 |
 | `unsupported` | 明确标记为不支持, 点击查询会返回错误 |

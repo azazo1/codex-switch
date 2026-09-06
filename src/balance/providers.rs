@@ -91,6 +91,8 @@ pub fn detect_provider(base_url: &str) -> Option<BalanceProvider> {
         Some(BalanceProvider::OpenRouter)
     } else if url.contains("api.novita.ai") {
         Some(BalanceProvider::Novita)
+    } else if url.contains("open.bigmodel.cn") {
+        Some(BalanceProvider::Zhipu)
     } else if url.contains("sub2api") {
         Some(BalanceProvider::Sub2Api)
     } else if url.contains("new-api") || url.contains("newapi") || url.contains("one-api") {
@@ -216,6 +218,10 @@ async fn query_provider(
         BalanceProvider::SiliconFlowGlobal => ("https://api.siliconflow.com/v1/user/info", "USD"),
         BalanceProvider::OpenRouter => ("https://openrouter.ai/api/v1/credits", "USD"),
         BalanceProvider::Novita => ("https://api.novita.ai/v3/user/balance", "USD"),
+        BalanceProvider::Zhipu => (
+            "https://open.bigmodel.cn/api/biz/account/query-customer-account-report",
+            "CNY",
+        ),
         BalanceProvider::Auto
         | BalanceProvider::Sub2Api
         | BalanceProvider::NewApi
@@ -293,6 +299,17 @@ fn parse_balance(
         BalanceProvider::Novita => {
             snapshot.remaining = parse_f64_field(body, "availableBalance").map(|v| v / 10000.0);
             snapshot.is_valid = snapshot.remaining.map(|v| v > 0.0).unwrap_or(true);
+        }
+        BalanceProvider::Zhipu => {
+            let data = body.get("data").unwrap_or(body);
+            snapshot.remaining = parse_f64_field(data, "availableBalance")
+                .or_else(|| parse_f64_field(data, "balance"));
+            snapshot.used = parse_f64_field(data, "totalSpendAmount");
+            snapshot.total = match (snapshot.remaining, snapshot.used) {
+                (Some(remaining), Some(used)) => Some(remaining + used),
+                _ => None,
+            };
+            snapshot.is_valid = body.get("success").and_then(Value::as_bool).unwrap_or(true);
         }
         BalanceProvider::Sub2Api | BalanceProvider::NewApi => {
             if let Some(common) = parse_common_balance(upstream_id, provider, body) {
@@ -737,6 +754,10 @@ mod tests {
             Some(BalanceProvider::OpenRouter)
         );
         assert_eq!(
+            detect_provider("https://open.bigmodel.cn/api/paas/v4"),
+            Some(BalanceProvider::Zhipu)
+        );
+        assert_eq!(
             detect_provider("https://example.com/new-api/v1"),
             Some(BalanceProvider::NewApi)
         );
@@ -821,6 +842,34 @@ mod tests {
         assert_eq!(snapshot.used, Some(0.5));
         assert_eq!(snapshot.total, Some(1.5));
         assert_eq!(snapshot.unit.as_deref(), Some("USD"));
+    }
+
+    #[test]
+    fn parses_zhipu_balance() {
+        let snapshot = parse_balance(
+            "u1",
+            BalanceProvider::Zhipu,
+            "CNY",
+            &json!({
+                "code": 200,
+                "msg": "操作成功",
+                "success": true,
+                "data": {
+                    "balance": 26.367952395,
+                    "rechargeAmount": 35.0,
+                    "giveAmount": 2.848407,
+                    "totalSpendAmount": 11.480454605,
+                    "availableBalance": 26.367952395,
+                    "frozenBalance": "0E-9",
+                    "creditStatus": "NOT_OPEN"
+                }
+            }),
+        );
+        assert_eq!(snapshot.remaining, Some(26.367952395));
+        assert_eq!(snapshot.used, Some(11.480454605));
+        assert!((snapshot.total.unwrap() - 37.848407).abs() < 1e-6);
+        assert_eq!(snapshot.unit.as_deref(), Some("CNY"));
+        assert!(snapshot.is_valid);
     }
 
     #[test]
