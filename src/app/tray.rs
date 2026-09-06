@@ -122,7 +122,7 @@ impl FromStr for ConcurrentUnit {
 }
 
 impl ConcurrentUnit {
-    fn to_str(&self) -> &'static str {
+    fn to_str(self) -> &'static str {
         match self {
             Self::Credit => "点",
             Self::Yuan => "¥",
