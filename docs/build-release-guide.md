@@ -77,7 +77,7 @@ Bundle 最低系统版本为 macOS 12.0. Bundle 版本读取 `Cargo.toml` 中的
 | Windows | `x86_64-pc-windows-msvc` | `aarch64-pc-windows-msvc` |
 | macOS | `x86_64-apple-darwin` | `aarch64-apple-darwin` |
 
-普通 push, pull request 和留空 tag 的 `workflow_dispatch` 都会构建, 校验, 打包并上传 Actions artifact, 不会创建 release. tag push 或手动填写已有 tag 的 `workflow_dispatch` 会在同一套矩阵成功后进入发布流程.
+普通 push, pull request 和留空 tag 的 `workflow_dispatch` 都会构建, 校验, 打包并上传 Actions artifact, 不会创建 release. artifact 名称与归档相同但不带扩展名, 例如 `codex-switch-0.11.0-a1b2c3d-linux-x86_64`. tag push 或手动填写已有 tag 的 `workflow_dispatch` 会在同一套矩阵成功后进入发布流程.
 
 构建和测试 job 使用 `Swatinem/rust-cache` 缓存依赖与编译结果. 缓存只用于加速, 不是发布正确性来源, 干净 runner 也必须能完整构建.
 
