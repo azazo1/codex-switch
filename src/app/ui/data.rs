@@ -82,10 +82,17 @@ pub(super) async fn load_view_data(
     let log_estimated_cost_usd = logs.iter().map(|log| log.estimated_cost_usd).collect();
     let total_model_usage = state.store.model_usage_stats(false).await?;
     let today_model_usage = state.store.model_usage_stats(true).await?;
-    let total_estimated_cost_usd = estimate_model_usage_cost(state, &total_model_usage).await?;
-    let today_estimated_cost_usd = estimate_model_usage_cost(state, &today_model_usage).await?;
+    let price_multipliers: BTreeMap<String, f64> = upstreams
+        .iter()
+        .map(|upstream| (upstream.id.clone(), upstream.price_multiplier))
+        .collect();
+    let total_estimated_cost_usd =
+        estimate_model_usage_cost(state, &total_model_usage, &price_multipliers).await?;
+    let today_estimated_cost_usd =
+        estimate_model_usage_cost(state, &today_model_usage, &price_multipliers).await?;
     let provider_estimated_cost_usd =
-        estimate_provider_costs(state, &total_model_usage, &provider_stats).await?;
+        estimate_provider_costs(state, &total_model_usage, &provider_stats, &price_multipliers)
+            .await?;
     let price_cache_count = state.store.model_price_count().await?;
     let price_cache_age_seconds = state.store.model_price_cache_age_seconds().await?;
     let database_info = state.store.database_info().await?;
@@ -130,6 +137,7 @@ pub(super) async fn load_view_data(
 async fn estimate_model_usage_cost(
     state: &AppState,
     rows: &[ModelUsageStats],
+    price_multipliers: &BTreeMap<String, f64>,
 ) -> anyhow::Result<Option<f64>> {
     let mut total = 0.0;
     let mut matched = false;
@@ -140,7 +148,8 @@ async fn estimate_model_usage_cost(
         let Some(price) = state.store.find_model_price(model).await? else {
             continue;
         };
-        total += pricing::estimate_usage_cost(&row.usage, &price).total_usd();
+        let multiplier = multiplier_for(&row.upstream_id, price_multipliers);
+        total += pricing::estimate_usage_cost(&row.usage, &price).total_usd() * multiplier;
         matched = true;
     }
     Ok(matched.then_some(total))
@@ -150,6 +159,7 @@ async fn estimate_provider_costs(
     state: &AppState,
     rows: &[ModelUsageStats],
     providers: &[ProviderStats],
+    price_multipliers: &BTreeMap<String, f64>,
 ) -> anyhow::Result<BTreeMap<String, Option<f64>>> {
     let mut totals: BTreeMap<String, (f64, bool)> = BTreeMap::new();
     for provider in providers {
@@ -166,12 +176,21 @@ async fn estimate_provider_costs(
         let Some(price) = state.store.find_model_price(model).await? else {
             continue;
         };
+        let multiplier = multiplier_for(&row.upstream_id, price_multipliers);
         let entry = totals.entry(upstream_id).or_insert((0.0, false));
-        entry.0 += pricing::estimate_usage_cost(&row.usage, &price).total_usd();
+        entry.0 += pricing::estimate_usage_cost(&row.usage, &price).total_usd() * multiplier;
         entry.1 = true;
     }
     Ok(totals
         .into_iter()
         .map(|(key, (value, matched))| (key, matched.then_some(value)))
         .collect())
+}
+
+fn multiplier_for(upstream_id: &Option<String>, price_multipliers: &BTreeMap<String, f64>) -> f64 {
+    upstream_id
+        .as_deref()
+        .and_then(|id| price_multipliers.get(id))
+        .copied()
+        .unwrap_or(1.0)
 }

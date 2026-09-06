@@ -46,10 +46,10 @@ impl Store {
         };
         sqlx::query(
             "INSERT INTO upstreams (
-                id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, strip_multimodal_for_text_models, unknown_modality_policy, error_retry_policy,
+                id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, strip_multimodal_for_text_models, unknown_modality_policy, error_retry_policy, price_multiplier,
                 enabled, priority, weight, proxy_url, balance_provider, chatgpt_account_id, email,
                 plan_type, token_expires_at, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
              ON CONFLICT(id) DO UPDATE SET
                 kind = excluded.kind,
                 name = excluded.name,
@@ -61,6 +61,7 @@ impl Store {
                 strip_multimodal_for_text_models = excluded.strip_multimodal_for_text_models,
                 unknown_modality_policy = excluded.unknown_modality_policy,
                 error_retry_policy = excluded.error_retry_policy,
+                price_multiplier = excluded.price_multiplier,
                 enabled = excluded.enabled,
                 priority = excluded.priority,
                 weight = excluded.weight,
@@ -83,6 +84,7 @@ impl Store {
         .bind(i64::from(upstream.strip_multimodal_for_text_models))
         .bind(upstream.unknown_modality_policy.as_str())
         .bind(upstream.error_retry_policy.as_str())
+        .bind(upstream.price_multiplier)
         .bind(i64::from(upstream.enabled))
         .bind(upstream.priority)
         .bind(upstream.weight)
@@ -188,6 +190,23 @@ impl Store {
         })
     }
 
+    /// 查询上游的价格倍率, 上游不存在或未指定时返回 1.0.
+    pub async fn upstream_price_multiplier(
+        &self,
+        upstream_id: Option<&str>,
+    ) -> anyhow::Result<f64> {
+        let Some(id) = upstream_id.map(str::trim).filter(|id| !id.is_empty()) else {
+            return Ok(1.0);
+        };
+        let row = sqlx::query("SELECT price_multiplier FROM upstreams WHERE id = ?1")
+            .bind(id)
+            .fetch_optional(self.pool())
+            .await?;
+        Ok(row
+            .map(|row| row.get::<f64, _>("price_multiplier"))
+            .unwrap_or(1.0))
+    }
+
     pub async fn set_upstream_enabled(&self, id: &str, enabled: bool) -> anyhow::Result<()> {
         sqlx::query("UPDATE upstreams SET enabled = ?2, updated_at = ?3 WHERE id = ?1")
             .bind(id)
@@ -273,10 +292,10 @@ async fn insert_upstream(
 ) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO upstreams (
-            id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, strip_multimodal_for_text_models, unknown_modality_policy, error_retry_policy,
+            id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, strip_multimodal_for_text_models, unknown_modality_policy, error_retry_policy, price_multiplier,
             enabled, priority, weight, proxy_url, balance_provider, chatgpt_account_id, email,
             plan_type, token_expires_at, created_at, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
     )
     .bind(&upstream.id)
     .bind(upstream.kind.as_str())
@@ -289,6 +308,7 @@ async fn insert_upstream(
     .bind(i64::from(upstream.strip_multimodal_for_text_models))
     .bind(upstream.unknown_modality_policy.as_str())
     .bind(upstream.error_retry_policy.as_str())
+    .bind(upstream.price_multiplier)
     .bind(i64::from(upstream.enabled))
     .bind(upstream.priority)
     .bind(upstream.weight)
@@ -347,6 +367,7 @@ pub(super) fn row_to_upstream(row: sqlx::sqlite::SqliteRow) -> anyhow::Result<Up
             &row.get::<String, _>("unknown_modality_policy"),
         ),
         error_retry_policy: ErrorRetryPolicy::from_str(&row.get::<String, _>("error_retry_policy")),
+        price_multiplier: row.get::<f64, _>("price_multiplier"),
         enabled: row.get::<i64, _>("enabled") != 0,
         priority: row.get("priority"),
         weight: row.get("weight"),
@@ -435,6 +456,44 @@ mod tests {
         let saved = store.get_upstream(&upstream.id).await.unwrap().unwrap();
 
         assert!(saved.strip_multimodal_for_text_models);
+    }
+
+    #[tokio::test]
+    async fn persists_price_multiplier() {
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-upstream-multiplier-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let store = Store::open(path).await.unwrap();
+        let mut upstream = Upstream::new_relay(
+            "relay".to_string(),
+            "https://example.com/v1".to_string(),
+            WireApi::Responses,
+            false,
+            BalanceProvider::Unsupported,
+        );
+        assert_eq!(upstream.price_multiplier, 1.0);
+        upstream.price_multiplier = 2.5;
+
+        store.save_upstream(&upstream).await.unwrap();
+        let saved = store.get_upstream(&upstream.id).await.unwrap().unwrap();
+
+        assert_eq!(saved.price_multiplier, 2.5);
+        assert_eq!(
+            store
+                .upstream_price_multiplier(Some(&upstream.id))
+                .await
+                .unwrap(),
+            2.5
+        );
+        assert_eq!(store.upstream_price_multiplier(None).await.unwrap(), 1.0);
+        assert_eq!(
+            store
+                .upstream_price_multiplier(Some("missing"))
+                .await
+                .unwrap(),
+            1.0
+        );
     }
 
     #[tokio::test]

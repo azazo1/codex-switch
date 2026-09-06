@@ -289,6 +289,17 @@ impl UpstreamEditor {
             );
         });
         ui.horizontal(|ui| {
+            ui.label("价格倍率");
+            ui.add(
+                egui::DragValue::new(&mut self.upstream.price_multiplier)
+                    .speed(0.05)
+                    .range(0.0..=1000.0),
+            )
+            .on_hover_text(
+                "估算成本 = 模型官方价 x 倍率, 用于中转站按倍率计费的场景. 只影响成本统计, 不影响请求转发.",
+            );
+        });
+        ui.horizontal(|ui| {
             ui.label("错误重试");
             egui::ComboBox::from_id_salt("upstream_error_retry_policy")
                 .selected_text(error_retry_policy_label(self.upstream.error_retry_policy))

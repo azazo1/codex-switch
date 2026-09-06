@@ -520,6 +520,13 @@ fn migrations() -> &'static [Migration] {
                 "UPDATE upstream_balance_alert_settings SET alert_enabled = enabled",
             ],
         },
+        Migration {
+            version: 22,
+            name: "upstream_price_multiplier",
+            statements: &[
+                "ALTER TABLE upstreams ADD COLUMN price_multiplier REAL NOT NULL DEFAULT 1.0",
+            ],
+        },
     ]
 }
 
@@ -540,7 +547,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 21);
+        assert_eq!(rows.len(), 22);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -647,6 +654,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 21);
+        assert_eq!(count, 22);
     }
 }
