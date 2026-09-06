@@ -562,13 +562,28 @@ fn format_tooltip(stats: &TrayStats) -> String {
         "已停止"
     };
     format!(
-        "Codex Switch\n服务: {service}\n活跃连接: {}\n总 TPS: {}\n总字符速率: {}\n今日请求: {}\n缓存保持会话: {}",
+        "Codex Switch\n服务: {service}\n活跃连接: {}\n总 TPS: {}\n总字符速率: {}\n今日请求: {}\n缓存保持会话: {}\n活跃上游余额: {}",
         stats.active_connections,
         format_tps(stats.total_tps),
         format_cps(stats.total_cps),
         stats.today_requests,
         stats.keepalive_sessions,
+        format_current_balance(stats.current_balance),
     )
+}
+
+fn format_current_balance(balance: Option<(f64, ConcurrentUnit)>) -> String {
+    match balance {
+        Some((val, unit)) => {
+            let amount = if val < 1.0 {
+                format!("{val:.2}")
+            } else {
+                format!("{val:.1}")
+            };
+            format!("{amount} {}", unit.to_str())
+        }
+        None => "-".to_string(),
+    }
 }
 
 fn format_tps(value: f64) -> String {
