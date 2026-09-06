@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use super::identity::{NodeIdentity, decode_public_key, fingerprint_from_public_key, verify_signature};
+use super::identity::{
+    NodeIdentity, decode_public_key, fingerprint_from_public_key, verify_signature,
+};
 
 pub const HOP_HEADER: &str = "x-codex-switch-hop";
 
@@ -149,7 +151,8 @@ mod tests {
     #[test]
     fn identity_payload_roundtrip_verifies() {
         let identity = NodeIdentity::generate("box".to_string()).unwrap();
-        let payload = PeerIdentityPayload::from_identity(&identity, vec!["192.168.1.8:15722".into()]);
+        let payload =
+            PeerIdentityPayload::from_identity(&identity, vec!["192.168.1.8:15722".into()]);
         payload.verify().unwrap();
         assert_eq!(payload.fingerprint, identity.fingerprint());
     }

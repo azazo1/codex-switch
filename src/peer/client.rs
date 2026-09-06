@@ -110,7 +110,8 @@ pub async fn send_pair_request(
     identity: PeerIdentityPayload,
 ) -> anyhow::Result<PairResponse> {
     let url = format!("{}/peer/v1/pair", base_url.trim_end_matches('/'));
-    let body = serde_json::to_vec(&PairRequest { identity }).context("failed to encode pair request")?;
+    let body =
+        serde_json::to_vec(&PairRequest { identity }).context("failed to encode pair request")?;
     let mut headers = hyper::HeaderMap::new();
     headers.insert(
         hyper::header::CONTENT_TYPE,
@@ -154,10 +155,7 @@ pub async fn poll_pair_until_resolved(
                 );
             }
             PairStatus::Pending => {
-                tracing::info!(
-                    attempt,
-                    "waiting for peer pairing confirmation"
-                );
+                tracing::info!(attempt, "waiting for peer pairing confirmation");
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
         }
@@ -248,10 +246,13 @@ mod tests {
     async fn pair_request_reaches_local_peer_listener() {
         let state = test_state().await;
         let addr = bind_local().await;
-        let handle = start_peer_server(addr.clone(), state.clone()).await.unwrap();
+        let handle = start_peer_server(addr.clone(), state.clone())
+            .await
+            .unwrap();
         let identity = crate::peer::identity::NodeIdentity::generate("probe".to_string()).unwrap();
         let client = tofu_client(&identity).unwrap();
-        let payload = PeerIdentityPayload::from_identity(&identity, vec![format!("https://{addr}")]);
+        let payload =
+            PeerIdentityPayload::from_identity(&identity, vec![format!("https://{addr}")]);
         let response = send_pair_request(&client, &format!("https://{addr}"), payload)
             .await
             .unwrap();
@@ -277,25 +278,21 @@ mod tests {
             &local.peers.identity(),
             vec![format!("https://{local_addr}")],
         );
-        let pending = send_pair_request(&client, &format!("https://{remote_addr}"), payload.clone())
-            .await
-            .unwrap();
+        let pending =
+            send_pair_request(&client, &format!("https://{remote_addr}"), payload.clone())
+                .await
+                .unwrap();
         assert_eq!(pending.status, PairStatus::Pending);
-        let requests = remote
-            .store
-            .list_peer_pairing_requests()
-            .await
-            .unwrap();
+        let requests = remote.store.list_peer_pairing_requests().await.unwrap();
         assert_eq!(requests.len(), 1);
         remote
             .peers
             .accept_pairing_request(&remote.store, &requests[0].id)
             .await
             .unwrap();
-        let accepted =
-            send_pair_request(&client, &format!("https://{remote_addr}"), payload)
-                .await
-                .unwrap();
+        let accepted = send_pair_request(&client, &format!("https://{remote_addr}"), payload)
+            .await
+            .unwrap();
         local_handle.stop();
         remote_handle.stop();
         assert_eq!(accepted.status, PairStatus::Accepted);

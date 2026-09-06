@@ -26,11 +26,7 @@ impl ModelCapabilityCache {
             .and_then(|cache| cache.get(&key).copied())
     }
 
-    pub fn extend(
-        &self,
-        upstream_id: &str,
-        entries: impl IntoIterator<Item = (String, bool)>,
-    ) {
+    pub fn extend(&self, upstream_id: &str, entries: impl IntoIterator<Item = (String, bool)>) {
         if let Ok(mut cache) = self.per_upstream.lock() {
             for (model, multimodal) in entries {
                 cache.insert((upstream_id.to_string(), model), multimodal);
@@ -48,7 +44,12 @@ impl ModelCapabilityCache {
 }
 
 pub fn model_multimodal_from_item(item: &Value) -> Option<bool> {
-    for key in ["multimodal", "supports_image_input", "supports_vision", "vision"] {
+    for key in [
+        "multimodal",
+        "supports_image_input",
+        "supports_vision",
+        "vision",
+    ] {
         if let Some(value) = item.get(key).and_then(Value::as_bool) {
             return Some(value);
         }
@@ -148,10 +149,7 @@ mod tests {
         let cache = ModelCapabilityCache::default();
         assert_eq!(cache.get("upstream", "deepseek-v4-flash"), None);
         cache.extend("upstream", vec![("deepseek-v4-flash".to_string(), false)]);
-        assert_eq!(
-            cache.get("upstream", "deepseek-v4-flash"),
-            Some(false)
-        );
+        assert_eq!(cache.get("upstream", "deepseek-v4-flash"), Some(false));
         assert_eq!(cache.get("other", "deepseek-v4-flash"), None);
     }
 
@@ -180,7 +178,9 @@ mod tests {
             Some(false)
         );
         assert_eq!(
-            model_multimodal_from_item(&json!({"id":"gpt-5.2","architecture":{"modality":"text->text"}})),
+            model_multimodal_from_item(
+                &json!({"id":"gpt-5.2","architecture":{"modality":"text->text"}})
+            ),
             Some(false)
         );
     }

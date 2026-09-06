@@ -6,18 +6,13 @@ use std::{
     io::{self, BufWriter, Write},
     path::{Path, PathBuf},
     sync::{
-        Mutex,
-        OnceLock,
+        Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
 };
 use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 use tracing_rolling_file::{RollingCondition, RollingConditionBase};
-use tracing_subscriber::{
-    EnvFilter, Registry, fmt,
-    prelude::*,
-    reload,
-};
+use tracing_subscriber::{EnvFilter, Registry, fmt, prelude::*, reload};
 
 const LOG_FILE_ENV: &str = "CODEX_SWITCH_LOG_FILE";
 const LOG_BODIES_ENV: &str = "CODEX_SWITCH_LOG_BODIES";
@@ -65,9 +60,13 @@ impl LogRotationConfig {
             .await?
             .as_deref()
             == Some("true");
-        let size_mb = setting_u64(store, SETTING_LOG_ROTATION_SIZE_MB, DEFAULT_LOG_ROTATION_SIZE_MB)
-            .await?
-            .max(1);
+        let size_mb = setting_u64(
+            store,
+            SETTING_LOG_ROTATION_SIZE_MB,
+            DEFAULT_LOG_ROTATION_SIZE_MB,
+        )
+        .await?
+        .max(1);
         let max_files = setting_usize(store, SETTING_LOG_MAX_FILES, DEFAULT_LOG_MAX_FILES)
             .await?
             .max(1);
@@ -247,9 +246,7 @@ pub(crate) fn init_tracing(config: LogRotationConfig) -> anyhow::Result<()> {
     let file_layer = fmt::layer()
         .with_ansi(false)
         .with_writer(non_blocking.clone())
-        .with_filter(
-            EnvFilter::try_new(initial_filter).context("failed to create file filter")?,
-        );
+        .with_filter(EnvFilter::try_new(initial_filter).context("failed to create file filter")?);
     let (file_layer, file_layer_handle): (
         reload::Layer<FileLayer, Registry>,
         reload::Handle<FileLayer, Registry>,
@@ -260,9 +257,7 @@ pub(crate) fn init_tracing(config: LogRotationConfig) -> anyhow::Result<()> {
     let subscriber = {
         let stderr = fmt::layer()
             .with_writer(std::io::stderr)
-            .with_filter(
-                EnvFilter::try_new("info").context("failed to create stderr filter")?,
-            );
+            .with_filter(EnvFilter::try_new("info").context("failed to create stderr filter")?);
         subscriber.with(stderr)
     };
     subscriber
@@ -289,11 +284,7 @@ pub(crate) fn set_debug_log_enabled(enabled: bool) -> anyhow::Result<()> {
     let Some(controls) = CONTROLS.get() else {
         return Ok(());
     };
-    let filter = if enabled {
-        DEBUG_FILE_FILTER
-    } else {
-        "info"
-    };
+    let filter = if enabled { DEBUG_FILE_FILTER } else { "info" };
     let filter = EnvFilter::try_new(filter).context("failed to create debug log filter")?;
     let layer = {
         let writer = controls
@@ -395,7 +386,10 @@ fn open_log_file(path: &Path, options: &OpenOptions) -> io::Result<std::fs::File
     match options.open(path) {
         Ok(file) => Ok(file),
         Err(err) => {
-            if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            if let Some(parent) = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
                 fs::create_dir_all(parent)?;
                 options.open(path)
             } else {
@@ -504,7 +498,9 @@ mod tests {
             .unwrap();
 
         writer.write_with_datetime(b"first line\n", &first).unwrap();
-        writer.write_with_datetime(b"second line\n", &second).unwrap();
+        writer
+            .write_with_datetime(b"second line\n", &second)
+            .unwrap();
         writer.flush().unwrap();
 
         let current = fs::read_to_string(&log_path).unwrap();
@@ -515,7 +511,8 @@ mod tests {
 
     #[tokio::test]
     async fn rotation_config_reads_persisted_values() {
-        let path = std::env::temp_dir().join(format!("codex-switch-logging-{}.sqlite", Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("codex-switch-logging-{}.sqlite", Uuid::new_v4()));
         let store = Store::open(path).await.unwrap();
         store
             .set_setting(SETTING_DEBUG_LOG_ENABLED, "true")
@@ -525,10 +522,7 @@ mod tests {
             .set_setting(SETTING_LOG_ROTATION_SIZE_MB, "42")
             .await
             .unwrap();
-        store
-            .set_setting(SETTING_LOG_MAX_FILES, "7")
-            .await
-            .unwrap();
+        store.set_setting(SETTING_LOG_MAX_FILES, "7").await.unwrap();
 
         let config = LogRotationConfig::load(&store).await.unwrap();
 
@@ -539,7 +533,8 @@ mod tests {
 
     #[tokio::test]
     async fn rotation_config_normalizes_invalid_values() {
-        let path = std::env::temp_dir().join(format!("codex-switch-logging-{}.sqlite", Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("codex-switch-logging-{}.sqlite", Uuid::new_v4()));
         let store = Store::open(path).await.unwrap();
         store
             .set_setting(SETTING_LOG_ROTATION_SIZE_MB, "0")

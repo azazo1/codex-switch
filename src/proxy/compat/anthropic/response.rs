@@ -1,5 +1,5 @@
-use crate::core::models::WireApi;
 use super::super::ChatResponseContext;
+use crate::core::models::WireApi;
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
@@ -11,7 +11,11 @@ pub(crate) fn anthropic_to_responses_response_json(
     let mut message_parts = Vec::new();
     if let Some(content) = value.get("content").and_then(Value::as_array) {
         for block in content {
-            match block.get("type").and_then(Value::as_str).unwrap_or_default() {
+            match block
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+            {
                 "text" => message_parts.push(json!({
                     "type":"output_text",
                     "text":block.get("text").cloned().unwrap_or_else(|| json!("")),
@@ -19,7 +23,9 @@ pub(crate) fn anthropic_to_responses_response_json(
                 })),
                 "thinking" => {
                     if block.get("signature").is_some() {
-                        tracing::debug!("dropping Anthropic thinking signature during protocol conversion");
+                        tracing::debug!(
+                            "dropping Anthropic thinking signature during protocol conversion"
+                        );
                     }
                     output.push(json!({
                         "id":new_id("rs"),
@@ -30,10 +36,7 @@ pub(crate) fn anthropic_to_responses_response_json(
                 }
                 "tool_use" => {
                     let item_id = new_id("fc");
-                    let call_id = block
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
+                    let call_id = block.get("id").and_then(Value::as_str).unwrap_or_default();
                     let name = block
                         .get("name")
                         .and_then(Value::as_str)
@@ -57,7 +60,9 @@ pub(crate) fn anthropic_to_responses_response_json(
                         }),
                     });
                 }
-                "server_tool_use" if block.get("name").and_then(Value::as_str) == Some("web_search") => {
+                "server_tool_use"
+                    if block.get("name").and_then(Value::as_str) == Some("web_search") =>
+                {
                     output.push(json!({
                         "id":block.get("id").cloned().unwrap_or_else(|| json!(new_id("ws"))),
                         "type":"web_search_call",
@@ -180,11 +185,7 @@ pub(crate) fn responses_to_anthropic_response_json(value: &Value, model: Option<
     })
 }
 
-pub(crate) fn error_response_json(
-    status: StatusCode,
-    body: &[u8],
-    client_api: WireApi,
-) -> Vec<u8> {
+pub(crate) fn error_response_json(status: StatusCode, body: &[u8], client_api: WireApi) -> Vec<u8> {
     let value = serde_json::from_slice::<Value>(body).unwrap_or(Value::Null);
     let message = value
         .pointer("/error/message")
@@ -246,13 +247,18 @@ fn responses_usage_to_anthropic(value: Option<&Value>) -> Value {
 }
 
 fn int_field(value: Option<&Value>, key: &str) -> i64 {
-    value.and_then(|value| value.get(key)).and_then(Value::as_i64).unwrap_or(0)
+    value
+        .and_then(|value| value.get(key))
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
 }
 
 fn tool_input(item: &Value) -> Value {
     if item.get("type").and_then(Value::as_str) == Some("custom_tool_call") {
         return match item.get("input") {
-            Some(Value::String(input)) => serde_json::from_str(input).unwrap_or_else(|_| json!({"input":input})),
+            Some(Value::String(input)) => {
+                serde_json::from_str(input).unwrap_or_else(|_| json!({"input":input}))
+            }
             Some(input) => input.clone(),
             None => json!({}),
         };

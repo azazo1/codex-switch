@@ -92,9 +92,12 @@ pub fn decode_public_key(value: &str) -> anyhow::Result<[u8; 32]> {
     Ok(bytes)
 }
 
-pub fn verify_signature(public_key: &[u8; 32], message: &[u8], signature: &str) -> anyhow::Result<()> {
-    let verifying_key =
-        VerifyingKey::from_bytes(public_key).context("invalid node public key")?;
+pub fn verify_signature(
+    public_key: &[u8; 32],
+    message: &[u8],
+    signature: &str,
+) -> anyhow::Result<()> {
+    let verifying_key = VerifyingKey::from_bytes(public_key).context("invalid node public key")?;
     let signature_bytes = STANDARD
         .decode(signature.trim())
         .context("invalid node signature encoding")?;

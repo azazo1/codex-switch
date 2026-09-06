@@ -80,10 +80,10 @@ impl MdnsDiscovery {
                             });
                             match discovered_from_mdns(&info, &local_node_id, previous.as_ref()) {
                                 Some(peer) => {
-                                    let changed = discovered
-                                        .lock()
-                                        .ok()
-                                        .is_some_and(|mut items| merge_discovered(&mut items, peer));
+                                    let changed =
+                                        discovered.lock().ok().is_some_and(|mut items| {
+                                            merge_discovered(&mut items, peer)
+                                        });
                                     if changed {
                                         on_change();
                                     }

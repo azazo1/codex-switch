@@ -16,10 +16,12 @@ pub struct OAuthAccountInput {
 
 impl OAuthAccountInput {
     pub fn from_token_response(tokens: OAuthTokenResponse) -> anyhow::Result<Self> {
-        let access_token = required_value(Some(tokens.access_token), "oauth response is missing access token")?;
-        let token_expires_at = Some(
-            chrono::Utc::now().timestamp() + tokens.expires_in.unwrap_or(3600),
-        );
+        let access_token = required_value(
+            Some(tokens.access_token),
+            "oauth response is missing access token",
+        )?;
+        let token_expires_at =
+            Some(chrono::Utc::now().timestamp() + tokens.expires_in.unwrap_or(3600));
         Ok(Self {
             access_token,
             refresh_token: non_empty(tokens.refresh_token),
@@ -39,9 +41,8 @@ impl OAuthAccountInput {
         let refresh_token = non_empty(refresh_token);
         let id_token = non_empty(id_token);
         let account_id = non_empty(account_id);
-        let token_expires_at = Some(
-            token_expiry(&access_token).unwrap_or_else(|| chrono::Utc::now().timestamp()),
-        );
+        let token_expires_at =
+            Some(token_expiry(&access_token).unwrap_or_else(|| chrono::Utc::now().timestamp()));
         Ok(Self {
             access_token,
             refresh_token,
@@ -229,12 +230,12 @@ mod tests {
         );
 
         let mut second_input = input(
-                "account-two",
-                "two@example.com",
-                "team",
-                "access-two",
-                "unused-refresh",
-            );
+            "account-two",
+            "two@example.com",
+            "team",
+            "access-two",
+            "unused-refresh",
+        );
         second_input.refresh_token = None;
         let second = service.store_tokens(second_input).await.unwrap();
         assert_eq!(second.outcome, OAuthAccountStoreOutcome::Created);

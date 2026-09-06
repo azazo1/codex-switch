@@ -32,7 +32,10 @@ pub(super) enum OAuthLoginTaskState {
 
 impl OAuthLoginTaskState {
     pub(super) fn is_terminal(&self) -> bool {
-        matches!(self, Self::Succeeded { .. } | Self::Failed(_) | Self::Expired)
+        matches!(
+            self,
+            Self::Succeeded { .. } | Self::Failed(_) | Self::Expired
+        )
     }
 }
 

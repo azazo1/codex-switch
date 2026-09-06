@@ -1,7 +1,6 @@
 use crate::app::AppState;
 use crate::core::models::{
-    ScheduleGroup, ScheduleMode, ScheduleRouteRule, ScheduleRouteTargetKind, Upstream,
-    UpstreamKind,
+    ScheduleGroup, ScheduleMode, ScheduleRouteRule, ScheduleRouteTargetKind, Upstream, UpstreamKind,
 };
 use crate::proxy::transform;
 use crate::scheduler::{glob_captures, rewrite_model_template};
@@ -9,8 +8,8 @@ use axum::http::HeaderMap;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use super::multimodal;
 use super::headers::apply_headers;
+use super::multimodal;
 
 #[derive(Debug, thiserror::Error)]
 #[error("model not found: {0}")]
@@ -116,8 +115,16 @@ fn anthropic_model_page(models: Vec<Value>, query: Option<&str>) -> Value {
         .take(limit)
         .map(anthropic_model_item)
         .collect::<Vec<_>>();
-    let first_id = data.first().and_then(|item| item.get("id")).cloned().unwrap_or(Value::Null);
-    let last_id = data.last().and_then(|item| item.get("id")).cloned().unwrap_or(Value::Null);
+    let first_id = data
+        .first()
+        .and_then(|item| item.get("id"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let last_id = data
+        .last()
+        .and_then(|item| item.get("id"))
+        .cloned()
+        .unwrap_or(Value::Null);
     json!({
         "data":data,
         "has_more":available.len() > limit,
@@ -192,7 +199,10 @@ async fn reachable_model_sources(
 
         if entry.group.mode != ScheduleMode::ModelMapping {
             let upstreams = if entry.group.mode == ScheduleMode::Fixed {
-                fixed_upstream(state, &entry.group).await?.into_iter().collect()
+                fixed_upstream(state, &entry.group)
+                    .await?
+                    .into_iter()
+                    .collect()
             } else {
                 state
                     .store
@@ -200,12 +210,20 @@ async fn reachable_model_sources(
                     .await?
             };
             for upstream in upstreams {
-                push_model_source(&mut sources, &mut seen_sources, upstream, entry.rules.clone());
+                push_model_source(
+                    &mut sources,
+                    &mut seen_sources,
+                    upstream,
+                    entry.rules.clone(),
+                );
             }
             continue;
         }
 
-        let rules = state.store.list_schedule_route_rules(&entry.group.id).await?;
+        let rules = state
+            .store
+            .list_schedule_route_rules(&entry.group.id)
+            .await?;
         for rule in rules.into_iter().filter(|rule| rule.enabled) {
             match rule.target_kind {
                 ScheduleRouteTargetKind::Group => {
@@ -219,15 +237,8 @@ async fn reachable_model_sources(
                     };
                     let mut next = entry.clone();
                     next.rules.push(rule.clone());
-                    push_target_group(
-                        state,
-                        &mut queue,
-                        next,
-                        target_group_id,
-                        max_hops,
-                        &rule.id,
-                    )
-                    .await?;
+                    push_target_group(state, &mut queue, next, target_group_id, max_hops, &rule.id)
+                        .await?;
                 }
                 ScheduleRouteTargetKind::Upstream => {
                     let Some(target_upstream_id) = rule
@@ -363,7 +374,8 @@ async fn query_relay_models(
         .then_some(crate::core::models::WireApi::AnthropicMessages);
     let (status, value) = if upstream.kind == crate::core::models::UpstreamKind::PeerNode {
         let http = state.http_for_peer_upstream(upstream).await?;
-        let request_headers = super::headers::peer_request_headers(state, headers, client_wire_api)?;
+        let request_headers =
+            super::headers::peer_request_headers(state, headers, client_wire_api)?;
         let response = http
             .send("GET", &target_url, request_headers, Vec::new())
             .await?;

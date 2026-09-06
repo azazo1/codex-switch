@@ -7,9 +7,9 @@ use crate::app::platform::tray_title::TrayTitleView;
 use anyhow::Context;
 use eframe::egui;
 #[cfg(target_os = "macos")]
-use objc2::rc::Retained;
-#[cfg(target_os = "macos")]
 use objc2::MainThreadMarker;
+#[cfg(target_os = "macos")]
+use objc2::rc::Retained;
 use std::str::FromStr;
 use std::sync::Arc;
 #[cfg(target_os = "windows")]
@@ -43,7 +43,7 @@ pub enum ConcurrentUnit {
     Yuan,
     Usd,
     #[default]
-    Unknown
+    Unknown,
 }
 
 impl TrayBadgeMetric {
@@ -66,7 +66,7 @@ impl TrayBadgeMetric {
             Self::TotalCps => "total_cps",
             Self::TodayRequests => "today_requests",
             Self::KeepaliveSessions => "keepalive_sessions",
-            Self::ActiveUpstreamBalance => "active_upstream_balance"
+            Self::ActiveUpstreamBalance => "active_upstream_balance",
         }
     }
 
@@ -78,10 +78,9 @@ impl TrayBadgeMetric {
             Self::TotalCps => "总字符速率",
             Self::TodayRequests => "今日请求数",
             Self::KeepaliveSessions => "缓存保持会话数",
-            Self::ActiveUpstreamBalance => "活跃上游余额"
+            Self::ActiveUpstreamBalance => "活跃上游余额",
         }
     }
-
 }
 
 impl std::fmt::Display for TrayBadgeMetric {
@@ -193,7 +192,7 @@ impl TrayStats {
             total_cps: 0.0,
             today_requests,
             keepalive_sessions,
-            current_balance: None
+            current_balance: None,
         };
         for item in snapshots.iter().filter(|item| item.finished_at.is_none()) {
             stats.active_connections += 1;
@@ -224,15 +223,16 @@ impl TrayStats {
             TrayBadgeMetric::KeepaliveSessions => {
                 Some(format_badge_count(self.keepalive_sessions as u64))
             }
-            TrayBadgeMetric::ActiveUpstreamBalance => {
-                self.current_balance.map(|(val, _)| {
+            TrayBadgeMetric::ActiveUpstreamBalance => self
+                .current_balance
+                .map(|(val, _)| {
                     if val < 1.0 {
                         format!("{:.2}", val)
                     } else {
                         format!("{:.1}", val)
                     }
-                }).or_else(|| Some("-".to_string()))
-            }
+                })
+                .or_else(|| Some("-".to_string())),
         }
     }
 }
@@ -344,8 +344,7 @@ impl TrayController {
 
         #[cfg(target_os = "macos")]
         let tray_title_view = {
-            let mtm =
-                MainThreadMarker::new().expect("tray initialization must run on main thread");
+            let mtm = MainThreadMarker::new().expect("tray initialization must run on main thread");
             tray_icon
                 .ns_status_item()
                 .map(|status_item| tray_title::install(&status_item, mtm))
@@ -626,7 +625,10 @@ fn metric_unit(stats: &TrayStats, metric: TrayBadgeMetric) -> &'static str {
         TrayBadgeMetric::TotalCps => "CPS",
         TrayBadgeMetric::TodayRequests => "请求",
         TrayBadgeMetric::KeepaliveSessions => "会话",
-        TrayBadgeMetric::ActiveUpstreamBalance => stats.current_balance.map_or(Default::default(), |x| x.1).to_str(),
+        TrayBadgeMetric::ActiveUpstreamBalance => stats
+            .current_balance
+            .map_or(Default::default(), |x| x.1)
+            .to_str(),
         TrayBadgeMetric::None => "",
     }
 }
@@ -774,24 +776,25 @@ mod tests {
             current_balance: None,
         };
 
-        assert_eq!(format_title(&stats, TrayBadgeMetric::None, TrayBadgeMetric::None), None);
         assert_eq!(
-            format_title(&stats, TrayBadgeMetric::Connections, TrayBadgeMetric::None)
-                .as_deref(),
-            Some("3 连接")
+            format_title(&stats, TrayBadgeMetric::None, TrayBadgeMetric::None),
+            None
         );
         assert_eq!(
-            format_title(&stats, TrayBadgeMetric::None, TrayBadgeMetric::KeepaliveSessions)
-                .as_deref(),
-            Some("5 会话")
+            format_title(&stats, TrayBadgeMetric::Connections, TrayBadgeMetric::None).as_deref(),
+            Some("3 连接")
         );
         assert_eq!(
             format_title(
                 &stats,
-                TrayBadgeMetric::TotalTps,
-                TrayBadgeMetric::TotalCps
+                TrayBadgeMetric::None,
+                TrayBadgeMetric::KeepaliveSessions
             )
             .as_deref(),
+            Some("5 会话")
+        );
+        assert_eq!(
+            format_title(&stats, TrayBadgeMetric::TotalTps, TrayBadgeMetric::TotalCps).as_deref(),
             Some("12 TPS\n46 CPS")
         );
     }

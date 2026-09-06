@@ -40,9 +40,7 @@ impl LiveOutputSettings {
             max_scroll_chars_per_second: self
                 .max_scroll_chars_per_second
                 .clamp(MIN_SCROLL_CHARS_PER_SECOND, MAX_SCROLL_CHARS_PER_SECOND),
-            completed_hold_seconds: self
-                .completed_hold_seconds
-                .min(MAX_COMPLETED_HOLD_SECONDS),
+            completed_hold_seconds: self.completed_hold_seconds.min(MAX_COMPLETED_HOLD_SECONDS),
         }
     }
 }

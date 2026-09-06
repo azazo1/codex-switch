@@ -234,10 +234,7 @@ impl CodexSwitchApp {
                     .suffix(" MB"),
             );
             ui.label("轮转文件数");
-            ui.add(
-                egui::DragValue::new(&mut self.log_max_files)
-                    .range(1..=1000),
-            );
+            ui.add(egui::DragValue::new(&mut self.log_max_files).range(1..=1000));
             if ui.button("应用轮转设置").clicked() {
                 self.apply_log_rotation_settings();
             }

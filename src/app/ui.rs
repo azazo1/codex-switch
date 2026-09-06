@@ -10,8 +10,8 @@ use crate::core::models::{
     ScheduleGroupChild, ScheduleGroupMember, ScheduleRouteRule, TemporaryAccessKey, Upstream,
     UpstreamBalanceAlertSettings, UpstreamCacheKeepaliveSettings, WireApi,
 };
-use crate::peer::discovery::DiscoveredPeer;
 use crate::live::{LiveOutputSettings, LiveRequestSnapshot};
+use crate::peer::discovery::DiscoveredPeer;
 use crate::pricing;
 use crate::proxy::{self, ServerHandle};
 use crate::quota as quota_api;
@@ -55,6 +55,7 @@ mod dashboard;
 mod data;
 mod logs;
 mod oauth;
+mod peers;
 mod quota;
 mod scheduler;
 mod temp_keys;
@@ -62,7 +63,6 @@ mod token_amount;
 mod tokens;
 mod upstream_editor;
 mod upstreams;
-mod peers;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -869,11 +869,15 @@ impl CodexSwitchApp {
             self.server.is_some(),
         );
 
-        let active_upstream_id = self.live_connections
+        let active_upstream_id = self
+            .live_connections
             .iter()
             .rfind(|item| item.finished_at.is_none())
             .and_then(|item| {
-                self.upstreams.iter().find(|u| Some(&u.name) == item.upstream_name.as_ref()).map(|u| u.id.clone())
+                self.upstreams
+                    .iter()
+                    .find(|u| Some(&u.name) == item.upstream_name.as_ref())
+                    .map(|u| u.id.clone())
             })
             .or_else(|| self.logs.first().and_then(|log| log.upstream_id.clone()));
 
@@ -883,7 +887,10 @@ impl CodexSwitchApp {
                 .find(|(uid, _)| uid == &id)
                 .and_then(|(_, snap)| snap.as_ref())
                 .filter(|snap| snap.is_valid)
-                .and_then(|snap| snap.remaining.map(|rem| (rem, snap.unit.clone().unwrap_or_default())))
+                .and_then(|snap| {
+                    snap.remaining
+                        .map(|rem| (rem, snap.unit.clone().unwrap_or_default()))
+                })
         });
 
         stats.current_balance = current_balance.map(|x| (x.0, x.1.parse().unwrap()));

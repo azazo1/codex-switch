@@ -108,7 +108,9 @@ async fn serve_peer_connection(
         let mut app = app.clone();
         if let Some(identity) = peer_identity.clone() {
             request.extensions_mut().insert(identity.clone());
-            if let Ok(value) = axum::http::HeaderValue::try_from(crate::peer::identity::base64_public_key(&identity.public_key)) {
+            if let Ok(value) = axum::http::HeaderValue::try_from(
+                crate::peer::identity::base64_public_key(&identity.public_key),
+            ) {
                 request.headers_mut().insert(PEER_PUBLIC_KEY_HEADER, value);
             }
             if let Ok(value) = axum::http::HeaderValue::try_from(identity.fingerprint.clone()) {
@@ -211,5 +213,3 @@ pub async fn local_identity_payload(state: &AppState) -> anyhow::Result<PeerIden
         crate::peer::discovery::local_peer_addresses(port),
     ))
 }
-
-

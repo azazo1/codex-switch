@@ -114,7 +114,10 @@ fn converts_plaintext_reasoning_content_to_chat_reasoning_content() {
 
     assert_eq!(body["messages"][0]["role"], "assistant");
     assert_eq!(body["messages"][0]["content"], "");
-    assert_eq!(body["messages"][0]["reasoning_content"], "think step by step");
+    assert_eq!(
+        body["messages"][0]["reasoning_content"],
+        "think step by step"
+    );
     assert_eq!(body["messages"][1]["role"], "user");
 }
 
@@ -143,9 +146,10 @@ fn converts_streaming_tool_call_to_responses_events() {
     let mut converter = ChatSseConverter::new(context);
     let mut events = String::from_utf8(converter.initial_events()).unwrap();
     events.push_str(
-        &String::from_utf8(converter.convert_block(
-            r#"data: {"choices":[{"delta":{"reasoning_content":"先检查"}}]}"#,
-        ))
+        &String::from_utf8(
+            converter
+                .convert_block(r#"data: {"choices":[{"delta":{"reasoning_content":"先检查"}}]}"#),
+        )
         .unwrap(),
     );
     events.push_str(
@@ -200,7 +204,9 @@ fn streams_chat_reasoning_content_as_responses_summary_deltas() {
     }
 
     let reasoning_added = events.find("\"type\":\"reasoning\"").unwrap();
-    let first_delta = events.find("response.reasoning_summary_text.delta").unwrap();
+    let first_delta = events
+        .find("response.reasoning_summary_text.delta")
+        .unwrap();
     let second_delta = events.find("\"delta\":\" answer is 2.\"").unwrap();
     let text_delta = events.find("response.output_text.delta").unwrap();
     let reasoning_done = events.find("response.reasoning_summary_text.done").unwrap();
@@ -251,10 +257,7 @@ fn converts_additional_tools_without_creating_empty_messages() {
     let description = exec["function"]["description"].as_str().unwrap();
     assert!(description.contains("\"format\""));
     assert!(description.contains("\"syntax\":\"lark\""));
-    assert_eq!(
-        exec["function"]["parameters"]["required"][0],
-        "input"
-    );
+    assert_eq!(exec["function"]["parameters"]["required"][0], "input");
     assert_eq!(
         body["tools"]
             .as_array()
@@ -408,10 +411,7 @@ fn restores_custom_namespace_and_tool_search_non_streaming_calls() {
 
     assert_eq!(response["output"][0]["type"], "custom_tool_call");
     assert_eq!(response["output"][0]["name"], "exec");
-    assert_eq!(
-        response["output"][0]["input"],
-        "await tools.apply_patch()"
-    );
+    assert_eq!(response["output"][0]["input"], "await tools.apply_patch()");
     assert_eq!(response["output"][1]["type"], "function_call");
     assert_eq!(response["output"][1]["namespace"], "collaboration");
     assert_eq!(response["output"][1]["name"], "spawn_agent");
@@ -500,8 +500,7 @@ fn restores_fragmented_custom_and_namespace_stream_calls() {
         r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"agent","arguments":"{\"task_name\":\"check\",\"message\":\"inspect\"}"}}]},"finish_reason":"tool_calls"}]}"#,
         "data: [DONE]",
     ] {
-        namespace_events
-            .push_str(&String::from_utf8(converter.convert_block(block)).unwrap());
+        namespace_events.push_str(&String::from_utf8(converter.convert_block(block)).unwrap());
     }
 
     assert!(namespace_events.contains("\"namespace\":\"collaboration\""));

@@ -13,7 +13,9 @@ use x509_parser::prelude::FromDer;
 use super::identity::NodeIdentity;
 use super::protocol::PeerTlsIdentity;
 
-pub fn certificate_for_identity(identity: &NodeIdentity) -> anyhow::Result<(CertificateDer<'static>, PrivateKeyDer<'static>)> {
+pub fn certificate_for_identity(
+    identity: &NodeIdentity,
+) -> anyhow::Result<(CertificateDer<'static>, PrivateKeyDer<'static>)> {
     let pem = identity.private_key_pem()?;
     let key_pair = KeyPair::from_pem(&pem).context("failed to load node key into certificate")?;
     if key_pair.algorithm() != &PKCS_ED25519 {
@@ -40,13 +42,9 @@ pub fn certificate_for_identity(identity: &NodeIdentity) -> anyhow::Result<(Cert
 }
 
 pub fn public_key_from_cert(cert: &CertificateDer<'_>) -> anyhow::Result<[u8; 32]> {
-    let (_, parsed) =
-        x509_parser::certificate::X509Certificate::from_der(cert.as_ref()).context("invalid peer certificate")?;
-    let bytes = parsed
-        .public_key()
-        .subject_public_key
-        .data
-        .to_vec();
+    let (_, parsed) = x509_parser::certificate::X509Certificate::from_der(cert.as_ref())
+        .context("invalid peer certificate")?;
+    let bytes = parsed.public_key().subject_public_key.data.to_vec();
     let bytes: [u8; 32] = bytes
         .try_into()
         .map_err(|_| anyhow::anyhow!("peer certificate public key must be 32 bytes"))?;
@@ -95,7 +93,9 @@ fn client_config(
     let mut config = ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()?
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(PeerServerCertVerifier { expected_public_key }))
+        .with_custom_certificate_verifier(Arc::new(PeerServerCertVerifier {
+            expected_public_key,
+        }))
         .with_client_auth_cert(vec![cert], key)?;
     config.alpn_protocols = vec![b"http/1.1".to_vec()];
     Ok(config)

@@ -79,10 +79,7 @@ where
     batch
 }
 
-async fn import_auth_file(
-    service: &OAuthAccountService,
-    source: PathBuf,
-) -> OAuthFileImportItem {
+async fn import_auth_file(service: &OAuthAccountService, source: PathBuf) -> OAuthFileImportItem {
     let result = async {
         let bytes = tokio::fs::read(&source).await?;
         let input = parse_auth_json(&bytes)?;
@@ -216,7 +213,11 @@ mod tests {
         )
         .unwrap();
         let after = chrono::Utc::now().timestamp();
-        assert!(input.token_expires_at.is_some_and(|expiry| expiry >= before && expiry <= after));
+        assert!(
+            input
+                .token_expires_at
+                .is_some_and(|expiry| expiry >= before && expiry <= after)
+        );
     }
 
     #[test]
@@ -255,18 +256,18 @@ mod tests {
                 "account_id": "batch-account"
             }
         });
-        tokio::fs::write(&valid_path, valid.to_string()).await.unwrap();
+        tokio::fs::write(&valid_path, valid.to_string())
+            .await
+            .unwrap();
         tokio::fs::write(&invalid_path, "not-json").await.unwrap();
         let store = crate::storage::Store::open(dir.join("test.sqlite"))
             .await
             .unwrap();
         let service = OAuthAccountService::new(store);
         let mut progress = Vec::new();
-        let result = import_auth_files(
-            &service,
-            vec![valid_path, invalid_path],
-            |item| progress.push((item.processed, item.total)),
-        )
+        let result = import_auth_files(&service, vec![valid_path, invalid_path], |item| {
+            progress.push((item.processed, item.total))
+        })
         .await;
         assert_eq!(result.created, 1);
         assert_eq!(result.updated, 0);

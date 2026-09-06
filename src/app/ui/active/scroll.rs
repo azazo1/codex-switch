@@ -20,13 +20,12 @@ impl LiveTailScrollState {
         let available_chars = item
             .tail_end_char_index
             .saturating_sub(item.tail_start_char_index);
-        let visible_end_char_index = if !settings.scroll_limit_enabled
-            || available_chars <= DEFAULT_WINDOW_CHARS
-        {
-            item.tail_end_char_index as f64
-        } else {
-            (item.tail_start_char_index + DEFAULT_WINDOW_CHARS) as f64
-        };
+        let visible_end_char_index =
+            if !settings.scroll_limit_enabled || available_chars <= DEFAULT_WINDOW_CHARS {
+                item.tail_end_char_index as f64
+            } else {
+                (item.tail_start_char_index + DEFAULT_WINDOW_CHARS) as f64
+            };
         let reached_end_at = (item.finished_at.is_some()
             && visible_end_char_index >= item.tail_end_char_index as f64)
             .then_some(now);

@@ -681,21 +681,11 @@ mod tests {
         let old_ts = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
         let new_ts = Utc.with_ymd_and_hms(2024, 1, 3, 12, 0, 0).unwrap();
         store
-            .insert_request_log(test_log_at(
-                old_ts,
-                Some(&upstream.id),
-                Some("relay-a"),
-                5,
-            ))
+            .insert_request_log(test_log_at(old_ts, Some(&upstream.id), Some("relay-a"), 5))
             .await
             .unwrap();
         store
-            .insert_request_log(test_log_at(
-                new_ts,
-                Some(&upstream.id),
-                Some("relay-a"),
-                7,
-            ))
+            .insert_request_log(test_log_at(new_ts, Some(&upstream.id), Some("relay-a"), 7))
             .await
             .unwrap();
 

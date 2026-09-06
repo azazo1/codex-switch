@@ -1,3 +1,4 @@
+use super::namespace::NamespaceToolMap;
 use super::{
     AnthropicToResponsesSseConverter, ChatResponseContext, ChatSseConverter,
     ResponsesToAnthropicSseConverter, ResponsesToChatSseConverter,
@@ -6,7 +7,6 @@ use super::{
     responses_response_to_chat_json, responses_to_anthropic_request_json,
     responses_to_anthropic_response_json, responses_to_chat_json,
 };
-use super::namespace::NamespaceToolMap;
 use crate::core::models::WireApi;
 use serde_json::Value;
 
@@ -37,8 +37,9 @@ impl PreparedProtocolRequest {
             } else {
                 body.to_vec()
             };
-            let namespace_tools =
-                NamespaceToolMap::from_request(&serde_json::from_slice(&body).unwrap_or(Value::Null));
+            let namespace_tools = NamespaceToolMap::from_request(
+                &serde_json::from_slice(&body).unwrap_or(Value::Null),
+            );
             return Ok(Self {
                 body,
                 sse_bridge: ProtocolSseBridge::passthrough(
@@ -103,14 +104,13 @@ impl PreparedProtocolRequest {
             WireApi::Responses => value.clone(),
             WireApi::ChatCompletions => chat_to_responses_json(
                 value,
-                self.chat_context
-                    .as_ref()
-                    .ok_or_else(|| ProtocolConversionError("missing Chat response context".to_string()))?,
+                self.chat_context.as_ref().ok_or_else(|| {
+                    ProtocolConversionError("missing Chat response context".to_string())
+                })?,
             ),
-            WireApi::AnthropicMessages => anthropic_to_responses_response_json(
-                value,
-                self.chat_context.as_ref(),
-            ),
+            WireApi::AnthropicMessages => {
+                anthropic_to_responses_response_json(value, self.chat_context.as_ref())
+            }
         };
         Ok(match self.client_api {
             WireApi::Responses => canonical,
@@ -271,12 +271,10 @@ impl ProtocolSseBridge {
                 output.extend_from_slice(b"\n\n");
                 output
             }
-            ClientEncoder::Chat(converter) => converter
-                .push(&String::from_utf8_lossy(block))
-                .into_bytes(),
-            ClientEncoder::Anthropic(converter) => {
-                converter.push(&String::from_utf8_lossy(block))
+            ClientEncoder::Chat(converter) => {
+                converter.push(&String::from_utf8_lossy(block)).into_bytes()
             }
+            ClientEncoder::Anthropic(converter) => converter.push(&String::from_utf8_lossy(block)),
         };
         if let Some(model) = &self.response_model {
             output = rewrite_sse_model(&output, model);
@@ -294,7 +292,8 @@ fn rewrite_sse_model(block: &[u8], model: &str) -> Vec<u8> {
             let payload = data.trim();
             if !payload.is_empty()
                 && payload != "[DONE]"
-                && let Ok(json) = crate::proxy::transform::rewrite_response_model(payload.as_bytes(), model)
+                && let Ok(json) =
+                    crate::proxy::transform::rewrite_response_model(payload.as_bytes(), model)
             {
                 let json = String::from_utf8_lossy(&json);
                 rewritten.extend_from_slice(format!("data: {json}\n").as_bytes());
@@ -310,9 +309,9 @@ fn rewrite_sse_model(block: &[u8], model: &str) -> Vec<u8> {
 fn decoder(api: WireApi, chat_context: Option<ChatResponseContext>) -> UpstreamDecoder {
     match api {
         WireApi::Responses => UpstreamDecoder::Responses,
-        WireApi::ChatCompletions => UpstreamDecoder::Chat(
-            ChatSseConverter::new(chat_context.unwrap_or_default()),
-        ),
+        WireApi::ChatCompletions => {
+            UpstreamDecoder::Chat(ChatSseConverter::new(chat_context.unwrap_or_default()))
+        }
         WireApi::AnthropicMessages => {
             UpstreamDecoder::Anthropic(AnthropicToResponsesSseConverter::new(chat_context))
         }
@@ -331,9 +330,7 @@ fn encoder(api: WireApi, model: Option<String>) -> ClientEncoder {
 
 fn find_sse_separator(buffer: &[u8]) -> Option<(usize, usize)> {
     let lf = buffer.windows(2).position(|window| window == b"\n\n");
-    let crlf = buffer
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n");
+    let crlf = buffer.windows(4).position(|window| window == b"\r\n\r\n");
     match (lf, crlf) {
         (Some(left), Some(right)) => Some(if left <= right { (left, 2) } else { (right, 4) }),
         (Some(index), None) => Some((index, 2)),
@@ -384,7 +381,10 @@ mod tests {
         .unwrap();
         let upstream_request: Value = serde_json::from_slice(&prepared.body).unwrap();
 
-        assert_eq!(upstream_request.pointer("/tools/0/name"), Some(&json!("exec")));
+        assert_eq!(
+            upstream_request.pointer("/tools/0/name"),
+            Some(&json!("exec"))
+        );
         assert_eq!(
             upstream_request.pointer("/tools/1/name"),
             Some(&json!("collaboration__spawn_agent"))
@@ -403,18 +403,27 @@ mod tests {
         });
         let converted = prepared.convert_json_response(&response).unwrap();
 
-        assert_eq!(converted.pointer("/output/0/type"), Some(&json!("custom_tool_call")));
+        assert_eq!(
+            converted.pointer("/output/0/type"),
+            Some(&json!("custom_tool_call"))
+        );
         assert_eq!(converted.pointer("/output/0/name"), Some(&json!("exec")));
         assert_eq!(
             converted.pointer("/output/0/input"),
             Some(&json!("await tools.apply_patch()"))
         );
-        assert_eq!(converted.pointer("/output/1/type"), Some(&json!("function_call")));
+        assert_eq!(
+            converted.pointer("/output/1/type"),
+            Some(&json!("function_call"))
+        );
         assert_eq!(
             converted.pointer("/output/1/namespace"),
             Some(&json!("collaboration"))
         );
-        assert_eq!(converted.pointer("/output/1/name"), Some(&json!("spawn_agent")));
+        assert_eq!(
+            converted.pointer("/output/1/name"),
+            Some(&json!("spawn_agent"))
+        );
 
         let blocks = [
             "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_2\",\"model\":\"claude-test\",\"usage\":{\"input_tokens\":1}}}",

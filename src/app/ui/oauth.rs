@@ -5,11 +5,11 @@ use std::time::{Duration, Instant};
 
 mod state;
 
-pub(super) use state::{OAuthPollTaskResult, OAuthUiState};
 use state::{
     OAuthImportBatchUi, OAuthLoginTask, OAuthLoginTaskState, import_source_label,
     oauth_task_status, oauth_task_title,
 };
+pub(super) use state::{OAuthPollTaskResult, OAuthUiState};
 
 impl CodexSwitchApp {
     pub(super) fn oauth_accounts_ui(&mut self, ui: &mut egui::Ui) {
@@ -182,7 +182,9 @@ impl CodexSwitchApp {
             .iter()
             .filter(|task| {
                 matches!(task.state, OAuthLoginTaskState::Waiting)
-                    && task.next_poll_at.is_some_and(|next_poll_at| now >= next_poll_at)
+                    && task
+                        .next_poll_at
+                        .is_some_and(|next_poll_at| now >= next_poll_at)
             })
             .map(|task| task.id.clone())
             .collect::<Vec<_>>();
@@ -196,7 +198,12 @@ impl CodexSwitchApp {
         task_id: String,
         result: anyhow::Result<oauth_api::DeviceFlow>,
     ) {
-        let Some(task) = self.oauth_ui.tasks.iter_mut().find(|task| task.id == task_id) else {
+        let Some(task) = self
+            .oauth_ui
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == task_id)
+        else {
             return;
         };
         match result {
@@ -222,7 +229,12 @@ impl CodexSwitchApp {
         task_id: String,
         result: anyhow::Result<OAuthPollTaskResult>,
     ) {
-        let Some(task) = self.oauth_ui.tasks.iter_mut().find(|task| task.id == task_id) else {
+        let Some(task) = self
+            .oauth_ui
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == task_id)
+        else {
             return;
         };
         let interval = task.flow.as_ref().map_or(5, |flow| flow.interval.max(1));
@@ -331,7 +343,12 @@ impl CodexSwitchApp {
     }
 
     fn restart_oauth_task(&mut self, task_id: &str) {
-        let Some(task) = self.oauth_ui.tasks.iter_mut().find(|task| task.id == task_id) else {
+        let Some(task) = self
+            .oauth_ui
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == task_id)
+        else {
             return;
         };
         task.state = OAuthLoginTaskState::Starting;
@@ -352,7 +369,12 @@ impl CodexSwitchApp {
     }
 
     fn poll_oauth_task(&mut self, task_id: &str) {
-        let Some(task) = self.oauth_ui.tasks.iter_mut().find(|task| task.id == task_id) else {
+        let Some(task) = self
+            .oauth_ui
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == task_id)
+        else {
             return;
         };
         if !matches!(task.state, OAuthLoginTaskState::Waiting) {

@@ -81,7 +81,10 @@ pub fn prefer_reachable_peer_addresses_cached(
     {
         return previous.to_vec();
     }
-    if let Some(index) = ranked.iter().position(|address| probe_peer_address(address)) {
+    if let Some(index) = ranked
+        .iter()
+        .position(|address| probe_peer_address(address))
+    {
         let mut ordered = ranked;
         let chosen = ordered.remove(index);
         ordered.insert(0, chosen);
@@ -162,14 +165,18 @@ fn local_nets() -> Vec<LocalNet> {
         .into_iter()
         .filter(|iface| !iface.is_loopback())
         .filter_map(|iface| match iface.addr {
-            if_addrs::IfAddr::V4(addr) if is_usable_peer_ip(IpAddr::V4(addr.ip)) => Some(LocalNet {
-                network: IpAddr::V4(addr.ip),
-                mask: IpAddr::V4(addr.netmask),
-            }),
-            if_addrs::IfAddr::V6(addr) if is_usable_peer_ip(IpAddr::V6(addr.ip)) => Some(LocalNet {
-                network: IpAddr::V6(addr.ip),
-                mask: IpAddr::V6(addr.netmask),
-            }),
+            if_addrs::IfAddr::V4(addr) if is_usable_peer_ip(IpAddr::V4(addr.ip)) => {
+                Some(LocalNet {
+                    network: IpAddr::V4(addr.ip),
+                    mask: IpAddr::V4(addr.netmask),
+                })
+            }
+            if_addrs::IfAddr::V6(addr) if is_usable_peer_ip(IpAddr::V6(addr.ip)) => {
+                Some(LocalNet {
+                    network: IpAddr::V6(addr.ip),
+                    mask: IpAddr::V6(addr.netmask),
+                })
+            }
             _ => None,
         })
         .collect()

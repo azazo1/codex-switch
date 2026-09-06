@@ -19,10 +19,7 @@ pub(super) fn parse_token_amount(input: &str) -> Result<i64, String> {
     Ok((parsed * multiplier).round() as i64)
 }
 
-pub(super) fn parse_optional_token_amount(
-    label: &str,
-    value: &str,
-) -> Result<Option<i64>, String> {
+pub(super) fn parse_optional_token_amount(label: &str, value: &str) -> Result<Option<i64>, String> {
     let value = value.trim();
     if value.is_empty() {
         return Ok(None);

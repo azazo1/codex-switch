@@ -67,7 +67,7 @@ impl CodexSwitchApp {
                             egui::TextEdit::singleline(&mut self.temp_keys_ui.request_limit_input)
                                 .desired_width(100.0),
                         )
-                            .on_hover_text("成功请求上限");
+                        .on_hover_text("成功请求上限");
                     }
                 });
                 ui.horizontal(|ui| {
@@ -78,7 +78,7 @@ impl CodexSwitchApp {
                             egui::TextEdit::singleline(&mut self.temp_keys_ui.token_limit_input)
                                 .desired_width(100.0),
                         )
-                            .on_hover_text("总 token 上限");
+                        .on_hover_text("总 token 上限");
                     }
                 });
                 ui.horizontal(|ui| {
@@ -90,7 +90,7 @@ impl CodexSwitchApp {
                                 .desired_width(180.0)
                                 .hint_text("如 1d2h30m10s"),
                         )
-                            .on_hover_text("支持 d/h/m/s, 如 1d2h30m 或 1天2小时30分钟");
+                        .on_hover_text("支持 d/h/m/s, 如 1d2h30m 或 1天2小时30分钟");
                     }
                 });
                 if ui.button("创建").clicked() {
@@ -129,11 +129,7 @@ impl CodexSwitchApp {
                                 {
                                     toggle_id = Some((key.id.clone(), enabled));
                                 }
-                                ui.label(if key.name.is_empty() {
-                                    "-"
-                                } else {
-                                    &key.name
-                                });
+                                ui.label(if key.name.is_empty() { "-" } else { &key.name });
                                 ui.horizontal(|ui| {
                                     if ui
                                         .button(&key.key_value)
@@ -141,8 +137,7 @@ impl CodexSwitchApp {
                                         .clicked()
                                     {
                                         ui.ctx().copy_text(key.key_value.clone());
-                                        self.temp_keys_ui.copied_key_id =
-                                            Some(key.id.clone());
+                                        self.temp_keys_ui.copied_key_id = Some(key.id.clone());
                                         self.temp_keys_ui.copied_at = Some(Instant::now());
                                     }
                                     if self.temp_keys_ui.copied_key_id.as_deref()
@@ -164,11 +159,7 @@ impl CodexSwitchApp {
                                     );
                                     if let Some(limit) = key.token_limit {
                                         ui.label("/");
-                                        tokens::token_number(
-                                            ui,
-                                            &mut token_display_mode,
-                                            limit,
-                                        );
+                                        tokens::token_number(ui, &mut token_display_mode, limit);
                                     }
                                 });
                                 ui.label(format_expires_at(key.expires_at));
@@ -247,14 +238,8 @@ impl CodexSwitchApp {
         } else {
             key_value
         };
-        let key = TemporaryAccessKey::new(
-            id,
-            name,
-            key_value,
-            request_limit,
-            token_limit,
-            expires_at,
-        );
+        let key =
+            TemporaryAccessKey::new(id, name, key_value, request_limit, token_limit, expires_at);
         match self
             .runtime
             .block_on(self.state.store.create_temporary_access_key(&key))
@@ -286,9 +271,10 @@ impl CodexSwitchApp {
         if !enabled {
             return Ok(None);
         }
-        let value = input.trim().parse::<i64>().map_err(|_| {
-            format!("{label} 需要填写正整数")
-        })?;
+        let value = input
+            .trim()
+            .parse::<i64>()
+            .map_err(|_| format!("{label} 需要填写正整数"))?;
         if value <= 0 {
             return Err(format!("{label} 必须大于 0"));
         }
@@ -311,10 +297,11 @@ impl CodexSwitchApp {
     }
 
     fn set_temporary_key_enabled(&mut self, id: &str, enabled: bool) {
-        match self
-            .runtime
-            .block_on(self.state.store.set_temporary_access_key_enabled(id, enabled))
-        {
+        match self.runtime.block_on(
+            self.state
+                .store
+                .set_temporary_access_key_enabled(id, enabled),
+        ) {
             Ok(()) => {
                 self.status = if enabled {
                     "临时 Key 已启用".to_string()
@@ -363,7 +350,9 @@ impl CodexSwitchApp {
         else {
             return;
         };
-        let remaining = key.expires_at.map(|expires_at| (expires_at - Utc::now().timestamp()).max(0));
+        let remaining = key
+            .expires_at
+            .map(|expires_at| (expires_at - Utc::now().timestamp()).max(0));
         self.temp_keys_ui.editor = Some(TempKeyEditorState {
             id: key.id,
             key_value: key.key_value,
@@ -379,9 +368,7 @@ impl CodexSwitchApp {
                 .map(token_amount::format_token_input)
                 .unwrap_or_default(),
             limit_time: key.expires_at.is_some(),
-            duration_input: remaining
-                .map(format_duration_seconds)
-                .unwrap_or_default(),
+            duration_input: remaining.map(format_duration_seconds).unwrap_or_default(),
         });
     }
 
@@ -516,8 +503,7 @@ impl CodexSwitchApp {
                 request_limit,
                 token_limit,
                 expires_at,
-            ))
-        {
+            )) {
             Ok(()) => {
                 self.status = "临时 Key 已更新".to_string();
                 self.temp_keys_ui.editor = None;
@@ -541,7 +527,10 @@ fn temp_key_status(key: &TemporaryAccessKey) -> String {
         .is_some_and(|limit| key.requests_used >= limit)
     {
         "次数已用尽".to_string()
-    } else if key.token_limit.is_some_and(|limit| key.tokens_used >= limit) {
+    } else if key
+        .token_limit
+        .is_some_and(|limit| key.tokens_used >= limit)
+    {
         "用量已用尽".to_string()
     } else {
         "正常".to_string()
@@ -690,7 +679,10 @@ mod tests {
     fn parses_combined_duration_suffixes() {
         assert_eq!(parse_duration_seconds("1d2h30m10s").unwrap(), 95_410);
         assert_eq!(parse_duration_seconds("2D 1H 5M 3S").unwrap(), 176_703);
-        assert_eq!(parse_duration_seconds("1天2小时30分钟10秒").unwrap(), 95_410);
+        assert_eq!(
+            parse_duration_seconds("1天2小时30分钟10秒").unwrap(),
+            95_410
+        );
     }
 
     #[test]

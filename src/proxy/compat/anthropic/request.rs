@@ -25,11 +25,19 @@ pub(crate) fn anthropic_to_responses_request_json(body: &[u8]) -> anyhow::Result
     result.insert("input".to_string(), Value::Array(input));
     result.insert(
         "stream".to_string(),
-        json!(object.get("stream").and_then(Value::as_bool).unwrap_or(false)),
+        json!(
+            object
+                .get("stream")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        ),
     );
     result.insert("store".to_string(), Value::Bool(false));
     result.insert("parallel_tool_calls".to_string(), Value::Bool(true));
-    result.insert("include".to_string(), json!(["reasoning.encrypted_content"]));
+    result.insert(
+        "include".to_string(),
+        json!(["reasoning.encrypted_content"]),
+    );
     copy_field(object, &mut result, "max_tokens", "max_output_tokens");
     copy_field(object, &mut result, "temperature", "temperature");
     copy_field(object, &mut result, "top_p", "top_p");
@@ -60,8 +68,14 @@ pub(crate) fn anthropic_to_responses_request_json(body: &[u8]) -> anyhow::Result
             "tool_choice".to_string(),
             anthropic_tool_choice_to_responses(choice),
         );
-        if let Some(disable_parallel) = choice.get("disable_parallel_tool_use").and_then(Value::as_bool) {
-            result.insert("parallel_tool_calls".to_string(), Value::Bool(!disable_parallel));
+        if let Some(disable_parallel) = choice
+            .get("disable_parallel_tool_use")
+            .and_then(Value::as_bool)
+        {
+            result.insert(
+                "parallel_tool_calls".to_string(),
+                Value::Bool(!disable_parallel),
+            );
         }
     }
     let effort = value
@@ -70,8 +84,7 @@ pub(crate) fn anthropic_to_responses_request_json(body: &[u8]) -> anyhow::Result
         .map(|effort| if effort == "max" { "xhigh" } else { effort })
         .or_else(|| {
             object.get("thinking").and_then(|thinking| {
-                (thinking.get("type").and_then(Value::as_str) == Some("enabled"))
-                    .then_some("high")
+                (thinking.get("type").and_then(Value::as_str) == Some("enabled")).then_some("high")
             })
         });
     if let Some(effort) = effort {
@@ -125,7 +138,12 @@ pub(crate) fn responses_to_anthropic_request_json(body: &[u8]) -> anyhow::Result
     );
     result.insert(
         "stream".to_string(),
-        json!(object.get("stream").and_then(Value::as_bool).unwrap_or(false)),
+        json!(
+            object
+                .get("stream")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        ),
     );
     if !system.is_empty() {
         result.insert("system".to_string(), Value::Array(system));
@@ -197,22 +215,33 @@ fn anthropic_system_parts(value: &Value) -> anyhow::Result<Vec<Value>> {
 }
 
 fn append_anthropic_message(message: &Value, input: &mut Vec<Value>) -> anyhow::Result<()> {
-    let role = message.get("role").and_then(Value::as_str).unwrap_or("user");
+    let role = message
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or("user");
     let content = message.get("content").unwrap_or(&Value::Null);
     if let Value::String(text) = content {
-        let kind = if role == "assistant" { "output_text" } else { "input_text" };
+        let kind = if role == "assistant" {
+            "output_text"
+        } else {
+            "input_text"
+        };
         input.push(json!({"type":"message","role":role,"content":[{"type":kind,"text":text}]}));
         return Ok(());
     }
-    let blocks = content
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("anthropic message content must be a string or block array"))?;
+    let blocks = content.as_array().ok_or_else(|| {
+        anyhow::anyhow!("anthropic message content must be a string or block array")
+    })?;
     let mut message_parts = Vec::new();
     for block in blocks {
         let kind = block.get("type").and_then(Value::as_str).unwrap_or("text");
         match (role, kind) {
             (_, "text") => {
-                let part_type = if role == "assistant" { "output_text" } else { "input_text" };
+                let part_type = if role == "assistant" {
+                    "output_text"
+                } else {
+                    "input_text"
+                };
                 message_parts.push(json!({
                     "type":part_type,
                     "text":block.get("text").cloned().unwrap_or_else(|| json!(""))
@@ -245,7 +274,9 @@ fn append_anthropic_message(message: &Value, input: &mut Vec<Value>) -> anyhow::
             ("assistant", "thinking") => {
                 flush_message_parts(role, &mut message_parts, input);
                 if block.get("signature").is_some() {
-                    tracing::debug!("dropping Anthropic thinking signature during protocol conversion");
+                    tracing::debug!(
+                        "dropping Anthropic thinking signature during protocol conversion"
+                    );
                 }
                 if let Some(thinking) = block.get("thinking").and_then(Value::as_str) {
                     input.push(json!({
@@ -284,7 +315,10 @@ fn anthropic_image_to_responses(block: &Value) -> anyhow::Result<Value> {
                 .get("media_type")
                 .and_then(Value::as_str)
                 .unwrap_or("image/png");
-            let data = source.get("data").and_then(Value::as_str).unwrap_or_default();
+            let data = source
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             Ok(json!({"type":"input_image","image_url":format!("data:{media_type};base64,{data}")}))
         }
         Some("url") => Ok(json!({
@@ -378,7 +412,10 @@ fn append_responses_item(
     system: &mut Vec<Value>,
     messages: &mut Vec<Value>,
 ) -> anyhow::Result<()> {
-    let item_type = item.get("type").and_then(Value::as_str).unwrap_or("message");
+    let item_type = item
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("message");
     match item_type {
         "message" => {
             let role = item.get("role").and_then(Value::as_str).unwrap_or("user");
@@ -442,10 +479,7 @@ fn append_responses_item(
     Ok(())
 }
 
-fn responses_content_to_anthropic(
-    content: &Value,
-    role: &str,
-) -> anyhow::Result<Vec<Value>> {
+fn responses_content_to_anthropic(content: &Value, role: &str) -> anyhow::Result<Vec<Value>> {
     match content {
         Value::String(text) => Ok(vec![json!({"type":"text","text":text})]),
         Value::Array(parts) => {
@@ -460,7 +494,9 @@ fn responses_content_to_anthropic(
                         blocks.push(responses_image_to_anthropic(part)?);
                     }
                     "input_file" | "input_audio" | "audio" => {
-                        anyhow::bail!("Responses media content cannot be converted to Anthropic Messages");
+                        anyhow::bail!(
+                            "Responses media content cannot be converted to Anthropic Messages"
+                        );
                     }
                     kind => anyhow::bail!("Responses content block {kind} cannot be converted"),
                 }
@@ -493,7 +529,11 @@ fn responses_image_to_anthropic(part: &Value) -> anyhow::Result<Value> {
 }
 
 fn responses_tool_to_anthropic(tool: &Value) -> anyhow::Result<Value> {
-    match tool.get("type").and_then(Value::as_str).unwrap_or("function") {
+    match tool
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("function")
+    {
         "function" | "custom" => Ok(json!({
             "name":tool.get("name").cloned().unwrap_or_else(|| json!("")),
             "description":tool.get("description").cloned().unwrap_or(Value::Null),
@@ -506,13 +546,19 @@ fn responses_tool_to_anthropic(tool: &Value) -> anyhow::Result<Value> {
             result.remove("parameters");
             Ok(Value::Object(result))
         }
-        kind => anyhow::bail!("Responses server tool {kind} cannot be converted to Anthropic Messages"),
+        kind => {
+            anyhow::bail!("Responses server tool {kind} cannot be converted to Anthropic Messages")
+        }
     }
 }
 
 fn validate_responses_tools(tools: &[Value]) -> anyhow::Result<()> {
     for tool in tools {
-        match tool.get("type").and_then(Value::as_str).unwrap_or("function") {
+        match tool
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("function")
+        {
             "function" | "custom" | "namespace" | "tool_search" | "web_search"
             | "web_search_preview" => {}
             kind => anyhow::bail!(
@@ -657,7 +703,9 @@ fn argument_value(value: Option<&Value>) -> Value {
 
 fn custom_input_value(value: Option<&Value>) -> Value {
     match value {
-        Some(Value::String(text)) => serde_json::from_str(text).unwrap_or_else(|_| json!({"input":text})),
+        Some(Value::String(text)) => {
+            serde_json::from_str(text).unwrap_or_else(|_| json!({"input":text}))
+        }
         Some(value) => value.clone(),
         None => json!({}),
     }
@@ -672,7 +720,11 @@ fn output_string(value: Option<&Value>) -> String {
 }
 
 fn non_empty_output(value: &str) -> String {
-    if value.is_empty() { "(empty)".to_string() } else { value.to_string() }
+    if value.is_empty() {
+        "(empty)".to_string()
+    } else {
+        value.to_string()
+    }
 }
 
 fn normalize_schema(value: Option<&Value>) -> Value {
@@ -681,7 +733,9 @@ fn normalize_schema(value: Option<&Value>) -> Value {
         .cloned()
         .unwrap_or_default();
     schema.insert("type".to_string(), json!("object"));
-    schema.entry("properties".to_string()).or_insert_with(|| json!({}));
+    schema
+        .entry("properties".to_string())
+        .or_insert_with(|| json!({}));
     Value::Object(schema)
 }
 

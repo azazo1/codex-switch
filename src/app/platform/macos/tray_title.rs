@@ -3,7 +3,7 @@ use std::cell::{Cell, RefCell};
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool};
-use objc2::{define_class, msg_send, AnyThread, DeclaredClass, MainThreadMarker};
+use objc2::{AnyThread, DeclaredClass, MainThreadMarker, define_class, msg_send};
 use objc2_app_kit::{
     NSAttributedStringNSStringDrawing, NSAutoresizingMaskOptions, NSColor, NSFont,
     NSFontAttributeName, NSForegroundColorAttributeName, NSImage, NSImageView, NSStatusBarButton,
@@ -81,7 +81,10 @@ impl TrayTitleView {
             Some(image) => NSImageView::imageViewWithImage(&image, mtm),
             None => NSImageView::initWithFrame(
                 mtm.alloc(),
-                NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(ICON_WIDTH, button_height)),
+                NSRect::new(
+                    NSPoint::new(0.0, 0.0),
+                    NSSize::new(ICON_WIDTH, button_height),
+                ),
             ),
         };
         let icon_width = button
@@ -278,7 +281,10 @@ fn render_text_template(text: &str, font: &NSFont) -> Retained<NSImage> {
         )
     };
     let measured = attributed.size();
-    let size = NSSize::new(measured.width.ceil().max(1.0), measured.height.ceil().max(1.0));
+    let size = NSSize::new(
+        measured.width.ceil().max(1.0),
+        measured.height.ceil().max(1.0),
+    );
     let block = RcBlock::new(move |_rect: NSRect| {
         attributed.drawAtPoint(NSPoint::new(0.0, 0.0));
         Bool::YES

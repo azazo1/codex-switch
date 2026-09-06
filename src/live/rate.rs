@@ -84,10 +84,7 @@ fn estimate_output_rate(
     let mut text = String::new();
     let mut chars = 0;
     let mut rate_started_at = None;
-    for sample in samples
-        .iter()
-        .filter(|sample| sample.recorded_at >= cutoff)
-    {
+    for sample in samples.iter().filter(|sample| sample.recorded_at >= cutoff) {
         rate_started_at.get_or_insert(sample.recorded_at);
         text.push_str(&sample.text);
         chars += sample.char_count;

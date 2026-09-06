@@ -1,5 +1,5 @@
-use crate::core::models::WireApi;
 pub(crate) use crate::core::model_capabilities::model_multimodal_from_item;
+use crate::core::models::WireApi;
 use base64::Engine;
 use serde_json::{Value, json};
 
@@ -270,9 +270,7 @@ fn media_type_of(part: &Value, kind: &str) -> Option<String> {
     {
         return Some(format!("audio/{format}"));
     }
-    media_string(part)
-        .as_deref()
-        .and_then(data_url_media_type)
+    media_string(part).as_deref().and_then(data_url_media_type)
 }
 
 fn media_data(part: &Value) -> Option<Vec<u8>> {
@@ -287,11 +285,7 @@ fn media_data(part: &Value) -> Option<Vec<u8>> {
         || part.get("file_data").is_some()
         || part.get("data").is_some();
     raw_base64
-        .then(|| {
-            base64::engine::general_purpose::STANDARD
-                .decode(value)
-                .ok()
-        })
+        .then(|| base64::engine::general_purpose::STANDARD.decode(value).ok())
         .flatten()
 }
 
@@ -396,10 +390,8 @@ fn jpeg_dimensions(data: &[u8]) -> Option<(u32, u32)> {
 fn webp_dimensions(data: &[u8]) -> Option<(u32, u32)> {
     match &data[12..16] {
         b"VP8X" if data.len() >= 30 => {
-            let width =
-                u32::from_le_bytes([data[24], data[25], data[26], 0]) + 1;
-            let height =
-                u32::from_le_bytes([data[27], data[28], data[29], 0]) + 1;
+            let width = u32::from_le_bytes([data[24], data[25], data[26], 0]) + 1;
+            let height = u32::from_le_bytes([data[27], data[28], data[29], 0]) + 1;
             Some((width, height))
         }
         b"VP8 " if data.len() >= 30 => {
@@ -424,7 +416,9 @@ mod tests {
     #[test]
     fn reads_capabilities_from_model_items() {
         assert_eq!(
-            model_multimodal_from_item(&json!({"id":"m","capabilities":{"supports_image_input":true}})),
+            model_multimodal_from_item(
+                &json!({"id":"m","capabilities":{"supports_image_input":true}})
+            ),
             Some(true)
         );
         assert_eq!(
@@ -436,7 +430,9 @@ mod tests {
             Some(true)
         );
         assert_eq!(
-            model_multimodal_from_item(&json!({"id":"m","input_modalities":{"text":true,"image":false}})),
+            model_multimodal_from_item(
+                &json!({"id":"m","input_modalities":{"text":true,"image":false}})
+            ),
             Some(false)
         );
         assert_eq!(
@@ -467,14 +463,18 @@ mod tests {
         let content = value["input"][0]["content"].as_array().unwrap();
         assert_eq!(stripped.removed, 3);
         assert_eq!(content[0]["text"], "describe this");
-        assert!(content[1]["text"]
-            .as_str()
-            .unwrap()
-            .contains("不支持图片输入"));
-        assert!(content[2]["text"]
-            .as_str()
-            .unwrap()
-            .contains("不支持音频输入"));
+        assert!(
+            content[1]["text"]
+                .as_str()
+                .unwrap()
+                .contains("不支持图片输入")
+        );
+        assert!(
+            content[2]["text"]
+                .as_str()
+                .unwrap()
+                .contains("不支持音频输入")
+        );
         assert!(content[3]["text"].as_str().unwrap().contains("a.pdf"));
     }
 
@@ -487,20 +487,26 @@ mod tests {
                 {"type":"image_url","image_url":{"url":"https://example.com/a.png"}}
             ]}]
         });
-        let stripped =
-            strip_multimodal_input(&serde_json::to_vec(&chat).unwrap(), WireApi::ChatCompletions)
-                .unwrap();
+        let stripped = strip_multimodal_input(
+            &serde_json::to_vec(&chat).unwrap(),
+            WireApi::ChatCompletions,
+        )
+        .unwrap();
         let value: Value = serde_json::from_slice(&stripped.body).unwrap();
         assert_eq!(stripped.removed, 1);
         assert_eq!(value["messages"][0]["content"][1]["type"], "text");
-        assert!(value["messages"][0]["content"][1]["text"]
-            .as_str()
-            .unwrap()
-            .contains("不支持图片输入"));
-        assert!(value["messages"][0]["content"][1]["text"]
-            .as_str()
-            .unwrap()
-            .contains("远程"));
+        assert!(
+            value["messages"][0]["content"][1]["text"]
+                .as_str()
+                .unwrap()
+                .contains("不支持图片输入")
+        );
+        assert!(
+            value["messages"][0]["content"][1]["text"]
+                .as_str()
+                .unwrap()
+                .contains("远程")
+        );
 
         let anthropic = json!({
             "model":"deepseek-v4-flash",
@@ -519,10 +525,12 @@ mod tests {
         .unwrap();
         let value: Value = serde_json::from_slice(&stripped.body).unwrap();
         assert_eq!(stripped.removed, 3);
-        assert!(value["messages"][0]["content"][2]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("不支持图片输入"));
+        assert!(
+            value["messages"][0]["content"][2]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("不支持图片输入")
+        );
     }
 
     #[test]
@@ -565,9 +573,11 @@ mod tests {
                 "content": r#"[{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}]"#
             }]
         });
-        let stripped =
-            strip_multimodal_input(&serde_json::to_vec(&chat).unwrap(), WireApi::ChatCompletions)
-                .unwrap();
+        let stripped = strip_multimodal_input(
+            &serde_json::to_vec(&chat).unwrap(),
+            WireApi::ChatCompletions,
+        )
+        .unwrap();
         let value: Value = serde_json::from_slice(&stripped.body).unwrap();
         assert_eq!(stripped.removed, 1);
         let content = value["messages"][0]["content"].as_str().unwrap();
@@ -596,7 +606,9 @@ mod tests {
         .unwrap();
         let value: Value = serde_json::from_slice(&stripped.body).unwrap();
         assert_eq!(stripped.removed, 1);
-        let content = value["messages"][0]["content"][0]["content"].as_str().unwrap();
+        let content = value["messages"][0]["content"][0]["content"]
+            .as_str()
+            .unwrap();
         assert!(!content.contains("aGVsbG8="));
         assert!(content.contains("不支持图片输入"));
     }

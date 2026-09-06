@@ -87,7 +87,8 @@ async fn evaluate_alert(
             "上游 {} 当前余额为 {}, 已低于提醒阈值 {:.4}",
             upstream_name, amount, setting.threshold
         );
-        let notified = match crate::notification::send("上游余额不足".to_string(), body).await {
+        let notified = match crate::notification::send("上游余额不足".to_string(), body).await
+        {
             Ok(()) => true,
             Err(err) => {
                 tracing::warn!(

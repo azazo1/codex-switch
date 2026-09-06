@@ -69,7 +69,10 @@ fn emit_rerun_hints(manifest_dir: &Path) {
 
     if let Some(files) = git_output(manifest_dir, &["ls-files"]) {
         for file in files.lines() {
-            println!("cargo:rerun-if-changed={}", manifest_dir.join(file).display());
+            println!(
+                "cargo:rerun-if-changed={}",
+                manifest_dir.join(file).display()
+            );
         }
     }
 

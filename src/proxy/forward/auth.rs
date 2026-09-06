@@ -35,11 +35,7 @@ pub(super) async fn validate_local_access(
             } else {
                 json!({"error":{"message":message,"type":"proxy_error"}})
             };
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(value),
-            )
-                .into_response());
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, axum::Json(value)).into_response());
         }
     };
     let bearer = headers
@@ -98,7 +94,10 @@ pub(super) async fn validate_local_access(
                 "rate_limit_error",
             ));
         }
-        if key.token_limit.is_some_and(|limit| key.tokens_used >= limit) {
+        if key
+            .token_limit
+            .is_some_and(|limit| key.tokens_used >= limit)
+        {
             return Err(auth_response(
                 anthropic_error,
                 StatusCode::TOO_MANY_REQUESTS,
@@ -148,8 +147,7 @@ async fn validate_peer_access(
     };
     if let Ok(bytes) = decode_public_key(&peer.public_key) {
         let fingerprint = fingerprint_from_public_key(&bytes);
-        if header_value(headers, PEER_FINGERPRINT_HEADER)
-            .is_some_and(|value| value != fingerprint)
+        if header_value(headers, PEER_FINGERPRINT_HEADER).is_some_and(|value| value != fingerprint)
         {
             return Err(auth_response(
                 anthropic_error,

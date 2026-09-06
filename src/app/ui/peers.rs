@@ -33,7 +33,10 @@ impl CodexSwitchApp {
         });
         ui.horizontal(|ui| {
             ui.label("显示名");
-            if ui.text_edit_singleline(&mut self.node_display_name).lost_focus() {
+            if ui
+                .text_edit_singleline(&mut self.node_display_name)
+                .lost_focus()
+            {
                 self.save_node_display_name();
             }
         });
@@ -130,8 +133,7 @@ impl CodexSwitchApp {
                 {
                     Some(peer) => (
                         true,
-                        peer.fingerprint == item.fingerprint
-                            && peer_addresses_differ(peer, &item),
+                        peer.fingerprint == item.fingerprint && peer_addresses_differ(peer, &item),
                     ),
                     None => (false, false),
                 };
@@ -381,12 +383,14 @@ impl CodexSwitchApp {
         &mut self,
         discovered: crate::peer::discovery::DiscoveredPeer,
     ) {
-        match self.runtime.block_on(self.state.store.update_paired_peer_addresses(
-            &discovered.node_id,
-            &discovered.fingerprint,
-            &discovered.addresses,
-            discovered.source,
-        )) {
+        match self
+            .runtime
+            .block_on(self.state.store.update_paired_peer_addresses(
+                &discovered.node_id,
+                &discovered.fingerprint,
+                &discovered.addresses,
+                discovered.source,
+            )) {
             Ok(()) => {
                 self.status = format!("已更新 {} 的地址", discovered.display_name);
                 self.state.events.bump_peers();

@@ -1,7 +1,7 @@
 use crate::app::AppState;
 use crate::core::models::{
-    ScheduleGroup, ScheduleMode, ScheduleRouteRule, ScheduleRouteTargetKind, Upstream, UpstreamKind,
-    WireApi,
+    ScheduleGroup, ScheduleMode, ScheduleRouteRule, ScheduleRouteTargetKind, Upstream,
+    UpstreamKind, WireApi,
 };
 use crate::scheduler::{
     DirectSchedulerPlan, ScheduleRouteTraceStep, SchedulerPlan, glob_captures,
@@ -288,8 +288,7 @@ mod tests {
 
     #[test]
     fn count_tokens_availability_follows_oauth_or_non_chat_with_base_url() {
-        let oauth =
-            upstream(UpstreamKind::CodexOauth, WireApi::ChatCompletions, "");
+        let oauth = upstream(UpstreamKind::CodexOauth, WireApi::ChatCompletions, "");
         assert!(upstream_available(
             &oauth,
             OpenAiEndpoint::AnthropicCountTokens,
@@ -318,11 +317,8 @@ mod tests {
             false
         ));
 
-        let non_chat_without_url = upstream(
-            UpstreamKind::RelayApiKey,
-            WireApi::AnthropicMessages,
-            "",
-        );
+        let non_chat_without_url =
+            upstream(UpstreamKind::RelayApiKey, WireApi::AnthropicMessages, "");
         assert!(!upstream_available(
             &non_chat_without_url,
             OpenAiEndpoint::AnthropicCountTokens,

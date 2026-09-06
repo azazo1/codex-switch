@@ -85,11 +85,7 @@ async fn health() -> impl IntoResponse {
     (StatusCode::OK, "ok")
 }
 
-async fn models(
-    State(state): State<Arc<ProxyState>>,
-    uri: Uri,
-    headers: HeaderMap,
-) -> Response {
+async fn models(State(state): State<Arc<ProxyState>>, uri: Uri, headers: HeaderMap) -> Response {
     forward::handle_models(state.app.clone(), headers, uri, None).await
 }
 
@@ -231,8 +227,9 @@ mod tests {
     use crate::cache_keepalive::CacheKeepaliveRuntime;
     use crate::core::models::{
         ApiKeyAuthScheme, BalanceProvider, CacheKeepaliveMode, ErrorRetryPolicy, ScheduleGroup,
-        ScheduleGroupMember, ScheduleMode, ScheduleRouteRule, ScheduleRouteTargetKind, Upstream,
-        TemporaryAccessKey, UnknownModalityPolicy, UpstreamCacheKeepaliveSettings, WireApi,
+        ScheduleGroupMember, ScheduleMode, ScheduleRouteRule, ScheduleRouteTargetKind,
+        TemporaryAccessKey, UnknownModalityPolicy, Upstream, UpstreamCacheKeepaliveSettings,
+        WireApi,
     };
     use crate::storage::{Store, credentials::CredentialStore};
     use axum::{body::Body, http::header, routing::get};
@@ -913,10 +910,12 @@ mod tests {
         assert_eq!(hits[0].body["messages"][0]["content"], "patch the file");
         assert_eq!(hits[0].body["tools"].as_array().unwrap().len(), 3);
         assert_eq!(hits[0].body["tools"][0]["function"]["name"], "exec");
-        assert!(hits[0].body["tools"][0]["function"]["description"]
-            .as_str()
-            .unwrap()
-            .contains("\"format\""));
+        assert!(
+            hits[0].body["tools"][0]["function"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("\"format\"")
+        );
         assert_eq!(hits[0].body["tools"][1]["function"]["strict"], true);
         assert_eq!(
             hits[0].body["tools"][2]["function"]["name"],
@@ -1598,20 +1597,17 @@ mod tests {
                 let value = response.json::<Value>().await.unwrap();
                 match client_api {
                     WireApi::Responses => assert_eq!(
-                        value["object"],
-                        "response",
+                        value["object"], "response",
                         "upstream={upstream_api:?}, body={value}"
                     ),
                     WireApi::ChatCompletions => {
                         assert_eq!(
-                            value["object"],
-                            "chat.completion",
+                            value["object"], "chat.completion",
                             "upstream={upstream_api:?}, body={value}"
                         )
                     }
                     WireApi::AnthropicMessages => assert_eq!(
-                        value["type"],
-                        "message",
+                        value["type"], "message",
                         "upstream={upstream_api:?}, body={value}"
                     ),
                 }
@@ -1621,10 +1617,7 @@ mod tests {
                 assert_eq!(hits[0].path, expected_path);
                 if upstream_api == WireApi::AnthropicMessages {
                     assert_eq!(hits[0].x_api_key.as_deref(), Some("sk-test"));
-                    assert_eq!(
-                        hits[0].anthropic_version.as_deref(),
-                        Some("2023-06-01")
-                    );
+                    assert_eq!(hits[0].anthropic_version.as_deref(), Some("2023-06-01"));
                     assert!(hits[0].authorization.is_none());
                     assert!(hits[0].body.get("messages").is_some());
                 } else {
@@ -1709,10 +1702,12 @@ mod tests {
             let text = part["text"].as_str().unwrap();
             assert!(text.starts_with("[该模型不支持"));
         }
-        assert!(content[1]["text"]
-            .as_str()
-            .unwrap()
-            .contains("不支持图片输入"));
+        assert!(
+            content[1]["text"]
+                .as_str()
+                .unwrap()
+                .contains("不支持图片输入")
+        );
         assert!(content[3]["text"].as_str().unwrap().contains("a.pdf"));
     }
 
@@ -1898,7 +1893,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         let hits = hits.lock().await;
-        assert_eq!(hits[0].body["messages"][0]["content"][0]["type"], "document");
+        assert_eq!(
+            hits[0].body["messages"][0]["content"][0]["type"],
+            "document"
+        );
         assert_eq!(hits[0].body["private_field"]["keep"], true);
         assert_eq!(
             hits[0].anthropic_beta.as_deref(),
@@ -1927,10 +1925,7 @@ mod tests {
         let hits = hits.lock().await;
         assert_eq!(hits[0].authorization.as_deref(), Some("Bearer sk-test"));
         assert!(hits[0].x_api_key.is_none());
-        assert_eq!(
-            hits[0].anthropic_version.as_deref(),
-            Some("2023-06-01")
-        );
+        assert_eq!(hits[0].anthropic_version.as_deref(), Some("2023-06-01"));
         assert!(hits[0].anthropic_beta.is_none());
     }
 
@@ -1977,7 +1972,10 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.json::<Value>().await.unwrap()["input_tokens"], 7);
-        assert_eq!(responses_hits.lock().await[0].path, "/v1/responses/input_tokens");
+        assert_eq!(
+            responses_hits.lock().await[0].path,
+            "/v1/responses/input_tokens"
+        );
 
         let (anthropic_base, anthropic_hits) = spawn_mock(MockMode::CountTokens).await;
         let anthropic_state = test_state(&anthropic_base, WireApi::AnthropicMessages).await;
@@ -2085,7 +2083,10 @@ mod tests {
         assert_eq!(response.json::<Value>().await.unwrap()["id"], "gpt-mock");
 
         let hits = hits.lock().await;
-        assert!(hits.iter().all(|hit| hit.x_api_key.as_deref() == Some("sk-test")));
+        assert!(
+            hits.iter()
+                .all(|hit| hit.x_api_key.as_deref() == Some("sk-test"))
+        );
         assert!(hits.iter().all(|hit| hit.authorization.is_none()));
         assert_eq!(hits[0].anthropic_beta.as_deref(), Some("models-test"));
     }
@@ -2183,11 +2184,7 @@ mod tests {
         state.store.save_schedule_group(&group).await.unwrap();
     }
 
-    async fn set_group_failure_threshold(
-        state: &AppState,
-        group_id: &str,
-        failure_threshold: i64,
-    ) {
+    async fn set_group_failure_threshold(state: &AppState, group_id: &str, failure_threshold: i64) {
         let mut group = state
             .store
             .get_schedule_group(group_id)

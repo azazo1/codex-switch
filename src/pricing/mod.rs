@@ -57,11 +57,7 @@ pub async fn fetch_price_cache(state: &AppState) -> anyhow::Result<usize> {
     state
         .model_capabilities
         .extend_global(state.store.model_multimodal_entries().await?);
-    tracing::info!(
-        count,
-        capability_count,
-        "model info cache fetched"
-    );
+    tracing::info!(count, capability_count, "model info cache fetched");
     Ok(count)
 }
 

@@ -19,8 +19,7 @@ impl CodexSwitchApp {
         ui.horizontal(|ui| {
             ui.label("代理 URL");
             ui.add(
-                egui::TextEdit::singleline(&mut self.relay_proxy_url)
-                    .hint_text("留空使用系统代理"),
+                egui::TextEdit::singleline(&mut self.relay_proxy_url).hint_text("留空使用系统代理"),
             );
         });
         ui.horizontal(|ui| {
@@ -198,10 +197,7 @@ impl CodexSwitchApp {
     }
 }
 
-fn balance_alert_label(
-    ui: &mut egui::Ui,
-    settings: Option<&UpstreamBalanceAlertSettings>,
-) {
+fn balance_alert_label(ui: &mut egui::Ui, settings: Option<&UpstreamBalanceAlertSettings>) {
     let Some(settings) = settings else {
         ui.label("关闭");
         return;
@@ -216,7 +212,10 @@ fn balance_alert_label(
         return;
     }
     let response = if settings.alert_active {
-        ui.colored_label(egui::Color32::RED, format!("不足 <= {:.4}", settings.threshold))
+        ui.colored_label(
+            egui::Color32::RED,
+            format!("不足 <= {:.4}", settings.threshold),
+        )
     } else {
         ui.label(format!("<= {:.4}", settings.threshold))
     };

@@ -78,12 +78,20 @@ impl Store {
         if self.get_setting("tray_badge_metric").await?.is_none() {
             self.set_setting("tray_badge_metric", "connections").await?;
         }
-        if self.get_setting("tray_badge_metric_secondary").await?.is_none() {
-            self.set_setting("tray_badge_metric_secondary", "none").await?;
+        if self
+            .get_setting("tray_badge_metric_secondary")
+            .await?
+            .is_none()
+        {
+            self.set_setting("tray_badge_metric_secondary", "none")
+                .await?;
         }
         if self.get_setting("peer_bind_addr").await?.is_none() {
-            self.set_setting("peer_bind_addr", crate::peer::protocol::DEFAULT_PEER_BIND_ADDR)
-                .await?;
+            self.set_setting(
+                "peer_bind_addr",
+                crate::peer::protocol::DEFAULT_PEER_BIND_ADDR,
+            )
+            .await?;
         }
         if self.get_setting("peer_max_hops").await?.is_none() {
             self.set_setting(
@@ -591,20 +599,14 @@ mod tests {
             "upstream_filter_chat_server_tools"
         );
         assert_eq!(rows[15].get::<i64, _>("version"), 16);
-        assert_eq!(
-            rows[15].get::<String, _>("name"),
-            "temporary_access_keys"
-        );
+        assert_eq!(rows[15].get::<String, _>("name"), "temporary_access_keys");
         assert_eq!(rows[16].get::<i64, _>("version"), 17);
         assert_eq!(
             rows[16].get::<String, _>("name"),
             "upstream_strip_multimodal_for_text_models"
         );
         assert_eq!(rows[17].get::<i64, _>("version"), 18);
-        assert_eq!(
-            rows[17].get::<String, _>("name"),
-            "model_info_cache"
-        );
+        assert_eq!(rows[17].get::<String, _>("name"), "model_info_cache");
         assert_eq!(rows[18].get::<i64, _>("version"), 19);
         assert_eq!(
             rows[18].get::<String, _>("name"),

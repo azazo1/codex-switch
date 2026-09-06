@@ -6,12 +6,9 @@ pub(crate) use request::{
     anthropic_to_responses_request_json, responses_to_anthropic_request_json,
 };
 pub(crate) use response::{
-    anthropic_to_responses_response_json, error_response_json,
-    responses_to_anthropic_response_json,
+    anthropic_to_responses_response_json, error_response_json, responses_to_anthropic_response_json,
 };
-pub(crate) use stream::{
-    AnthropicToResponsesSseConverter, ResponsesToAnthropicSseConverter,
-};
+pub(crate) use stream::{AnthropicToResponsesSseConverter, ResponsesToAnthropicSseConverter};
 
 #[cfg(test)]
 mod tests {
@@ -81,10 +78,22 @@ mod tests {
         assert_eq!(value.pointer("/system/0/text"), Some(&json!("notice")));
         assert_eq!(value.pointer("/messages/0/role"), Some(&json!("user")));
         assert_eq!(value.pointer("/messages/1/role"), Some(&json!("assistant")));
-        assert_eq!(value.pointer("/messages/1/content/0/id"), Some(&json!("call_1")));
-        assert_eq!(value.pointer("/messages/1/content/1/id"), Some(&json!("call_2")));
-        assert_eq!(value.pointer("/messages/2/content/0/tool_use_id"), Some(&json!("call_1")));
-        assert_eq!(value.pointer("/messages/2/content/1/tool_use_id"), Some(&json!("call_2")));
+        assert_eq!(
+            value.pointer("/messages/1/content/0/id"),
+            Some(&json!("call_1"))
+        );
+        assert_eq!(
+            value.pointer("/messages/1/content/1/id"),
+            Some(&json!("call_2"))
+        );
+        assert_eq!(
+            value.pointer("/messages/2/content/0/tool_use_id"),
+            Some(&json!("call_1"))
+        );
+        assert_eq!(
+            value.pointer("/messages/2/content/1/tool_use_id"),
+            Some(&json!("call_2"))
+        );
     }
 
     #[test]

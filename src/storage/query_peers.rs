@@ -59,19 +59,11 @@ impl Store {
     }
 
     pub async fn mdns_discovery_enabled(&self) -> anyhow::Result<bool> {
-        Ok(self
-            .get_setting("mdns_discovery_enabled")
-            .await?
-            .as_deref()
-            == Some("true"))
+        Ok(self.get_setting("mdns_discovery_enabled").await?.as_deref() == Some("true"))
     }
 
     pub async fn lnd_discovery_enabled(&self) -> anyhow::Result<bool> {
-        Ok(self
-            .get_setting("lnd_discovery_enabled")
-            .await?
-            .as_deref()
-            == Some("true"))
+        Ok(self.get_setting("lnd_discovery_enabled").await?.as_deref() == Some("true"))
     }
 
     pub async fn lnd_server_url(&self) -> anyhow::Result<Option<String>> {
@@ -236,10 +228,9 @@ impl Store {
 
     pub async fn list_peer_pairing_requests(&self) -> anyhow::Result<Vec<PeerPairingRequest>> {
         self.expire_peer_pairing_requests().await?;
-        let rows =
-            sqlx::query("SELECT * FROM peer_pairing_requests ORDER BY created_at ASC")
-                .fetch_all(self.pool())
-                .await?;
+        let rows = sqlx::query("SELECT * FROM peer_pairing_requests ORDER BY created_at ASC")
+            .fetch_all(self.pool())
+            .await?;
         rows.into_iter().map(row_to_pairing_request).collect()
     }
 
@@ -374,11 +365,7 @@ impl Store {
             return Ok((peer, upstream, false));
         }
         let upstream_id = existing_upstream_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let base_url = payload
-            .addresses
-            .first()
-            .cloned()
-            .unwrap_or_default();
+        let base_url = payload.addresses.first().cloned().unwrap_or_default();
         let mut upstream = Upstream::new_peer_node(payload.display_name.clone(), base_url);
         upstream.id = upstream_id;
         self.save_upstream(&upstream).await?;
@@ -572,9 +559,16 @@ mod tests {
             .await
             .unwrap();
         let updated = store.get_node_peer(&peer.node_id).await.unwrap().unwrap();
-        let upstream = store.get_upstream(&peer.upstream_id).await.unwrap().unwrap();
+        let upstream = store
+            .get_upstream(&peer.upstream_id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(upstream.base_url, "https://10.0.0.8:15723");
-        assert_eq!(updated.addresses, vec!["https://10.0.0.8:15723".to_string()]);
+        assert_eq!(
+            updated.addresses,
+            vec!["https://10.0.0.8:15723".to_string()]
+        );
         assert_eq!(updated.discovery_source, PeerDiscoverySource::Mdns);
     }
 }

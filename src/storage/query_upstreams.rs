@@ -341,15 +341,12 @@ pub(super) fn row_to_upstream(row: sqlx::sqlite::SqliteRow) -> anyhow::Result<Up
         ),
         supports_compact: row.get::<i64, _>("supports_compact") != 0,
         filter_chat_server_tools: row.get::<i64, _>("filter_chat_server_tools") != 0,
-        strip_multimodal_for_text_models: row
-            .get::<i64, _>("strip_multimodal_for_text_models")
+        strip_multimodal_for_text_models: row.get::<i64, _>("strip_multimodal_for_text_models")
             != 0,
         unknown_modality_policy: UnknownModalityPolicy::from_str(
             &row.get::<String, _>("unknown_modality_policy"),
         ),
-        error_retry_policy: ErrorRetryPolicy::from_str(
-            &row.get::<String, _>("error_retry_policy"),
-        ),
+        error_retry_policy: ErrorRetryPolicy::from_str(&row.get::<String, _>("error_retry_policy")),
         enabled: row.get::<i64, _>("enabled") != 0,
         priority: row.get("priority"),
         weight: row.get("weight"),

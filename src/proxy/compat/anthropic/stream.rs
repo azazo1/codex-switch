@@ -116,7 +116,10 @@ impl AnthropicToResponsesSseConverter {
         let Some(block) = value.get("content_block") else {
             return;
         };
-        let kind = block.get("type").and_then(Value::as_str).unwrap_or_default();
+        let kind = block
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let output_index = self.next_output_index;
         self.next_output_index += 1;
         let (item_id, call_id, name) = match kind {
@@ -135,15 +138,19 @@ impl AnthropicToResponsesSseConverter {
                     .unwrap_or_default()
                     .to_string(),
             ),
-            "server_tool_use" if block.get("name").and_then(Value::as_str) == Some("web_search") => (
-                block
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .unwrap_or("web_search")
-                    .to_string(),
-                String::new(),
-                "web_search".to_string(),
-            ),
+            "server_tool_use"
+                if block.get("name").and_then(Value::as_str) == Some("web_search") =>
+            {
+                (
+                    block
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("web_search")
+                        .to_string(),
+                    String::new(),
+                    "web_search".to_string(),
+                )
+            }
             _ => return,
         };
         let item = match kind {
@@ -161,13 +168,9 @@ impl AnthropicToResponsesSseConverter {
                 "status":"in_progress"
             }),
             "tool_use" => match &self.context {
-                Some(context) => context.restore_tool_item(
-                    &item_id,
-                    "in_progress",
-                    &call_id,
-                    &name,
-                    "",
-                ),
+                Some(context) => {
+                    context.restore_tool_item(&item_id, "in_progress", &call_id, &name, "")
+                }
                 None => json!({
                     "id":item_id,
                     "type":"function_call",
@@ -240,13 +243,18 @@ impl AnthropicToResponsesSseConverter {
         let Some(delta) = value.get("delta") else {
             return;
         };
-        let delta_type = delta.get("type").and_then(Value::as_str).unwrap_or_default();
+        let delta_type = delta
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let text = match delta_type {
             "text_delta" => delta.get("text").and_then(Value::as_str),
             "thinking_delta" => delta.get("thinking").and_then(Value::as_str),
             "input_json_delta" => delta.get("partial_json").and_then(Value::as_str),
             "signature_delta" => {
-                tracing::debug!("dropping Anthropic thinking signature delta during protocol conversion");
+                tracing::debug!(
+                    "dropping Anthropic thinking signature delta during protocol conversion"
+                );
                 None
             }
             _ => None,
@@ -495,10 +503,12 @@ impl AnthropicToResponsesSseConverter {
             return String::new();
         }
         self.completed = true;
-        let error = value.get("error").cloned().unwrap_or_else(|| json!({
-            "type":"api_error",
-            "message":"Anthropic stream failed"
-        }));
+        let error = value.get("error").cloned().unwrap_or_else(|| {
+            json!({
+                "type":"api_error",
+                "message":"Anthropic stream failed"
+            })
+        });
         let response = json!({
             "id":self.response_id,
             "object":"response",
@@ -667,7 +677,10 @@ impl ResponsesToAnthropicSseConverter {
         let Some(item) = value.get("item") else {
             return String::new();
         };
-        let output_index = value.get("output_index").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let output_index = value
+            .get("output_index")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
         let kind = item.get("type").and_then(Value::as_str).unwrap_or_default();
         match kind {
             "reasoning" => self.open_block(
@@ -681,10 +694,17 @@ impl ResponsesToAnthropicSseConverter {
                 let id = anthropic_call_id(item);
                 let output = self.open_block(
                     output_index,
-                    if kind == "custom_tool_call" { "custom_tool" } else { "tool_use" },
+                    if kind == "custom_tool_call" {
+                        "custom_tool"
+                    } else {
+                        "tool_use"
+                    },
                     json!({"type":"tool_use","id":id,"name":name,"input":{}}),
                 );
-                if let Some(arguments) = item.get("arguments").and_then(Value::as_str).filter(|value| !value.is_empty())
+                if let Some(arguments) = item
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
                     && let Some(state) = self.blocks.get_mut(&output_index)
                 {
                     state.content.push_str(arguments);
@@ -693,7 +713,10 @@ impl ResponsesToAnthropicSseConverter {
             }
             "web_search_call" => {
                 self.has_tool = true;
-                let id = format!("srvtoolu_{}", item.get("id").and_then(Value::as_str).unwrap_or_default());
+                let id = format!(
+                    "srvtoolu_{}",
+                    item.get("id").and_then(Value::as_str).unwrap_or_default()
+                );
                 self.open_block(
                     output_index,
                     "server_tool_use",
@@ -709,12 +732,7 @@ impl ResponsesToAnthropicSseConverter {
         }
     }
 
-    fn open_block(
-        &mut self,
-        output_index: usize,
-        kind: &str,
-        content_block: Value,
-    ) -> String {
+    fn open_block(&mut self, output_index: usize, kind: &str, content_block: Value) -> String {
         if self.blocks.contains_key(&output_index) {
             return String::new();
         }
@@ -740,7 +758,10 @@ impl ResponsesToAnthropicSseConverter {
     }
 
     fn text_delta(&mut self, value: &Value) -> String {
-        let output_index = value.get("output_index").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let output_index = value
+            .get("output_index")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
         let mut output = String::new();
         if !self.blocks.contains_key(&output_index) {
             output.push_str(&self.open_block(
@@ -749,7 +770,10 @@ impl ResponsesToAnthropicSseConverter {
                 json!({"type":"text","text":""}),
             ));
         }
-        let delta = value.get("delta").and_then(Value::as_str).unwrap_or_default();
+        let delta = value
+            .get("delta")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if let Some(state) = self.blocks.get_mut(&output_index) {
             state.content.push_str(delta);
             state.had_delta = true;
@@ -766,7 +790,10 @@ impl ResponsesToAnthropicSseConverter {
     }
 
     fn reasoning_delta(&mut self, value: &Value) -> String {
-        let output_index = value.get("output_index").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let output_index = value
+            .get("output_index")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
         let mut output = String::new();
         if !self.blocks.contains_key(&output_index) {
             output.push_str(&self.open_block(
@@ -775,7 +802,10 @@ impl ResponsesToAnthropicSseConverter {
                 json!({"type":"thinking","thinking":""}),
             ));
         }
-        let delta = value.get("delta").and_then(Value::as_str).unwrap_or_default();
+        let delta = value
+            .get("delta")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if let Some(state) = self.blocks.get_mut(&output_index) {
             state.content.push_str(delta);
             state.had_delta = true;
@@ -792,8 +822,14 @@ impl ResponsesToAnthropicSseConverter {
     }
 
     fn tool_delta(&mut self, value: &Value, event_type: &str) -> String {
-        let output_index = value.get("output_index").and_then(Value::as_u64).unwrap_or(0) as usize;
-        let delta = value.get("delta").and_then(Value::as_str).unwrap_or_default();
+        let output_index = value
+            .get("output_index")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
+        let delta = value
+            .get("delta")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let Some(state) = self.blocks.get_mut(&output_index) else {
             return String::new();
         };
@@ -813,7 +849,10 @@ impl ResponsesToAnthropicSseConverter {
     }
 
     fn tool_done(&mut self, value: &Value) -> String {
-        let output_index = value.get("output_index").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let output_index = value
+            .get("output_index")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
         let Some(state) = self.blocks.get_mut(&output_index) else {
             return String::new();
         };
@@ -846,7 +885,10 @@ impl ResponsesToAnthropicSseConverter {
     }
 
     fn output_item_done(&mut self, value: &Value) -> String {
-        let output_index = value.get("output_index").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let output_index = value
+            .get("output_index")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
         if let Some(item) = value.get("item")
             && let Some(state) = self.blocks.get_mut(&output_index)
             && state.content.is_empty()
@@ -897,7 +939,10 @@ impl ResponsesToAnthropicSseConverter {
                 "usage":responses_usage_to_anthropic(response.get("usage"))
             }),
         ));
-        output.push_str(&anthropic_event("message_stop", json!({"type":"message_stop"})));
+        output.push_str(&anthropic_event(
+            "message_stop",
+            json!({"type":"message_stop"}),
+        ));
         self.stopped = true;
         output
     }

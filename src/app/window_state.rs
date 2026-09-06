@@ -174,9 +174,15 @@ mod tests {
         eframe::set_value(&mut storage, WINDOW_KEY, &invalid_settings());
 
         let restored = sanitize_on_save(&mut storage, Some(&valid_settings()));
-        assert_eq!(restored.as_ref().map(PersistedWindowSettings::is_valid), Some(true));
+        assert_eq!(
+            restored.as_ref().map(PersistedWindowSettings::is_valid),
+            Some(true)
+        );
         let stored = eframe::get_value::<PersistedWindowSettings>(&storage, WINDOW_KEY);
-        assert_eq!(stored.as_ref().map(PersistedWindowSettings::is_valid), Some(true));
+        assert_eq!(
+            stored.as_ref().map(PersistedWindowSettings::is_valid),
+            Some(true)
+        );
     }
 
     #[test]

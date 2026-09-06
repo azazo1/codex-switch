@@ -118,12 +118,7 @@ async fn poll_device_flow_at(
         return Err(anyhow!("device poll failed: {status} {body}"));
     }
     let success: DevicePollSuccess = response.json().await.context("invalid poll response")?;
-    let tokens = exchange_code(
-        http,
-        &success.authorization_code,
-        &success.code_verifier,
-    )
-    .await?;
+    let tokens = exchange_code(http, &success.authorization_code, &success.code_verifier).await?;
     Ok(DevicePollOutcome::Authorized(tokens))
 }
 

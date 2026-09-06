@@ -16,7 +16,10 @@ use crate::core::models::{
 };
 use crate::pricing;
 use crate::storage::{Store, credentials::CredentialStore};
-use crate::{proxy::{transform, upstream_auth}, usage};
+use crate::{
+    proxy::{transform, upstream_auth},
+    usage,
+};
 use reqwest::StatusCode;
 use serde_json::Value;
 use std::sync::Arc;

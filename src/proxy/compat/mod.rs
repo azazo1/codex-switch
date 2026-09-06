@@ -6,15 +6,13 @@ mod responses;
 
 pub(crate) use anthropic::{
     AnthropicToResponsesSseConverter, ResponsesToAnthropicSseConverter,
-    anthropic_to_responses_request_json, anthropic_to_responses_response_json,
-    error_response_json, responses_to_anthropic_request_json,
-    responses_to_anthropic_response_json,
+    anthropic_to_responses_request_json, anthropic_to_responses_response_json, error_response_json,
+    responses_to_anthropic_request_json, responses_to_anthropic_response_json,
 };
+pub(crate) use bridge::{PreparedProtocolRequest, ProtocolConversionError, ProtocolSseBridge};
 pub(crate) use chat_completions::{
-    ChatResponseContext, ChatSseConverter, ResponsesToChatSseConverter,
-    chat_to_responses_json, chat_to_responses_request_json, decode_reasoning,
-    filter_chat_server_tools, normalize_chat_request_json, responses_response_to_chat_json,
-    responses_to_chat_json,
+    ChatResponseContext, ChatSseConverter, ResponsesToChatSseConverter, chat_to_responses_json,
+    chat_to_responses_request_json, decode_reasoning, filter_chat_server_tools,
+    normalize_chat_request_json, responses_response_to_chat_json, responses_to_chat_json,
 };
 pub(crate) use responses::normalize_responses_request;
-pub(crate) use bridge::{PreparedProtocolRequest, ProtocolConversionError, ProtocolSseBridge};

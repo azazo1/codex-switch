@@ -85,9 +85,12 @@ impl Store {
         for row in rows {
             let model_id = row.get::<String, _>("model_id");
             let raw_json = row.get::<String, _>("raw_json");
-            let Some(multimodal) = serde_json::from_str::<Value>(&raw_json)
-                .ok()
-                .and_then(|value| crate::core::model_capabilities::model_multimodal_from_item(&value))
+            let Some(multimodal) =
+                serde_json::from_str::<Value>(&raw_json)
+                    .ok()
+                    .and_then(|value| {
+                        crate::core::model_capabilities::model_multimodal_from_item(&value)
+                    })
             else {
                 continue;
             };
@@ -228,7 +231,12 @@ mod tests {
             vec![("gpt-5.2".to_string(), true)]
         );
         assert_eq!(
-            store.find_model_price("gpt-5.2").await.unwrap().unwrap().multimodal,
+            store
+                .find_model_price("gpt-5.2")
+                .await
+                .unwrap()
+                .unwrap()
+                .multimodal,
             Some(true)
         );
     }

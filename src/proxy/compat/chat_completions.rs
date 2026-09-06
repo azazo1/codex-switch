@@ -1,16 +1,15 @@
+mod reverse;
 mod shared;
 mod stream;
-mod reverse;
-mod tools;
 #[cfg(test)]
 mod tests;
+mod tools;
 
-pub(crate) use stream::ChatSseConverter;
-pub(crate) use reverse::{
-    ResponsesToChatSseConverter, chat_to_responses_request_json,
-    responses_response_to_chat_json,
-};
 pub(crate) use self::shared::decode_reasoning;
+pub(crate) use reverse::{
+    ResponsesToChatSseConverter, chat_to_responses_request_json, responses_response_to_chat_json,
+};
+pub(crate) use stream::ChatSseConverter;
 
 use self::shared::*;
 use self::tools::{TOOL_SEARCH_CHAT_NAME, ToolContext, ToolKind};
@@ -26,7 +25,10 @@ impl ChatResponseContext {
     pub(crate) fn from_responses_request(value: &Value) -> Self {
         Self {
             tool_context: ToolContext::from_request(value),
-            model: value.get("model").and_then(Value::as_str).map(str::to_string),
+            model: value
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::to_string),
         }
     }
 
@@ -42,14 +44,7 @@ impl ChatResponseContext {
         name: &str,
         arguments: &str,
     ) -> Value {
-        response_tool_item_from_chat_name(
-            item_id,
-            status,
-            call_id,
-            name,
-            arguments,
-            self,
-        )
+        response_tool_item_from_chat_name(item_id, status, call_id, name, arguments, self)
     }
 
     fn is_custom_tool(&self, name: &str) -> bool {
@@ -144,7 +139,10 @@ pub(crate) fn filter_chat_server_tools(body: &[u8]) -> anyhow::Result<(Vec<u8>, 
     let function_tools = tool_values
         .into_iter()
         .filter(|tool| {
-            tool.get("type").and_then(Value::as_str).unwrap_or("function") == "function"
+            tool.get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("function")
+                == "function"
         })
         .collect::<Vec<_>>();
     let dropped = original_len - function_tools.len();
@@ -226,7 +224,12 @@ pub(crate) fn responses_to_chat_json(body: &[u8]) -> anyhow::Result<ConvertedCha
     result.insert("messages".to_string(), Value::Array(messages));
     result.insert(
         "stream".to_string(),
-        json!(object.get("stream").and_then(Value::as_bool).unwrap_or(false)),
+        json!(
+            object
+                .get("stream")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        ),
     );
     if !tools.is_empty() {
         result.insert("tools".to_string(), Value::Array(tools.to_vec()));
@@ -269,7 +272,10 @@ fn append_input_item(
     messages: &mut Vec<Value>,
     context: &ChatResponseContext,
 ) -> anyhow::Result<()> {
-    let item_type = item.get("type").and_then(Value::as_str).unwrap_or("message");
+    let item_type = item
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("message");
     match item_type {
         "reasoning" => {
             if let Some(reasoning) = reasoning_from_response_item(item) {
@@ -279,9 +285,7 @@ fn append_input_item(
         "function_call" => {
             let name = item.get("name").and_then(Value::as_str).unwrap_or_default();
             let namespace = item.get("namespace").and_then(Value::as_str);
-            let chat_name = context
-                .tool_context
-                .chat_name_for_function(name, namespace);
+            let chat_name = context.tool_context.chat_name_for_function(name, namespace);
             let call_id = item
                 .get("call_id")
                 .or_else(|| item.get("id"))
@@ -418,11 +422,13 @@ fn chat_content(content: Option<&Value>) -> anyhow::Result<Value> {
             if has_media {
                 Ok(Value::Array(converted))
             } else {
-                Ok(json!(converted
-                    .iter()
-                    .filter_map(|part| part.get("text").and_then(Value::as_str))
-                    .collect::<Vec<_>>()
-                    .join("\n")))
+                Ok(json!(
+                    converted
+                        .iter()
+                        .filter_map(|part| part.get("text").and_then(Value::as_str))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ))
             }
         }
         other => Ok(json!(json_text(other))),
@@ -434,7 +440,11 @@ fn validate_responses_tools(tools: Option<&Value>) -> anyhow::Result<()> {
         return Ok(());
     };
     for tool in tools {
-        match tool.get("type").and_then(Value::as_str).unwrap_or("function") {
+        match tool
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("function")
+        {
             "function" | "custom" | "namespace" | "tool_search" | "web_search"
             | "web_search_preview" => {}
             kind => anyhow::bail!(
@@ -489,7 +499,9 @@ pub(crate) fn chat_to_responses_json(value: &Value, context: &ChatResponseContex
                 .map(|tool_call| response_tool_item(tool_call, context)),
         );
     }
-    let incomplete = value.pointer("/choices/0/finish_reason").and_then(Value::as_str)
+    let incomplete = value
+        .pointer("/choices/0/finish_reason")
+        .and_then(Value::as_str)
         == Some("length");
     let mut response = json!({
         "id":response_id,
@@ -517,14 +529,7 @@ fn response_tool_item(tool_call: &Value, context: &ChatResponseContext) -> Value
         .unwrap_or_else(new_call_id);
     let arguments = argument_string(tool_call.pointer("/function/arguments"));
     let item_id = new_item_id(context.item_id_prefix(name));
-    response_tool_item_from_chat_name(
-        &item_id,
-        "completed",
-        &call_id,
-        name,
-        &arguments,
-        context,
-    )
+    response_tool_item_from_chat_name(&item_id, "completed", &call_id, name, &arguments, context)
 }
 
 pub(super) fn response_tool_item_from_chat_name(

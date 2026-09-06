@@ -35,7 +35,10 @@ impl Store {
         let rows = sqlx::query("SELECT * FROM temporary_access_keys ORDER BY created_at DESC")
             .fetch_all(self.pool())
             .await?;
-        Ok(rows.into_iter().map(temporary_access_key_from_row).collect())
+        Ok(rows
+            .into_iter()
+            .map(temporary_access_key_from_row)
+            .collect())
     }
 
     pub async fn find_temporary_access_key(
@@ -155,8 +158,10 @@ mod tests {
 
     #[tokio::test]
     async fn stores_lists_and_finds_temporary_keys() {
-        let path =
-            std::env::temp_dir().join(format!("codex-switch-temp-key-{}.sqlite", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-temp-key-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
         let store = Store::open(path).await.unwrap();
         let key = TemporaryAccessKey::new(
             "key-one".to_string(),
@@ -186,8 +191,10 @@ mod tests {
 
     #[tokio::test]
     async fn records_success_usage_and_updates_enabled_state() {
-        let path =
-            std::env::temp_dir().join(format!("codex-switch-temp-key-{}.sqlite", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-temp-key-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
         let store = Store::open(path).await.unwrap();
         let key = TemporaryAccessKey::new(
             "key-two".to_string(),
@@ -246,8 +253,10 @@ mod tests {
 
     #[tokio::test]
     async fn updates_temporary_key_limits_and_key_value() {
-        let path =
-            std::env::temp_dir().join(format!("codex-switch-temp-key-{}.sqlite", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-temp-key-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
         let store = Store::open(path).await.unwrap();
         let key = TemporaryAccessKey::new(
             "key-three".to_string(),

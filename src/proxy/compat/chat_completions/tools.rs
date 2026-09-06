@@ -231,10 +231,8 @@ impl ToolContext {
             return;
         }
         if let Some(namespace) = spec.namespace.as_ref() {
-            self.namespace_name_to_chat_name.insert(
-                (namespace.clone(), spec.name.clone()),
-                chat_name.clone(),
-            );
+            self.namespace_name_to_chat_name
+                .insert((namespace.clone(), spec.name.clone()), chat_name.clone());
         }
         self.chat_name_to_spec.insert(chat_name, spec);
         self.chat_tools.push(chat_tool);
@@ -308,7 +306,9 @@ fn normalize_chat_parameters(value: Option<&Value>) -> Value {
         .cloned()
         .unwrap_or_default();
     schema.insert("type".to_string(), json!("object"));
-    schema.entry("properties".to_string()).or_insert_with(|| json!({}));
+    schema
+        .entry("properties".to_string())
+        .or_insert_with(|| json!({}));
     Value::Object(schema)
 }
 

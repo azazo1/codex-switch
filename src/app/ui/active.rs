@@ -181,13 +181,8 @@ impl CodexSwitchApp {
                                     .on_hover_text(model_hover);
                             }
                             let reasoning = item.reasoning_effort.as_deref().unwrap_or("-");
-                            sized_row_label(
-                                ui,
-                                reasoning,
-                                LIVE_REASONING_WIDTH,
-                                finished,
-                            )
-                            .on_hover_text(reasoning);
+                            sized_row_label(ui, reasoning, LIVE_REASONING_WIDTH, finished)
+                                .on_hover_text(reasoning);
                             sized_row_label(ui, &item.endpoint, LIVE_ENDPOINT_WIDTH, finished)
                                 .on_hover_text(&item.endpoint);
                             if let Some(scroll) = scroll_states.get_mut(&item.id) {
@@ -196,12 +191,7 @@ impl CodexSwitchApp {
                                 sized_row_label(ui, "-", tail_width, finished);
                             }
                             output_speed_label(ui, item, finished);
-                            sized_row_label(
-                                ui,
-                                format_elapsed(item),
-                                LIVE_ELAPSED_WIDTH,
-                                finished,
-                            );
+                            sized_row_label(ui, format_elapsed(item), LIVE_ELAPSED_WIDTH, finished);
                             sized_row_label(
                                 ui,
                                 format_started_at(item),
@@ -239,21 +229,18 @@ impl CodexSwitchApp {
                     "限制最快滚动速度",
                 )
                 .changed();
-            ui.add_enabled_ui(
-                self.live_output_settings.scroll_limit_enabled,
-                |ui| {
-                    changed |= ui
-                        .add(
-                            egui::DragValue::new(
-                                &mut self.live_output_settings.max_scroll_chars_per_second,
-                            )
-                            .range(MIN_SCROLL_CHARS_PER_SECOND..=MAX_SCROLL_CHARS_PER_SECOND)
-                            .speed(1)
-                            .suffix(" 字符/秒"),
+            ui.add_enabled_ui(self.live_output_settings.scroll_limit_enabled, |ui| {
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(
+                            &mut self.live_output_settings.max_scroll_chars_per_second,
                         )
-                        .changed();
-                },
-            );
+                        .range(MIN_SCROLL_CHARS_PER_SECOND..=MAX_SCROLL_CHARS_PER_SECOND)
+                        .speed(1)
+                        .suffix(" 字符/秒"),
+                    )
+                    .changed();
+            });
             ui.label("末尾保留时间");
             changed |= ui
                 .add(
@@ -345,8 +332,12 @@ fn output_speed_label(ui: &mut egui::Ui, item: &LiveRequestSnapshot, finished: b
     };
     ui.add_sized(
         [LIVE_OUTPUT_SPEED_WIDTH, ui.spacing().interact_size.y],
-        egui::Label::new(row_text(ui, format_tps(rate.estimated_tokens_per_second), finished))
-            .truncate(),
+        egui::Label::new(row_text(
+            ui,
+            format_tps(rate.estimated_tokens_per_second),
+            finished,
+        ))
+        .truncate(),
     )
     .on_hover_text(format!("字符速度: {:.1} 字符/秒", rate.chars_per_second));
 }

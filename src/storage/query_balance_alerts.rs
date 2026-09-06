@@ -8,12 +8,11 @@ impl Store {
         &self,
         upstream_id: &str,
     ) -> anyhow::Result<UpstreamBalanceAlertSettings> {
-        let row = sqlx::query(
-            "SELECT * FROM upstream_balance_alert_settings WHERE upstream_id = ?1",
-        )
-        .bind(upstream_id)
-        .fetch_optional(self.pool())
-        .await?;
+        let row =
+            sqlx::query("SELECT * FROM upstream_balance_alert_settings WHERE upstream_id = ?1")
+                .bind(upstream_id)
+                .fetch_optional(self.pool())
+                .await?;
         Ok(row
             .map(row_to_settings)
             .unwrap_or_else(|| UpstreamBalanceAlertSettings::new(upstream_id.to_string())))

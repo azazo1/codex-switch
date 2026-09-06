@@ -122,7 +122,10 @@ impl NamespaceToolMap {
         self.flattened_to_identity
             .entry(flattened)
             .or_insert_with(|| (namespace.to_string(), name.to_string()));
-        let namespaces = self.original_to_namespaces.entry(name.to_string()).or_default();
+        let namespaces = self
+            .original_to_namespaces
+            .entry(name.to_string())
+            .or_default();
         if !namespaces.contains(&namespace.to_string()) {
             namespaces.push(namespace.to_string());
         }
@@ -144,15 +147,19 @@ impl NamespaceToolMap {
             .get(name)
             .cloned()
             .or_else(|| parse_flattened_name(name))
-            .or_else(|| namespace_from_arguments(object).map(|namespace| (namespace, name.to_string())))
             .or_else(|| {
-                self.original_to_namespaces.get(name).and_then(|namespaces| {
-                    if namespaces.len() == 1 {
-                        Some((namespaces[0].clone(), name.to_string()))
-                    } else {
-                        None
-                    }
-                })
+                namespace_from_arguments(object).map(|namespace| (namespace, name.to_string()))
+            })
+            .or_else(|| {
+                self.original_to_namespaces
+                    .get(name)
+                    .and_then(|namespaces| {
+                        if namespaces.len() == 1 {
+                            Some((namespaces[0].clone(), name.to_string()))
+                        } else {
+                            None
+                        }
+                    })
             });
         let Some((namespace, original_name)) = identity else {
             return false;

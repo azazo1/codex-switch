@@ -4,7 +4,9 @@ use crate::core::models::{
     ErrorRetryPolicy, TokenUsage, UnknownModalityPolicy, Upstream, UpstreamKind, WireApi,
 };
 use crate::live::LiveRequestMeta;
-use crate::proxy::compat::{self, PreparedProtocolRequest, ProtocolConversionError, ProtocolSseBridge};
+use crate::proxy::compat::{
+    self, PreparedProtocolRequest, ProtocolConversionError, ProtocolSseBridge,
+};
 use crate::proxy::debug;
 use crate::proxy::multimodal;
 use crate::proxy::transform;
@@ -85,7 +87,12 @@ impl OpenAiEndpoint {
     }
 }
 
-pub async fn handle_models(state: AppState, headers: HeaderMap, uri: Uri, model_id: Option<String>) -> Response {
+pub async fn handle_models(
+    state: AppState,
+    headers: HeaderMap,
+    uri: Uri,
+    model_id: Option<String>,
+) -> Response {
     let anthropic = headers.contains_key("anthropic-version");
     let temporary_key_id = match validate_local_access(&state, &headers, anthropic).await {
         Ok(LocalAccess::Primary | LocalAccess::Peer) => None,
@@ -297,7 +304,8 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
         request.endpoint_kind,
         request.compact,
     )
-    .await {
+    .await
+    {
         Ok(plan) => plan,
         Err(error) if request.endpoint_kind.is_count_tokens() => {
             return Err(ForwardFailure {
@@ -324,8 +332,7 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
         match forward_with_upstream(&request, upstream.clone(), plan.target_model.as_deref()).await
         {
             Ok(result) => {
-                if request.endpoint_kind.is_count_tokens()
-                    && result.status == StatusCode::NOT_FOUND
+                if request.endpoint_kind.is_count_tokens() && result.status == StatusCode::NOT_FOUND
                 {
                     if index + 1 < candidate_count {
                         tracing::debug!(
@@ -341,11 +348,7 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
                     let count = request
                         .state
                         .scheduler
-                        .record_failure(
-                            &plan.group.id,
-                            &upstream.id,
-                            plan.affinity_key.as_deref(),
-                        )
+                        .record_failure(&plan.group.id, &upstream.id, plan.affinity_key.as_deref())
                         .await;
                     let should_retry = crate::scheduler::SchedulerRuntime::should_retry(
                         &plan.group,
@@ -399,11 +402,7 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
                 let count = request
                     .state
                     .scheduler
-                    .record_failure(
-                        &plan.group.id,
-                        &upstream.id,
-                        plan.affinity_key.as_deref(),
-                    )
+                    .record_failure(&plan.group.id, &upstream.id, plan.affinity_key.as_deref())
                     .await;
                 let should_retry = crate::scheduler::SchedulerRuntime::should_retry(
                     &plan.group,
@@ -574,58 +573,60 @@ async fn forward_with_upstream(
     request.state.events.bump_live_streams();
     let mut active_guard =
         ActiveRequestGuard::new(request.state.clone(), request.request_id.clone());
-    let (status, response_headers, _content_type, body, stream) = if upstream.kind
-        == UpstreamKind::PeerNode
-    {
-        send_peer_upstream(
-            request,
-            &upstream,
-            &target_url,
-            target_body,
-            &mut terminate_rx,
-        )
-        .await?
-    } else {
-        let http = request.state.http_for_upstream(&upstream)?;
-        let mut upstream_request = http
-            .request(
-                reqwest::Method::from_bytes(request.method.as_str().as_bytes())?,
+    let (status, response_headers, _content_type, body, stream) =
+        if upstream.kind == UpstreamKind::PeerNode {
+            send_peer_upstream(
+                request,
+                &upstream,
                 &target_url,
+                target_body,
+                &mut terminate_rx,
             )
-            .body(target_body);
-        upstream_request = apply_headers(
-            request.state,
-            &upstream,
-            upstream_request,
-            &request.headers,
-            request.endpoint_kind.client_wire_api(),
-        )
-        .await?;
-        let response = send_upstream_request(upstream_request, &mut terminate_rx).await?;
-        let status = StatusCode::from_u16(response.status().as_u16())?;
-        let response_headers = response.headers().clone();
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-            .to_string();
-        let streaming = content_type.contains("text/event-stream");
-        if streaming {
-            (
-                status,
-                response_headers,
-                content_type,
-                None,
-                Some(Box::pin(response.bytes_stream().map(|item| {
-                    item.map_err(io::Error::other)
-                })) as BoxStream<'static, Result<Bytes, io::Error>>),
-            )
+            .await?
         } else {
-            let bytes = read_response_bytes(response, &mut terminate_rx).await?;
-            (status, response_headers, content_type, Some(bytes), None)
-        }
-    };
+            let http = request.state.http_for_upstream(&upstream)?;
+            let mut upstream_request = http
+                .request(
+                    reqwest::Method::from_bytes(request.method.as_str().as_bytes())?,
+                    &target_url,
+                )
+                .body(target_body);
+            upstream_request = apply_headers(
+                request.state,
+                &upstream,
+                upstream_request,
+                &request.headers,
+                request.endpoint_kind.client_wire_api(),
+            )
+            .await?;
+            let response = send_upstream_request(upstream_request, &mut terminate_rx).await?;
+            let status = StatusCode::from_u16(response.status().as_u16())?;
+            let response_headers = response.headers().clone();
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            let streaming = content_type.contains("text/event-stream");
+            if streaming {
+                (
+                    status,
+                    response_headers,
+                    content_type,
+                    None,
+                    Some(Box::pin(
+                        response
+                            .bytes_stream()
+                            .map(|item| item.map_err(io::Error::other)),
+                    )
+                        as BoxStream<'static, Result<Bytes, io::Error>>),
+                )
+            } else {
+                let bytes = read_response_bytes(response, &mut terminate_rx).await?;
+                (status, response_headers, content_type, Some(bytes), None)
+            }
+        };
     if upstream.kind == UpstreamKind::CodexOauth
         && let Some(snapshot) =
             quota::snapshot_from_headers(&upstream.id, &to_axum_headers(&response_headers))
@@ -686,13 +687,17 @@ async fn forward_with_upstream(
             bytes.to_vec()
         } else if status.is_success() {
             match protocol_request.as_ref() {
-                Some(prepared) if !prepared.is_passthrough() => {
-                    serde_json::to_vec(&prepared.convert_json_response(&value).map_err(anyhow::Error::new)?)?
-                }
+                Some(prepared) if !prepared.is_passthrough() => serde_json::to_vec(
+                    &prepared
+                        .convert_json_response(&value)
+                        .map_err(anyhow::Error::new)?,
+                )?,
                 _ => bytes.to_vec(),
             }
         } else if let Some(client_api) = request.endpoint_kind.client_wire_api()
-            && protocol_request.as_ref().is_some_and(|prepared| !prepared.is_passthrough())
+            && protocol_request
+                .as_ref()
+                .is_some_and(|prepared| !prepared.is_passthrough())
         {
             compat::error_response_json(status, &bytes, client_api)
         } else {
@@ -717,11 +722,8 @@ async fn forward_with_upstream(
             }
         }
         let mut client_status = status;
-        if let Some(rewritten) = error_policy::rewrite_json_response(
-            status,
-            &response_body,
-            upstream.error_retry_policy,
-        )
+        if let Some(rewritten) =
+            error_policy::rewrite_json_response(status, &response_body, upstream.error_retry_policy)
         {
             tracing::warn!(
                 request_id = %request.request_id,
@@ -908,11 +910,7 @@ fn target_url(
     }
 }
 
-fn internal_error_value(
-    client_api: Option<WireApi>,
-    status: StatusCode,
-    message: &str,
-) -> Value {
+fn internal_error_value(client_api: Option<WireApi>, status: StatusCode, message: &str) -> Value {
     if client_api == Some(WireApi::AnthropicMessages) {
         let error_type = match status {
             StatusCode::BAD_REQUEST => "invalid_request_error",
@@ -1327,7 +1325,8 @@ fn process_complete_sse_blocks(
             });
             if let Some(bridge) = protocol_bridge.as_deref_mut() {
                 let bridge_output = bridge.push_block(&block);
-                let bridge_usage = usage::extract_usage_from_sse(&String::from_utf8_lossy(&bridge_output));
+                let bridge_usage =
+                    usage::extract_usage_from_sse(&String::from_utf8_lossy(&bridge_output));
                 usage.merge_max(&bridge_usage);
                 converted.extend_from_slice(&bridge_output);
             }
@@ -1341,8 +1340,14 @@ fn process_complete_sse_blocks(
 }
 
 fn find_sse_block_separator(buffer: &[u8]) -> Option<(usize, usize)> {
-    let lf = buffer.windows(2).position(|window| window == b"\n\n").map(|index| (index, 2));
-    let crlf = buffer.windows(4).position(|window| window == b"\r\n\r\n").map(|index| (index, 4));
+    let lf = buffer
+        .windows(2)
+        .position(|window| window == b"\n\n")
+        .map(|index| (index, 2));
+    let crlf = buffer
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| (index, 4));
     match (lf, crlf) {
         (Some(left), Some(right)) => Some(if left.0 <= right.0 { left } else { right }),
         (Some(found), None) | (None, Some(found)) => Some(found),

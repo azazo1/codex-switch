@@ -45,8 +45,7 @@ impl CodexSwitchApp {
 
                         for (index, log) in self.logs.iter().enumerate() {
                             let hover = log_hover_text(log, &self.state.model_capabilities);
-                            ui.label(upstream_text(log))
-                                .on_hover_text(hover.clone());
+                            ui.label(upstream_text(log)).on_hover_text(hover.clone());
                             let model_response = ui.label(model_text(log));
                             model_response.on_hover_text(hover);
                             ui.label(log.reasoning_effort.as_deref().unwrap_or("-"));

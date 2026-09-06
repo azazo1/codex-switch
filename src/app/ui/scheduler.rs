@@ -1,6 +1,4 @@
-use super::{
-    CodexSwitchApp, DeleteAction, DeleteConfirmation, ScheduleRuleOwner,
-};
+use super::{CodexSwitchApp, DeleteAction, DeleteConfirmation, ScheduleRuleOwner};
 use crate::core::models::{
     ScheduleGroup, ScheduleGroupChild, ScheduleGroupMember, ScheduleMode, ScheduleRouteRule,
     ScheduleRouteTargetKind, Upstream,
@@ -592,14 +590,7 @@ fn schedule_route_section_form(
     if editor.group.mode != ScheduleMode::ModelMapping {
         return;
     }
-    schedule_route_rules_form(
-        ui,
-        editor,
-        groups,
-        upstreams,
-        delete_confirmation,
-        owner,
-    );
+    schedule_route_rules_form(ui, editor, groups, upstreams, delete_confirmation, owner);
 }
 
 fn schedule_route_rules_form(

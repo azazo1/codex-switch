@@ -9,7 +9,10 @@ pub(crate) fn chat_to_responses_request_json(body: &[u8]) -> anyhow::Result<Vec<
         anyhow::bail!("chat requests with n greater than 1 cannot be converted");
     }
     for unsupported in ["audio", "modalities", "logprobs"] {
-        if object.get(unsupported).is_some_and(|value| !value.is_null()) {
+        if object
+            .get(unsupported)
+            .is_some_and(|value| !value.is_null())
+        {
             anyhow::bail!("chat field {unsupported} cannot be converted");
         }
     }
@@ -25,13 +28,23 @@ pub(crate) fn chat_to_responses_request_json(body: &[u8]) -> anyhow::Result<Vec<
     result.insert("input".to_string(), Value::Array(input));
     result.insert(
         "stream".to_string(),
-        json!(object.get("stream").and_then(Value::as_bool).unwrap_or(false)),
+        json!(
+            object
+                .get("stream")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        ),
     );
     result.insert("store".to_string(), Value::Bool(false));
     copy_field(object, &mut result, "temperature", "temperature");
     copy_field(object, &mut result, "top_p", "top_p");
     copy_field(object, &mut result, "max_tokens", "max_output_tokens");
-    copy_field(object, &mut result, "max_completion_tokens", "max_output_tokens");
+    copy_field(
+        object,
+        &mut result,
+        "max_completion_tokens",
+        "max_output_tokens",
+    );
     copy_field(object, &mut result, "user", "user");
     if object.get("stop").is_some_and(|value| !value.is_null()) {
         anyhow::bail!("chat stop sequences cannot be converted");
@@ -39,7 +52,11 @@ pub(crate) fn chat_to_responses_request_json(body: &[u8]) -> anyhow::Result<Vec<
     if let Some(tools) = object.get("tools").and_then(Value::as_array) {
         let mut converted = Vec::new();
         for tool in tools {
-            match tool.get("type").and_then(Value::as_str).unwrap_or("function") {
+            match tool
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("function")
+            {
                 "function" => {
                     let function = tool.get("function").ok_or_else(|| {
                         anyhow::anyhow!("chat function tool is missing function definition")
@@ -61,23 +78,38 @@ pub(crate) fn chat_to_responses_request_json(body: &[u8]) -> anyhow::Result<Vec<
         }
     }
     if let Some(choice) = object.get("tool_choice") {
-        result.insert("tool_choice".to_string(), chat_tool_choice_to_responses(choice));
+        result.insert(
+            "tool_choice".to_string(),
+            chat_tool_choice_to_responses(choice),
+        );
     }
     if let Some(parallel) = object.get("parallel_tool_calls") {
         result.insert("parallel_tool_calls".to_string(), parallel.clone());
     }
     if let Some(format) = object.get("response_format") {
-        result.insert("text".to_string(), json!({"format":chat_format_to_responses(format)}));
+        result.insert(
+            "text".to_string(),
+            json!({"format":chat_format_to_responses(format)}),
+        );
     }
     if let Some(effort) = object.get("reasoning_effort") {
-        result.insert("reasoning".to_string(), json!({"effort":effort,"summary":"auto"}));
-        result.insert("include".to_string(), json!(["reasoning.encrypted_content"]));
+        result.insert(
+            "reasoning".to_string(),
+            json!({"effort":effort,"summary":"auto"}),
+        );
+        result.insert(
+            "include".to_string(),
+            json!(["reasoning.encrypted_content"]),
+        );
     }
     Ok(serde_json::to_vec(&Value::Object(result))?)
 }
 
 fn append_chat_message(message: &Value, input: &mut Vec<Value>) -> anyhow::Result<()> {
-    let role = message.get("role").and_then(Value::as_str).unwrap_or("user");
+    let role = message
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or("user");
     match role {
         "tool" => {
             let call_id = message
@@ -122,7 +154,11 @@ fn append_chat_message(message: &Value, input: &mut Vec<Value>) -> anyhow::Resul
             let output = role == "assistant";
             let parts = chat_content_to_responses(message.get("content"), output)?;
             if !parts.is_empty() {
-                let mapped_role = if role == "developer" { "developer" } else { role };
+                let mapped_role = if role == "developer" {
+                    "developer"
+                } else {
+                    role
+                };
                 input.push(json!({"type":"message","role":mapped_role,"content":parts}));
             }
         }
@@ -194,13 +230,13 @@ pub(crate) fn responses_response_to_chat_json(value: &Value) -> Value {
                     }
                 }
                 "function_call" | "custom_tool_call" => {
-                    let arguments = if item.get("type").and_then(Value::as_str)
-                        == Some("custom_tool_call")
-                    {
-                        json!({"input":item.get("input").cloned().unwrap_or(Value::Null)}).to_string()
-                    } else {
-                        argument_string(item.get("arguments"))
-                    };
+                    let arguments =
+                        if item.get("type").and_then(Value::as_str) == Some("custom_tool_call") {
+                            json!({"input":item.get("input").cloned().unwrap_or(Value::Null)})
+                                .to_string()
+                        } else {
+                            argument_string(item.get("arguments"))
+                        };
                     tool_calls.push(json!({
                         "id":item.get("call_id").or_else(|| item.get("id")).cloned().unwrap_or_else(|| json!(uuid::Uuid::new_v4().to_string())),
                         "type":"function",
@@ -265,7 +301,10 @@ impl ResponsesToChatSseConverter {
         let Some(value) = sse_value(block) else {
             return String::new();
         };
-        let event_type = value.get("type").and_then(Value::as_str).unwrap_or_default();
+        let event_type = value
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         match event_type {
             "response.created" => {
                 if let Some(response) = value.get("response") {
@@ -280,7 +319,11 @@ impl ResponsesToChatSseConverter {
             }
             "response.output_text.delta" => {
                 let mut output = self.role_chunk();
-                output.push_str(&self.chunk(json!({"content":value.get("delta").cloned().unwrap_or_else(|| json!(""))}), Value::Null, None));
+                output.push_str(&self.chunk(
+                    json!({"content":value.get("delta").cloned().unwrap_or_else(|| json!(""))}),
+                    Value::Null,
+                    None,
+                ));
                 output
             }
             "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
@@ -292,9 +335,7 @@ impl ResponsesToChatSseConverter {
             "response.function_call_arguments.delta" | "response.custom_tool_call_input.delta" => {
                 self.tool_delta(&value)
             }
-            "response.completed" | "response.done" | "response.incomplete" => {
-                self.finish(&value)
-            }
+            "response.completed" | "response.done" | "response.incomplete" => self.finish(&value),
             "response.failed" => self.fail(&value),
             _ => String::new(),
         }
@@ -320,10 +361,16 @@ impl ResponsesToChatSseConverter {
         let Some(item) = value.get("item") else {
             return String::new();
         };
-        if !matches!(item.get("type").and_then(Value::as_str), Some("function_call" | "custom_tool_call")) {
+        if !matches!(
+            item.get("type").and_then(Value::as_str),
+            Some("function_call" | "custom_tool_call")
+        ) {
             return String::new();
         }
-        let output_index = value.get("output_index").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let output_index = value
+            .get("output_index")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
         let tool_index = self.next_tool_index;
         self.next_tool_index += 1;
         self.tool_indexes.insert(output_index, tool_index);
@@ -338,14 +385,21 @@ impl ResponsesToChatSseConverter {
     }
 
     fn tool_delta(&self, value: &Value) -> String {
-        let output_index = value.get("output_index").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let output_index = value
+            .get("output_index")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
         let Some(tool_index) = self.tool_indexes.get(&output_index) else {
             return String::new();
         };
-        self.chunk(json!({"tool_calls":[{
-            "index":tool_index,
-            "function":{"arguments":value.get("delta").cloned().unwrap_or_else(|| json!(""))}
-        }]}), Value::Null, None)
+        self.chunk(
+            json!({"tool_calls":[{
+                "index":tool_index,
+                "function":{"arguments":value.get("delta").cloned().unwrap_or_else(|| json!(""))}
+            }]}),
+            Value::Null,
+            None,
+        )
     }
 
     fn finish(&mut self, value: &Value) -> String {
@@ -398,8 +452,14 @@ impl ResponsesToChatSseConverter {
 }
 
 fn responses_usage_to_chat(usage: Option<&Value>) -> Value {
-    let input = usage.and_then(|value| value.get("input_tokens")).and_then(Value::as_i64).unwrap_or(0);
-    let output = usage.and_then(|value| value.get("output_tokens")).and_then(Value::as_i64).unwrap_or(0);
+    let input = usage
+        .and_then(|value| value.get("input_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let output = usage
+        .and_then(|value| value.get("output_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
     let cached = usage
         .and_then(|value| value.pointer("/input_tokens_details/cached_tokens"))
         .and_then(Value::as_i64)

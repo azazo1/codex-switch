@@ -22,7 +22,11 @@ pub fn app_icon() -> egui::IconData {
 }
 
 pub fn tray_icon_for_theme(dark: bool) -> anyhow::Result<tray_icon::Icon> {
-    let svg = if dark { TRAY_ICON_LIGHT_SVG } else { TRAY_ICON_SVG };
+    let svg = if dark {
+        TRAY_ICON_LIGHT_SVG
+    } else {
+        TRAY_ICON_SVG
+    };
     let rgba = render_svg(svg, TRAY_ICON_SIZE)?;
     tray_icon::Icon::from_rgba(rgba, TRAY_ICON_SIZE, TRAY_ICON_SIZE).map_err(Into::into)
 }
@@ -76,14 +80,14 @@ mod tests {
     #[test]
     fn scaled_tray_icon_fills_canvas() {
         let tray = render_svg(TRAY_ICON_SVG, TRAY_ICON_SIZE).unwrap();
-        let reaches_scaled_region = tray
-            .chunks_exact(4)
-            .enumerate()
-            .any(|(index, pixel)| {
-                let x = index % TRAY_ICON_SIZE as usize;
-                let y = index / TRAY_ICON_SIZE as usize;
-                pixel[3] > 0 && x >= 48 && y >= 48
-            });
-        assert!(reaches_scaled_region, "svg should be scaled beyond its original 32px bounds");
+        let reaches_scaled_region = tray.chunks_exact(4).enumerate().any(|(index, pixel)| {
+            let x = index % TRAY_ICON_SIZE as usize;
+            let y = index / TRAY_ICON_SIZE as usize;
+            pixel[3] > 0 && x >= 48 && y >= 48
+        });
+        assert!(
+            reaches_scaled_region,
+            "svg should be scaled beyond its original 32px bounds"
+        );
     }
 }

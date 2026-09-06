@@ -75,14 +75,8 @@ pub(super) fn rewrite_json_response(
         return None;
     }
     let mut value = serde_json::from_slice::<Value>(body).ok();
-    let error_code = value
-        .as_ref()
-        .and_then(error_code)
-        .map(str::to_string);
-    let error_type = value
-        .as_ref()
-        .and_then(error_type)
-        .map(str::to_string);
+    let error_code = value.as_ref().and_then(error_code).map(str::to_string);
+    let error_type = value.as_ref().and_then(error_type).map(str::to_string);
     let status_rewritten = match status {
         StatusCode::TOO_MANY_REQUESTS => {
             policy == ErrorRetryPolicy::All
@@ -112,11 +106,7 @@ pub(super) fn rewrite_json_response(
     })
 }
 
-fn append_rewritten_block(
-    output: &mut SseRewriteOutput,
-    block: &[u8],
-    policy: ErrorRetryPolicy,
-) {
+fn append_rewritten_block(output: &mut SseRewriteOutput, block: &[u8], policy: ErrorRetryPolicy) {
     if let Some(rewritten) = rewrite_sse_block(block, policy) {
         output.bytes.extend_from_slice(&rewritten);
         output.rewrite_count += 1;
@@ -207,9 +197,7 @@ fn is_hard_limit(code: Option<&str>, error_type: Option<&str>) -> bool {
 
 fn find_sse_block_separator(buffer: &[u8]) -> Option<(usize, usize)> {
     let lf = buffer.windows(2).position(|window| window == b"\n\n");
-    let crlf = buffer
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n");
+    let crlf = buffer.windows(4).position(|window| window == b"\r\n\r\n");
     match (lf, crlf) {
         (Some(left), Some(right)) => Some(if left <= right { (left, 2) } else { (right, 4) }),
         (Some(index), None) => Some((index, 2)),
@@ -301,9 +289,7 @@ mod tests {
 
     fn sse_error_code(bytes: &[u8]) -> Option<String> {
         let text = std::str::from_utf8(bytes).ok()?;
-        let data = text
-            .lines()
-            .find_map(|line| line.strip_prefix("data: "))?;
+        let data = text.lines().find_map(|line| line.strip_prefix("data: "))?;
         let value: Value = serde_json::from_str(data).ok()?;
         error_code(&value).map(str::to_string)
     }

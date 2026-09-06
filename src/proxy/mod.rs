@@ -7,5 +7,5 @@ mod server;
 pub(crate) mod transform;
 pub(crate) mod upstream_auth;
 
-pub use server::{ServerHandle, start_server};
 pub use server::start_peer_listener;
+pub use server::{ServerHandle, start_server};

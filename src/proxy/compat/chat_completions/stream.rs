@@ -1,8 +1,8 @@
-use super::{ChatResponseContext, response_tool_item_from_chat_name};
 use super::shared::{
     chat_message_text, custom_input, message_item_with_id, new_call_id, new_item_id,
     normalize_chat_usage, reasoning_from_chat, reasoning_item_with_id,
 };
+use super::{ChatResponseContext, response_tool_item_from_chat_name};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -45,7 +45,10 @@ struct ToolState {
 impl ChatSseConverter {
     pub(crate) fn new(context: ChatResponseContext) -> Self {
         Self {
-            model: context.model.clone().unwrap_or_else(|| "unknown".to_string()),
+            model: context
+                .model
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
             context,
             response_id: new_item_id("resp"),
             sequence_number: 0,
@@ -159,7 +162,10 @@ impl ChatSseConverter {
                     self.append_tool_delta(tool_call, &mut out);
                 }
             }
-            if choice.get("finish_reason").is_some_and(|value| !value.is_null()) {
+            if choice
+                .get("finish_reason")
+                .is_some_and(|value| !value.is_null())
+            {
                 out.push_str(&self.finalize_outputs());
             }
         }
@@ -300,7 +306,9 @@ impl ChatSseConverter {
                     }),
                 ));
             }
-        } else if already_added && !argument_delta.is_empty() && !custom
+        } else if already_added
+            && !argument_delta.is_empty()
+            && !custom
             && let Some(output_index) = output_index
         {
             out.push_str(&self.event(
