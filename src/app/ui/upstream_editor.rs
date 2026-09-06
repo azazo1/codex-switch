@@ -287,8 +287,6 @@ impl UpstreamEditor {
                     .range(1..=i64::MAX)
                     .speed(1),
             );
-        });
-        ui.horizontal(|ui| {
             ui.label("价格倍率");
             ui.add(
                 egui::DragValue::new(&mut self.upstream.price_multiplier)
