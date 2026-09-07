@@ -54,7 +54,7 @@ x-api-key: <仪表盘本地访问 key>
 - 总 token 用量上限: 按 input, output, cache_read 和 cache_creation token 总和计算.
 - 固定时长过期: 创建时输入数字并选择分钟, 小时或天, 从创建时刻开始倒计时.
 
-无效, 禁用或过期的临时 key 返回 `401` 和 `authentication_error`. 达到次数或 token 上限的 key 返回 `429` 和 `rate_limit_error`. 临时 key 与主 key 一样可以通过 Bearer 或 `x-api-key` 发送, 且不会被转发给上游.
+无效, 禁用或过期的临时 key 返回 `401` 和 `authentication_error`. 达到次数或 token 上限的 key 返回 `429` 和 `rate_limit_error`. 在页面中重置用量后, 该 key 立即可以再次使用, 限额, key 值和过期时间保持不变. 临时 key 与主 key 一样可以通过 Bearer 或 `x-api-key` 发送, 且不会被转发给上游.
 
 由于 token 上限在请求完成后累计, 单个请求可能超过剩余额度, 但该 key 会在后续请求中被拒绝. 并发请求也可能让最后一小批成功请求略超次数上限.
 

@@ -40,6 +40,7 @@ impl CodexSwitchApp {
         let mut toggle_id = None;
         let mut delete_id = None;
         let mut edit_id = None;
+        let mut reset_id = None;
         let mut token_display_mode = self.token_display_mode;
         egui::ScrollArea::vertical()
             .id_salt("temp_keys_page")
@@ -164,6 +165,13 @@ impl CodexSwitchApp {
                                 });
                                 ui.label(format_expires_at(key.expires_at));
                                 ui.horizontal(|ui| {
+                                    if ui
+                                        .button("重置")
+                                        .on_hover_text("重置已用次数和 token 用量")
+                                        .clicked()
+                                    {
+                                        reset_id = Some(key.id.clone());
+                                    }
                                     if ui.button("编辑").clicked() {
                                         edit_id = Some(key.id.clone());
                                     }
@@ -186,6 +194,9 @@ impl CodexSwitchApp {
         }
         if let Some(id) = edit_id {
             self.open_temp_key_editor(&id);
+        }
+        if let Some(id) = reset_id {
+            self.reset_temporary_access_key_usage(&id);
         }
         if let Some(id) = delete_id {
             self.request_delete(
@@ -312,6 +323,21 @@ impl CodexSwitchApp {
             }
             Err(err) => {
                 self.status = format!("更新临时 Key 失败: {err}");
+            }
+        }
+    }
+
+    fn reset_temporary_access_key_usage(&mut self, id: &str) {
+        match self
+            .runtime
+            .block_on(self.state.store.reset_temporary_access_key_usage(id))
+        {
+            Ok(()) => {
+                self.status = "临时 Key 用量已重置".to_string();
+                self.refresh_temporary_access_keys();
+            }
+            Err(err) => {
+                self.status = format!("重置临时 Key 失败: {err}");
             }
         }
     }

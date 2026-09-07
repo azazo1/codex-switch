@@ -105,6 +105,22 @@ impl Store {
         Ok(())
     }
 
+    pub async fn reset_temporary_access_key_usage(&self, id: &str) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE temporary_access_keys
+             SET requests_used = 0,
+                 tokens_used = 0,
+                 last_used_at = NULL,
+                 updated_at = ?2
+             WHERE id = ?1",
+        )
+        .bind(id)
+        .bind(Utc::now().to_rfc3339())
+        .execute(self.pool())
+        .await?;
+        Ok(())
+    }
+
     pub async fn record_temporary_access_key_success(
         &self,
         id: &str,
@@ -296,5 +312,57 @@ mod tests {
             .await
             .unwrap();
         assert!(old.is_none());
+    }
+
+    #[tokio::test]
+    async fn resets_temporary_key_usage_without_changing_limits() {
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-temp-key-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let store = Store::open(path).await.unwrap();
+        let expires_at = Utc::now().timestamp() + 3600;
+        let key = TemporaryAccessKey::new(
+            "key-reset".to_string(),
+            "shared".to_string(),
+            "cs-tmp-reset".to_string(),
+            Some(3),
+            Some(1000),
+            Some(expires_at),
+        );
+        store.create_temporary_access_key(&key).await.unwrap();
+        store
+            .record_temporary_access_key_success(
+                "key-reset",
+                &TokenUsage {
+                    input_tokens: 100,
+                    output_tokens: 50,
+                    cache_read_tokens: 20,
+                    cache_creation_tokens: 10,
+                    total_tokens: 180,
+                },
+            )
+            .await
+            .unwrap();
+
+        store
+            .reset_temporary_access_key_usage("key-reset")
+            .await
+            .unwrap();
+
+        let reset = store
+            .find_temporary_access_key("cs-tmp-reset")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reset.requests_used, 0);
+        assert_eq!(reset.tokens_used, 0);
+        assert!(reset.last_used_at.is_none());
+        assert_eq!(reset.name, "shared");
+        assert_eq!(reset.key_value, "cs-tmp-reset");
+        assert!(reset.enabled);
+        assert_eq!(reset.request_limit, Some(3));
+        assert_eq!(reset.token_limit, Some(1000));
+        assert_eq!(reset.expires_at, Some(expires_at));
     }
 }
