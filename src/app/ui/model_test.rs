@@ -493,6 +493,7 @@ impl CodexSwitchApp {
         if self.model_test_ui.single_result.started.is_some() {
             model_test_stream_block(
                 ui,
+                egui::Id::new("model_test_single_live"),
                 &self.model_test_ui.single_result.live_reasoning,
                 &self.model_test_ui.single_result.live_text,
                 true,
@@ -530,7 +531,9 @@ impl CodexSwitchApp {
                 if self.model_test_ui.chat_messages.is_empty() {
                     ui.label("暂无消息, 在下方输入内容开始对话");
                 }
-                for entry in &self.model_test_ui.chat_messages {
+                for (message_index, entry) in
+                    self.model_test_ui.chat_messages.iter().enumerate()
+                {
                     ui.horizontal_wrapped(|ui| {
                         let (role_label, color) = match entry.role {
                             ChatRole::User => ("[用户]", egui::Color32::from_rgb(96, 165, 250)),
@@ -550,7 +553,11 @@ impl CodexSwitchApp {
                         );
                     });
                     if !entry.reasoning.is_empty() {
-                        model_test_reasoning_block(ui, &entry.reasoning);
+                        model_test_reasoning_block(
+                            ui,
+                            egui::Id::new("model_test_chat_reasoning").with(message_index),
+                            &entry.reasoning,
+                        );
                     }
                     if let Some(meta) = &entry.meta {
                         ui.horizontal(|ui| {
@@ -584,6 +591,7 @@ impl CodexSwitchApp {
                         });
                         model_test_stream_block(
                             ui,
+                            egui::Id::new("model_test_chat_live"),
                             &self.model_test_ui.chat_live_reasoning,
                             &self.model_test_ui.chat_live_text,
                             false,
@@ -740,7 +748,11 @@ impl CodexSwitchApp {
             ui.colored_label(error_color(), format!("错误: {error}"));
         }
         if !outcome.reasoning_text.is_empty() {
-            model_test_reasoning_block(ui, &outcome.reasoning_text);
+            model_test_reasoning_block(
+                ui,
+                egui::Id::new("model_test_single_reasoning"),
+                &outcome.reasoning_text,
+            );
         }
         if !outcome.output_text.is_empty() {
             ui.horizontal(|ui| {
@@ -1229,14 +1241,16 @@ fn outcome_status_label(outcome: &ModelTestOutcome) -> (&'static str, egui::Colo
 }
 
 /// 渲染流式/已完成的回复块: 思维链折叠区 + 正文区, live 为 true 时标注生成中.
+/// id_salt 必须在块的生命周期内稳定, 否则折叠展开状态会随内容变化丢失.
 fn model_test_stream_block(
     ui: &mut egui::Ui,
+    id_salt: egui::Id,
     reasoning: &str,
     text: &str,
     live: bool,
 ) {
     if !reasoning.is_empty() {
-        model_test_reasoning_block(ui, reasoning);
+        model_test_reasoning_block(ui, id_salt.with("reasoning"), reasoning);
     }
     ui.horizontal(|ui| {
         ui.label("回复");
@@ -1245,7 +1259,7 @@ fn model_test_stream_block(
         }
     });
     egui::ScrollArea::vertical()
-        .id_salt("model_test_stream_text")
+        .id_salt(id_salt.with("text"))
         .max_height(RESULT_TEXT_HEIGHT)
         .stick_to_bottom(live)
         .show(ui, |ui| {
@@ -1258,15 +1272,16 @@ fn model_test_stream_block(
         });
 }
 
-/// 渲染折叠的思维链区块.
-fn model_test_reasoning_block(ui: &mut egui::Ui, reasoning: &str) {
+/// 渲染折叠的思维链区块, 流式中展开会自动跟随最新内容.
+fn model_test_reasoning_block(ui: &mut egui::Ui, id_salt: egui::Id, reasoning: &str) {
     egui::CollapsingHeader::new("思维链")
-        .id_salt(egui::Id::new("model_test_reasoning").with(reasoning.len()))
+        .id_salt(id_salt)
         .default_open(false)
         .show(ui, |ui| {
             egui::ScrollArea::vertical()
-                .id_salt("model_test_reasoning_text")
+                .id_salt(id_salt.with("text"))
                 .max_height(RESULT_TEXT_HEIGHT)
+                .stick_to_bottom(true)
                 .show(ui, |ui| {
                     ui.add(
                         egui::Label::new(egui::RichText::new(reasoning).weak())
