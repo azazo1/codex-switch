@@ -187,7 +187,7 @@ async fn test_runtime() -> CacheKeepaliveRuntime {
     CacheKeepaliveRuntime::new(
         store,
         credentials,
-        reqwest::Client::new(),
+        crate::logging::network::HttpClient::new(),
         AppEvents::default(),
     )
 }

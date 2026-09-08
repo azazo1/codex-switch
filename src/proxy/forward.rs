@@ -845,7 +845,7 @@ async fn send_peer_upstream(
 }
 
 async fn send_upstream_request(
-    upstream_request: reqwest::RequestBuilder,
+    upstream_request: crate::logging::network::RequestBuilder,
     terminate_rx: &mut watch::Receiver<bool>,
 ) -> anyhow::Result<reqwest::Response> {
     let send_future = upstream_request.send();

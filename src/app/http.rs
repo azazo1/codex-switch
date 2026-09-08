@@ -1,13 +1,15 @@
+use crate::logging::network::HttpClient;
 use anyhow::Context;
 
 const USER_AGENT: &str = "codex-switch/0.1.0";
 
-pub fn build_client(proxy_url: Option<&str>) -> anyhow::Result<reqwest::Client> {
+pub fn build_client(proxy_url: Option<&str>) -> anyhow::Result<HttpClient> {
     let mut builder = reqwest::Client::builder().user_agent(USER_AGENT);
     if let Some(proxy_url) = proxy_url.map(str::trim).filter(|value| !value.is_empty()) {
         builder = builder.proxy(proxy_from_url(proxy_url)?);
     }
-    builder.build().context("failed to build http client")
+    let client = builder.build().context("failed to build http client")?;
+    Ok(HttpClient::from_client(client))
 }
 
 pub fn validate_proxy_url(proxy_url: &str) -> anyhow::Result<()> {

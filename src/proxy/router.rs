@@ -2123,7 +2123,7 @@ mod tests {
         let cache_keepalive = CacheKeepaliveRuntime::new(
             store.clone(),
             credentials.clone(),
-            reqwest::Client::new(),
+            crate::logging::network::HttpClient::new(),
             events.clone(),
         );
         let oauth_accounts = crate::oauth::OAuthAccountService::new(store.clone());
@@ -2133,7 +2133,7 @@ mod tests {
             model_capabilities: Default::default(),
             credentials,
             oauth_accounts,
-            http: reqwest::Client::new(),
+            http: crate::logging::network::HttpClient::new(),
             events,
             scheduler: Default::default(),
             live_requests: Default::default(),

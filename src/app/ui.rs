@@ -504,6 +504,7 @@ pub struct CodexSwitchApp {
     debug_log_enabled: bool,
     debug_log_path: String,
     proxy_log_path: String,
+    network_har_path: String,
     log_rotation_size_mb: u64,
     log_max_files: usize,
     oauth_ui: oauth::OAuthUiState,
@@ -590,6 +591,9 @@ impl CodexSwitchApp {
             .map(|path| path.display().to_string())
             .unwrap_or_default();
         let proxy_log_path = crate::logging::proxy_log_file_path()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
+        let network_har_path = crate::logging::network_har_file_path()
             .map(|path| path.display().to_string())
             .unwrap_or_default();
         let last_seen_request_log_version = state.events.request_log_version();
@@ -690,6 +694,7 @@ impl CodexSwitchApp {
             debug_log_enabled: rotation_config.enabled,
             debug_log_path,
             proxy_log_path,
+            network_har_path,
             log_rotation_size_mb: rotation_config.size_mb,
             log_max_files: rotation_config.max_files,
             oauth_ui: oauth::OAuthUiState::default(),

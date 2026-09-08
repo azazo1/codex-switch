@@ -258,14 +258,14 @@ impl CodexSwitchApp {
         });
         ui.horizontal_wrapped(|ui| {
             ui.label("单文件大小")
-                .on_hover_text("作用于主日志和模型调用日志两个文件");
+                .on_hover_text("作用于主日志, 模型调用日志和网络请求 HAR 文件");
             ui.add(
                 egui::DragValue::new(&mut self.log_rotation_size_mb)
                     .range(1..=10240)
                     .suffix(" MB"),
             );
             ui.label("轮转文件数")
-                .on_hover_text("作用于主日志和模型调用日志两个文件");
+                .on_hover_text("作用于主日志, 模型调用日志和网络请求 HAR 文件");
             ui.add(egui::DragValue::new(&mut self.log_max_files).range(1..=1000));
             if ui.button("应用轮转设置").clicked() {
                 self.apply_log_rotation_settings();
@@ -281,7 +281,12 @@ impl CodexSwitchApp {
             let path = self.proxy_log_path.clone();
             self.log_path_row(ui, &path);
         });
-        ui.label("启用后会记录完整入站 body, 转换后的上游 body, 上游响应和流式块, 可能包含 prompt 和模型输出, 不要公开日志文件.");
+        ui.horizontal_wrapped(|ui| {
+            ui.label("网络请求 HAR 路径");
+            let path = self.network_har_path.clone();
+            self.log_path_row(ui, &path);
+        });
+        ui.label("开启调试日志后会记录完整入站 body, 转换后的上游 body, 上游响应和流式块, 可能包含 prompt 和模型输出, 不要公开日志文件. 网络请求 HAR 文件记录所有出站请求和响应的头与体, Authorization 和 API Key 会脱敏.");
     }
 
     fn log_path_row(&mut self, ui: &mut egui::Ui, path: &str) {

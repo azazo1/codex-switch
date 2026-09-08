@@ -3,6 +3,7 @@ use crate::cache_keepalive::CacheKeepaliveRuntime;
 use crate::core::model_capabilities::ModelCapabilityCache;
 use crate::core::models::{Upstream, UpstreamKind};
 use crate::live::LiveRequestStore;
+use crate::logging::network::HttpClient;
 use crate::oauth::OAuthAccountService;
 use crate::peer::PeerRuntime;
 use crate::scheduler::SchedulerRuntime;
@@ -25,7 +26,7 @@ pub struct AppState {
     pub model_capabilities: ModelCapabilityCache,
     pub credentials: CredentialStore,
     pub oauth_accounts: OAuthAccountService,
-    pub http: reqwest::Client,
+    pub http: HttpClient,
     pub events: AppEvents,
     pub scheduler: SchedulerRuntime,
     pub live_requests: LiveRequestStore,
@@ -148,7 +149,7 @@ impl AppState {
         Ok(state)
     }
 
-    pub fn http_for_upstream(&self, upstream: &Upstream) -> anyhow::Result<reqwest::Client> {
+    pub fn http_for_upstream(&self, upstream: &Upstream) -> anyhow::Result<HttpClient> {
         if upstream.kind == UpstreamKind::PeerNode {
             anyhow::bail!("peer node requests must use a pinned tls client");
         }

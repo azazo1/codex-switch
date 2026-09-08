@@ -1,3 +1,6 @@
+pub(crate) mod har;
+pub(crate) mod network;
+
 use crate::storage::Store;
 use anyhow::Context;
 use chrono::{DateTime, Local};
@@ -18,6 +21,7 @@ const LOG_FILE_ENV: &str = "CODEX_SWITCH_LOG_FILE";
 const LOG_BODIES_ENV: &str = "CODEX_SWITCH_LOG_BODIES";
 const MAIN_LOG_FILE_NAME: &str = "codex-switch.log";
 const PROXY_LOG_FILE_NAME: &str = "codex-switch-proxy.log";
+const NETWORK_HAR_FILE_NAME: &str = "codex-switch-network.har";
 
 const MAIN_FILTER_BASE: &str = "info,codex_switch::proxy=off,tower_http=off";
 const MAIN_FILTER_DEBUG: &str = "info,codex_switch=trace,codex_switch::proxy=off,tower_http=off";
@@ -317,6 +321,7 @@ pub(crate) fn set_rotation_config(size_mb: u64, max_files: usize) -> anyhow::Res
     if env_override_active() {
         return Ok(());
     }
+    har::set_rotation_config(size_mb, max_files);
     let controls = CONTROLS
         .get()
         .context("tracing controls are not initialized")?;
@@ -360,18 +365,29 @@ pub(crate) fn main_log_file_path() -> anyhow::Result<PathBuf> {
 
 pub(crate) fn proxy_log_file_path() -> anyhow::Result<PathBuf> {
     if let Some(main_path) = std::env::var_os(LOG_FILE_ENV).filter(|path| !path.is_empty()) {
-        let main_path = PathBuf::from(main_path);
-        let proxy_name = main_path
-            .file_stem()
-            .map(|stem| {
-                let mut name = stem.to_os_string();
-                name.push("-proxy.log");
-                name
-            })
-            .unwrap_or_else(|| PROXY_LOG_FILE_NAME.into());
-        return Ok(main_path.with_file_name(proxy_name));
+        return Ok(variant_log_file_path(&main_path, "-proxy.log"));
     }
     Ok(crate::app::data_dir()?.join(PROXY_LOG_FILE_NAME))
+}
+
+pub(crate) fn network_har_file_path() -> anyhow::Result<PathBuf> {
+    if let Some(main_path) = std::env::var_os(LOG_FILE_ENV).filter(|path| !path.is_empty()) {
+        return Ok(variant_log_file_path(&main_path, "-network.har"));
+    }
+    Ok(crate::app::data_dir()?.join(NETWORK_HAR_FILE_NAME))
+}
+
+fn variant_log_file_path(main_path: &std::ffi::OsStr, suffix: &str) -> PathBuf {
+    let main_path = PathBuf::from(main_path);
+    let name = main_path
+        .file_stem()
+        .map(|stem| {
+            let mut name = stem.to_os_string();
+            name.push(suffix);
+            name
+        })
+        .unwrap_or_else(|| suffix.trim_start_matches('-').into());
+    main_path.with_file_name(name)
 }
 
 fn main_log_filter(debug: bool) -> &'static str {
@@ -444,7 +460,7 @@ fn replace_writer_state(
     Ok(())
 }
 
-fn set_body_logging_enabled(enabled: bool) {
+pub(crate) fn set_body_logging_enabled(enabled: bool) {
     BODY_LOGGING_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
@@ -561,7 +577,11 @@ mod tests {
     use crate::storage::Store;
     use chrono::TimeZone;
     use std::io::Write;
+    use std::sync::Mutex as TestMutex;
     use uuid::Uuid;
+
+    /// 串行化所有触碰 BODY_LOGGING_ENABLED 全局开关的测试.
+    pub(crate) static BODY_FLAG_TEST_LOCK: TestMutex<()> = TestMutex::new(());
 
     fn temp_log_path() -> PathBuf {
         std::env::temp_dir().join(format!("codex-switch-log-{}", Uuid::new_v4()))
@@ -668,6 +688,7 @@ mod tests {
 
     #[test]
     fn body_logging_flag_can_be_toggled() {
+        let _guard = BODY_FLAG_TEST_LOCK.lock().unwrap_or_else(|err| err.into_inner());
         set_body_logging_enabled(true);
         assert!(body_logging_enabled());
         set_body_logging_enabled(false);

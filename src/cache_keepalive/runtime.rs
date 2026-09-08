@@ -31,7 +31,7 @@ pub struct CacheKeepaliveRuntime {
     pub(super) inner: Arc<Mutex<CacheKeepaliveInner>>,
     pub(super) store: Store,
     credentials: CredentialStore,
-    http: reqwest::Client,
+    http: crate::logging::network::HttpClient,
     events: AppEvents,
 }
 
@@ -39,7 +39,7 @@ impl CacheKeepaliveRuntime {
     pub fn new(
         store: Store,
         credentials: CredentialStore,
-        http: reqwest::Client,
+        http: crate::logging::network::HttpClient,
         events: AppEvents,
     ) -> Self {
         Self {

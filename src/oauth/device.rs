@@ -1,3 +1,4 @@
+use crate::logging::network::HttpClient;
 use crate::oauth::token::{OAuthTokenResponse, exchange_code};
 use anyhow::{Context, anyhow};
 use serde::Deserialize;
@@ -39,12 +40,12 @@ struct DevicePollSuccess {
     code_verifier: String,
 }
 
-pub async fn start_device_flow(http: &reqwest::Client) -> anyhow::Result<DeviceFlow> {
+pub async fn start_device_flow(http: &HttpClient) -> anyhow::Result<DeviceFlow> {
     start_device_flow_at(http, DEVICE_AUTH_USERCODE_URL).await
 }
 
 async fn start_device_flow_at(
-    http: &reqwest::Client,
+    http: &HttpClient,
     user_code_url: &str,
 ) -> anyhow::Result<DeviceFlow> {
     tracing::info!("starting codex oauth device flow");
@@ -72,14 +73,14 @@ async fn start_device_flow_at(
 }
 
 pub async fn poll_device_flow(
-    http: &reqwest::Client,
+    http: &HttpClient,
     flow: &DeviceFlow,
 ) -> anyhow::Result<DevicePollOutcome> {
     poll_device_flow_at(http, flow, DEVICE_AUTH_TOKEN_URL).await
 }
 
 async fn poll_device_flow_at(
-    http: &reqwest::Client,
+    http: &HttpClient,
     flow: &DeviceFlow,
     token_url: &str,
 ) -> anyhow::Result<DevicePollOutcome> {
@@ -157,7 +158,7 @@ mod tests {
         let server = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
-        let http = reqwest::Client::new();
+        let http = HttpClient::new();
         let flow = start_device_flow_at(&http, &format!("http://{address}/start"))
             .await
             .unwrap();

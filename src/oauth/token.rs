@@ -1,5 +1,6 @@
 use crate::app::AppState;
 use crate::core::models::Upstream;
+use crate::logging::network::HttpClient;
 use anyhow::{Context, anyhow};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
@@ -38,7 +39,7 @@ struct OpenAiAuthClaim {
 }
 
 pub async fn exchange_code(
-    http: &reqwest::Client,
+    http: &HttpClient,
     code: &str,
     code_verifier: &str,
 ) -> anyhow::Result<OAuthTokenResponse> {
@@ -60,7 +61,7 @@ pub async fn exchange_code(
 }
 
 pub async fn refresh_token(
-    http: &reqwest::Client,
+    http: &HttpClient,
     refresh_token: &str,
 ) -> anyhow::Result<OAuthTokenResponse> {
     let response = http

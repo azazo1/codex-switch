@@ -1,5 +1,6 @@
 use crate::app::AppState;
 use crate::core::models::{Upstream, UpstreamKind, WireApi};
+use crate::logging::network::RequestBuilder;
 use crate::oauth;
 use crate::proxy::upstream_auth;
 use axum::http::HeaderMap;
@@ -7,10 +8,10 @@ use axum::http::HeaderMap;
 pub(super) async fn apply_headers(
     state: &AppState,
     upstream: &Upstream,
-    mut request: reqwest::RequestBuilder,
+    mut request: RequestBuilder,
     headers: &HeaderMap,
     client_wire_api: Option<WireApi>,
-) -> anyhow::Result<reqwest::RequestBuilder> {
+) -> anyhow::Result<RequestBuilder> {
     let preserve_anthropic = client_wire_api == Some(WireApi::AnthropicMessages)
         && upstream.wire_api == WireApi::AnthropicMessages;
     for (name, value) in headers {

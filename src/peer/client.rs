@@ -1,5 +1,7 @@
+use crate::logging::har::PendingHar;
+use crate::logging::network::TeeStream;
 use anyhow::Context;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use futures_util::{Stream, StreamExt};
 use http_body_util::{BodyExt, Full};
 use hyper::Request;
@@ -25,7 +27,7 @@ pub struct PeerHttpClient {
 pub struct PeerHttpResponse {
     pub status: hyper::StatusCode,
     pub headers: hyper::HeaderMap,
-    body: Incoming,
+    body: TeeStream<http_body_util::BodyDataStream<Incoming>>,
 }
 
 impl PeerHttpClient {
@@ -69,27 +71,44 @@ impl PeerHttpClient {
         for (name, value) in &headers {
             request = request.header(name, value);
         }
+        let pending = PendingHar::start_hyper(method, url, &headers, &body);
         let request = request
             .body(Full::new(Bytes::from(body)))
             .context("failed to build peer request")?;
-        send_https_request(self.tls.clone(), &host, port, request).await
+        let response = match send_https_request(self.tls.clone(), &host, port, request).await {
+            Ok(response) => response,
+            Err(err) => {
+                if let Some(pending) = &pending {
+                    pending.clone().fail(&err);
+                }
+                return Err(err);
+            }
+        };
+        let (status, response_headers, body) = response;
+        if let Some(pending) = &pending {
+            pending.clone().on_response_hyper(status, &response_headers);
+        }
+        Ok(PeerHttpResponse {
+            status,
+            headers: response_headers,
+            body: TeeStream::new(body.into_data_stream(), pending),
+        })
     }
 }
 
 impl PeerHttpResponse {
     pub async fn bytes(self) -> anyhow::Result<Bytes> {
-        Ok(self
-            .body
-            .collect()
-            .await
-            .context("failed to read peer response")?
-            .to_bytes())
+        let mut body = self.body;
+        let mut buffer = BytesMut::new();
+        while let Some(chunk) = body.next().await {
+            let chunk = chunk.context("failed to read peer response")?;
+            buffer.extend_from_slice(&chunk);
+        }
+        Ok(buffer.freeze())
     }
 
     pub fn bytes_stream(self) -> impl Stream<Item = Result<Bytes, io::Error>> {
-        self.body
-            .into_data_stream()
-            .map(|item| item.map_err(io::Error::other))
+        self.body.map(|item| item.map_err(io::Error::other))
     }
 }
 
@@ -168,7 +187,7 @@ async fn send_https_request(
     host: &str,
     port: u16,
     request: Request<Full<Bytes>>,
-) -> anyhow::Result<PeerHttpResponse> {
+) -> anyhow::Result<(hyper::StatusCode, hyper::HeaderMap, Incoming)> {
     let stream = TcpStream::connect((host, port))
         .await
         .with_context(|| format!("failed to connect to peer {host}:{port}"))?;
@@ -191,11 +210,7 @@ async fn send_https_request(
         .send_request(request)
         .await
         .context("failed to send peer request")?;
-    Ok(PeerHttpResponse {
-        status: response.status(),
-        headers: response.headers().clone(),
-        body: response.into_body(),
-    })
+    Ok((response.status(), response.headers().clone(), response.into_body()))
 }
 
 #[cfg(test)]
@@ -218,7 +233,7 @@ mod tests {
         let cache_keepalive = CacheKeepaliveRuntime::new(
             store.clone(),
             credentials.clone(),
-            reqwest::Client::new(),
+            crate::logging::network::HttpClient::new(),
             events.clone(),
         );
         let oauth_accounts = crate::oauth::OAuthAccountService::new(store.clone());
@@ -228,7 +243,7 @@ mod tests {
             model_capabilities: Default::default(),
             credentials,
             oauth_accounts,
-            http: reqwest::Client::new(),
+            http: crate::logging::network::HttpClient::new(),
             events,
             scheduler: Default::default(),
             live_requests: Default::default(),

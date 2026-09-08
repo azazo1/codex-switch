@@ -1,5 +1,6 @@
 use crate::app::AppState;
 use crate::core::models::{BalanceProvider, BalanceSnapshot, UpstreamKind};
+use crate::logging::network::HttpClient;
 use anyhow::{Context, anyhow};
 use reqwest::StatusCode;
 use serde_json::Value;
@@ -173,7 +174,7 @@ pub async fn query_and_store(
 }
 
 async fn query_balance(
-    http: &reqwest::Client,
+    http: &HttpClient,
     upstream_id: &str,
     provider: BalanceProvider,
     base_url: &str,
@@ -206,7 +207,7 @@ async fn query_balance(
 }
 
 async fn query_provider(
-    http: &reqwest::Client,
+    http: &HttpClient,
     upstream_id: &str,
     provider: BalanceProvider,
     api_key: &str,
@@ -322,7 +323,7 @@ fn parse_balance(
 }
 
 async fn query_common_panel(
-    http: &reqwest::Client,
+    http: &HttpClient,
     upstream_id: &str,
     provider: BalanceProvider,
     base_url: &str,
