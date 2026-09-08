@@ -247,7 +247,7 @@ impl CodexSwitchApp {
         ui.horizontal_wrapped(|ui| {
             if ui
                 .checkbox(&mut self.debug_log_enabled, "启用完整调试日志")
-                .on_hover_text("开启后持续写入 tracing 和完整代理 body 到日志文件")
+                .on_hover_text("开启后在模型调用日志中持续写入完整 tracing 和代理 body")
                 .changed()
             {
                 self.apply_debug_log_enabled();
@@ -257,39 +257,48 @@ impl CodexSwitchApp {
             }
         });
         ui.horizontal_wrapped(|ui| {
-            ui.label("单文件大小");
+            ui.label("单文件大小")
+                .on_hover_text("作用于主日志和模型调用日志两个文件");
             ui.add(
                 egui::DragValue::new(&mut self.log_rotation_size_mb)
                     .range(1..=10240)
                     .suffix(" MB"),
             );
-            ui.label("轮转文件数");
+            ui.label("轮转文件数")
+                .on_hover_text("作用于主日志和模型调用日志两个文件");
             ui.add(egui::DragValue::new(&mut self.log_max_files).range(1..=1000));
             if ui.button("应用轮转设置").clicked() {
                 self.apply_log_rotation_settings();
             }
         });
         ui.horizontal_wrapped(|ui| {
-            ui.label("日志路径");
-            ui.monospace(&self.debug_log_path);
-            if ui
-                .add_enabled(
-                    !self.debug_log_path.is_empty(),
-                    egui::Button::new("打开日志位置"),
-                )
-                .clicked()
-            {
-                match platform::open_file_location(&self.debug_log_path) {
-                    Ok(()) => {
-                        self.status = "已打开日志位置".to_string();
-                    }
-                    Err(err) => {
-                        self.status = format!("打开日志位置失败: {err}");
-                    }
-                }
-            }
+            ui.label("主日志路径");
+            let path = self.debug_log_path.clone();
+            self.log_path_row(ui, &path);
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label("模型调用日志路径");
+            let path = self.proxy_log_path.clone();
+            self.log_path_row(ui, &path);
         });
         ui.label("启用后会记录完整入站 body, 转换后的上游 body, 上游响应和流式块, 可能包含 prompt 和模型输出, 不要公开日志文件.");
+    }
+
+    fn log_path_row(&mut self, ui: &mut egui::Ui, path: &str) {
+        ui.monospace(path);
+        if ui
+            .add_enabled(!path.is_empty(), egui::Button::new("打开日志位置"))
+            .clicked()
+        {
+            match platform::open_file_location(path) {
+                Ok(()) => {
+                    self.status = "已打开日志位置".to_string();
+                }
+                Err(err) => {
+                    self.status = format!("打开日志位置失败: {err}");
+                }
+            }
+        }
     }
 
     fn apply_debug_log_enabled(&mut self) {

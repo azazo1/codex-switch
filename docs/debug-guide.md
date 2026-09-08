@@ -4,7 +4,7 @@
 
 ## 普通模式调试日志
 
-仪表盘新增 `调试日志` 区域. 开启 `启用完整调试日志` 后, 普通模式会持续写入 `codex-switch.log`, 包含完整代理 body. 日志按每日和配置的单文件大小轮转, 超过 `轮转文件数` 后自动删除旧文件.
+仪表盘新增 `调试日志` 区域. 开启 `启用完整调试日志` 后, 普通模式会持续在 `codex-switch-proxy.log` 中记录完整代理 body 和完整 tracing. 日志按每日和配置的单文件大小轮转, 超过 `轮转文件数` 后自动删除旧文件.
 
 轮转大小和文件数修改后, 点击 `应用轮转设置` 会立即重建日志写入器并持久化设置. `打开日志位置` 可以查看日志目录.
 
@@ -27,7 +27,7 @@ just debug
 | 变量 | 作用 |
 | --- | --- |
 | `CODEX_SWITCH_DATA_DIR` | 覆盖 SQLite 和应用数据目录 |
-| `CODEX_SWITCH_LOG_FILE` | 将 tracing 日志写入指定文件, 每次启动覆盖旧文件 |
+| `CODEX_SWITCH_LOG_FILE` | 将 tracing 日志合并写入指定文件, 每次启动覆盖旧文件, 不再拆分模型调用日志 |
 | `CODEX_SWITCH_LOG_BODIES` | 设置为 `1`, `true`, `yes` 或 `on` 时输出完整代理 body |
 | `RUST_LOG` | 控制 tracing target 和级别 |
 

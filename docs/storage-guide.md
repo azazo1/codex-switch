@@ -66,4 +66,4 @@ Relay, OAuth 和 NewApi 上游凭据当前以明文保存在 SQLite `credentials
 
 SQLite 删除记录后通常只增加空闲页面, 不会自动缩小主文件. 当前界面没有 `VACUUM` 操作.
 
-所有平台的 `codex-switch.log` 都位于同一数据目录. 普通模式按每日和大小轮转, 超过设置的文件数后自动清理; 开启调试日志后会记录完整代理 body.
+所有平台的日志文件都位于同一数据目录, 包括主日志 `codex-switch.log` 和模型调用日志 `codex-switch-proxy.log`. 普通模式按每日和大小轮转, 超过设置的文件数后自动清理; 开启调试日志后模型调用日志会记录完整代理 body. 详见[日志使用指南](logs-guide.md).

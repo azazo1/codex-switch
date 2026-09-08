@@ -71,8 +71,13 @@ Token 范围支持 `K`, `M`, `B` 和小数, 例如 `1.5M`. 最小值大于最大
 
 ## Tracing 运行日志
 
-普通模式会在数据目录持续写入 `codex-switch.log`. 日志按每日和配置的单文件大小轮转, 并保留最近配置数量的轮转文件.
+普通模式会在数据目录写入两个滚动日志文件:
 
-仪表盘的 `调试日志` 区域可以开启完整调试日志, 记录完整代理 body, 也可以调整轮转大小和轮转文件数. 非 Windows 仍会保留标准错误输出.
+- `codex-switch.log` 主日志, 记录应用运行日志 (界面, 存储, 保活调度, 节点发现等).
+- `codex-switch-proxy.log` 模型调用日志, 记录代理转发, 路由, 重试和协议转换. 默认只记录 info 级及以上, 开启完整调试日志后记录完整 tracing 和代理 body.
 
-可以在启动进程前设置 `RUST_LOG` 调整日志级别, 也可以设置 `CODEX_SWITCH_LOG_FILE` 和 `CODEX_SWITCH_LOG_BODIES` 覆盖 GUI 设置. 数据目录位置见[存储与备份指南](storage-guide.md).
+两个文件都按每日和配置的单文件大小轮转, 并共享同一份轮转文件数配置.
+
+仪表盘的 `调试日志` 区域可以开启完整调试日志, 也可以调整轮转大小和轮转文件数. 非 Windows 仍会保留标准错误输出.
+
+可以在启动进程前设置 `RUST_LOG` 调整日志级别, 也可以设置 `CODEX_SWITCH_LOG_FILE` 和 `CODEX_SWITCH_LOG_BODIES` 覆盖 GUI 设置. 指定 `CODEX_SWITCH_LOG_FILE` 时所有日志合并写入该单文件, 不再拆分. 数据目录位置见[存储与备份指南](storage-guide.md).

@@ -16,7 +16,13 @@ use tracing_subscriber::{EnvFilter, Registry, fmt, prelude::*, reload};
 
 const LOG_FILE_ENV: &str = "CODEX_SWITCH_LOG_FILE";
 const LOG_BODIES_ENV: &str = "CODEX_SWITCH_LOG_BODIES";
-const DEBUG_FILE_FILTER: &str = "info,codex_switch=trace,tower_http=debug";
+const MAIN_LOG_FILE_NAME: &str = "codex-switch.log";
+const PROXY_LOG_FILE_NAME: &str = "codex-switch-proxy.log";
+
+const MAIN_FILTER_BASE: &str = "info,codex_switch::proxy=off,tower_http=off";
+const MAIN_FILTER_DEBUG: &str = "info,codex_switch=trace,codex_switch::proxy=off,tower_http=off";
+const PROXY_FILTER_BASE: &str = "off,codex_switch::proxy=info";
+const PROXY_FILTER_DEBUG: &str = "off,codex_switch::proxy=trace,tower_http=debug";
 
 const SETTING_DEBUG_LOG_ENABLED: &str = "debug_log_enabled";
 const SETTING_LOG_ROTATION_SIZE_MB: &str = "log_rotation_size_mb";
@@ -205,8 +211,10 @@ struct FileWriterState {
 }
 
 struct TracingControls {
-    file_layer: reload::Handle<FileLayer, Registry>,
-    file_writer: Mutex<FileWriterState>,
+    main_layer: reload::Handle<FileLayer, Registry>,
+    main_writer: Mutex<FileWriterState>,
+    proxy_layer: reload::Handle<FileLayer, Registry>,
+    proxy_writer: Mutex<FileWriterState>,
 }
 
 static CONTROLS: OnceLock<TracingControls> = OnceLock::new();
@@ -226,7 +234,7 @@ pub(crate) fn init_tracing(config: LogRotationConfig) -> anyhow::Result<()> {
         set_body_logging_enabled(body_logging_env_enabled());
         #[cfg(target_os = "windows")]
         {
-            let log_path = log_file_path()?;
+            let log_path = main_log_file_path()?;
             return init_file_tracing(&log_path, env_filter, true);
         }
         #[cfg(not(target_os = "windows"))]
@@ -235,24 +243,26 @@ pub(crate) fn init_tracing(config: LogRotationConfig) -> anyhow::Result<()> {
         }
     }
 
-    let log_path = log_file_path()?;
-    let writer = build_rolling_writer(&log_path, config.size_mb, config.max_files)?;
-    let (non_blocking, file_guard) = tracing_appender::non_blocking(writer);
-    let initial_filter = if config.enabled {
-        DEBUG_FILE_FILTER
-    } else {
-        "info"
-    };
-    let file_layer = fmt::layer()
-        .with_ansi(false)
-        .with_writer(non_blocking.clone())
-        .with_filter(EnvFilter::try_new(initial_filter).context("failed to create file filter")?);
-    let (file_layer, file_layer_handle): (
+    let log_path = main_log_file_path()?;
+    let proxy_log_path = proxy_log_file_path()?;
+    let main_state = build_writer_state(&log_path, config.size_mb, config.max_files)?;
+    let proxy_state = build_writer_state(&proxy_log_path, config.size_mb, config.max_files)?;
+    let main_layer = build_file_layer(main_state.non_blocking.clone(), main_log_filter(config.enabled))
+        .context("failed to create main log filter")?;
+    let proxy_layer =
+        build_file_layer(proxy_state.non_blocking.clone(), proxy_log_filter(config.enabled))
+            .context("failed to create proxy log filter")?;
+    let (main_layer, main_handle): (
         reload::Layer<FileLayer, Registry>,
         reload::Handle<FileLayer, Registry>,
-    ) = reload::Layer::new(file_layer);
+    ) = reload::Layer::new(main_layer);
+    let (proxy_layer, proxy_handle): (
+        reload::Layer<FileLayer, Registry>,
+        reload::Handle<FileLayer, Registry>,
+    ) = reload::Layer::new(proxy_layer);
 
-    let subscriber = tracing_subscriber::registry().with(file_layer);
+    let subscriber =
+        tracing_subscriber::registry().with(main_layer.and_then(proxy_layer));
     #[cfg(not(target_os = "windows"))]
     let subscriber = {
         let stderr = fmt::layer()
@@ -265,11 +275,10 @@ pub(crate) fn init_tracing(config: LogRotationConfig) -> anyhow::Result<()> {
         .context("failed to install tracing subscriber")?;
 
     let controls = TracingControls {
-        file_layer: file_layer_handle,
-        file_writer: Mutex::new(FileWriterState {
-            non_blocking,
-            guard: file_guard,
-        }),
+        main_layer: main_handle,
+        main_writer: Mutex::new(main_state),
+        proxy_layer: proxy_handle,
+        proxy_writer: Mutex::new(proxy_state),
     };
     let _ = CONTROLS.set(controls);
     set_body_logging_enabled(config.enabled);
@@ -284,22 +293,18 @@ pub(crate) fn set_debug_log_enabled(enabled: bool) -> anyhow::Result<()> {
     let Some(controls) = CONTROLS.get() else {
         return Ok(());
     };
-    let filter = if enabled { DEBUG_FILE_FILTER } else { "info" };
-    let filter = EnvFilter::try_new(filter).context("failed to create debug log filter")?;
-    let layer = {
-        let writer = controls
-            .file_writer
-            .lock()
-            .map_err(|_| anyhow::anyhow!("failed to lock log writer"))?;
-        fmt::layer()
-            .with_ansi(false)
-            .with_writer(writer.non_blocking.clone())
-            .with_filter(filter)
-    };
-    controls
-        .file_layer
-        .reload(layer)
-        .context("failed to switch debug log filter")?;
+    reload_file_layer(
+        &controls.main_layer,
+        &controls.main_writer,
+        main_log_filter(enabled),
+        "main",
+    )?;
+    reload_file_layer(
+        &controls.proxy_layer,
+        &controls.proxy_writer,
+        proxy_log_filter(enabled),
+        "proxy",
+    )?;
     set_body_logging_enabled(enabled);
     Ok(())
 }
@@ -311,7 +316,26 @@ pub(crate) fn set_rotation_config(size_mb: u64, max_files: usize) -> anyhow::Res
     let controls = CONTROLS
         .get()
         .context("tracing controls are not initialized")?;
-    controls.reconfigure(size_mb, max_files)
+    let enabled = body_logging_enabled();
+    replace_writer_state(
+        &controls.main_layer,
+        &controls.main_writer,
+        &main_log_file_path()?,
+        size_mb,
+        max_files,
+        main_log_filter(enabled),
+        "main",
+    )?;
+    replace_writer_state(
+        &controls.proxy_layer,
+        &controls.proxy_writer,
+        &proxy_log_file_path()?,
+        size_mb,
+        max_files,
+        proxy_log_filter(enabled),
+        "proxy",
+    )?;
+    Ok(())
 }
 
 pub(crate) fn body_logging_enabled() -> bool {
@@ -323,40 +347,85 @@ pub(crate) fn env_override_active() -> bool {
         || std::env::var_os(LOG_BODIES_ENV).is_some()
 }
 
-pub(crate) fn log_file_path() -> anyhow::Result<PathBuf> {
+pub(crate) fn main_log_file_path() -> anyhow::Result<PathBuf> {
     if let Some(path) = std::env::var_os(LOG_FILE_ENV).filter(|path| !path.is_empty()) {
         return Ok(PathBuf::from(path));
     }
-    Ok(crate::app::data_dir()?.join("codex-switch.log"))
+    Ok(crate::app::data_dir()?.join(MAIN_LOG_FILE_NAME))
 }
 
-impl TracingControls {
-    fn reconfigure(&self, size_mb: u64, max_files: usize) -> anyhow::Result<()> {
-        let log_path = log_file_path()?;
-        let writer = build_rolling_writer(&log_path, size_mb, max_files)?;
-        let (non_blocking, guard) = tracing_appender::non_blocking(writer);
-        let filter = if body_logging_enabled() {
-            DEBUG_FILE_FILTER
-        } else {
-            "info"
-        };
-        let file_layer = fmt::layer()
-            .with_ansi(false)
-            .with_writer(non_blocking.clone())
-            .with_filter(
-                EnvFilter::try_new(filter).context("failed to create rotation log filter")?,
-            );
-        self.file_layer
-            .reload(file_layer)
-            .context("failed to reload rolling file layer")?;
-        let mut writer = self
-            .file_writer
-            .lock()
-            .map_err(|_| anyhow::anyhow!("failed to lock log writer"))?;
-        writer.non_blocking = non_blocking;
-        writer.guard = guard;
-        Ok(())
+pub(crate) fn proxy_log_file_path() -> anyhow::Result<PathBuf> {
+    Ok(crate::app::data_dir()?.join(PROXY_LOG_FILE_NAME))
+}
+
+fn main_log_filter(debug: bool) -> &'static str {
+    if debug {
+        MAIN_FILTER_DEBUG
+    } else {
+        MAIN_FILTER_BASE
     }
+}
+
+fn proxy_log_filter(debug: bool) -> &'static str {
+    if debug {
+        PROXY_FILTER_DEBUG
+    } else {
+        PROXY_FILTER_BASE
+    }
+}
+
+fn build_file_layer(writer: NonBlocking, filter: &'static str) -> anyhow::Result<FileLayer> {
+    Ok(fmt::layer()
+        .with_ansi(false)
+        .with_writer(writer)
+        .with_filter(EnvFilter::try_new(filter)?))
+}
+
+fn reload_file_layer(
+    handle: &reload::Handle<FileLayer, Registry>,
+    state: &Mutex<FileWriterState>,
+    filter: &'static str,
+    label: &'static str,
+) -> anyhow::Result<()> {
+    let layer = {
+        let writer = state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("failed to lock {label} log writer"))?;
+        build_file_layer(writer.non_blocking.clone(), filter)
+            .with_context(|| format!("failed to create {label} log filter"))?
+    };
+    handle
+        .reload(layer)
+        .with_context(|| format!("failed to reload {label} log layer"))
+}
+
+fn build_writer_state(
+    log_path: &Path,
+    size_mb: u64,
+    max_files: usize,
+) -> anyhow::Result<FileWriterState> {
+    let writer = build_rolling_writer(log_path, size_mb, max_files)?;
+    let (non_blocking, guard) = tracing_appender::non_blocking(writer);
+    Ok(FileWriterState { non_blocking, guard })
+}
+
+fn replace_writer_state(
+    handle: &reload::Handle<FileLayer, Registry>,
+    state: &Mutex<FileWriterState>,
+    log_path: &Path,
+    size_mb: u64,
+    max_files: usize,
+    filter: &'static str,
+    label: &'static str,
+) -> anyhow::Result<()> {
+    let new_state = build_writer_state(log_path, size_mb, max_files)?;
+    reload_file_layer(handle, state, filter, label)?;
+    let mut writer = state
+        .lock()
+        .map_err(|_| anyhow::anyhow!("failed to lock {label} log writer"))?;
+    writer.non_blocking = new_state.non_blocking;
+    writer.guard = new_state.guard;
+    Ok(())
 }
 
 fn set_body_logging_enabled(enabled: bool) {
@@ -557,5 +626,17 @@ mod tests {
         assert!(body_logging_enabled());
         set_body_logging_enabled(false);
         assert!(!body_logging_enabled());
+    }
+
+    #[test]
+    fn log_filter_constants_are_parseable() {
+        for filter in [
+            MAIN_FILTER_BASE,
+            MAIN_FILTER_DEBUG,
+            PROXY_FILTER_BASE,
+            PROXY_FILTER_DEBUG,
+        ] {
+            EnvFilter::try_new(filter).unwrap();
+        }
     }
 }
