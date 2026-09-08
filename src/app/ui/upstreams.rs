@@ -274,7 +274,7 @@ impl CodexSwitchApp {
                 let mut message = format!("已导入 {} 个上游", result.imported.len());
                 if result.skipped_peer_nodes > 0 {
                     message.push_str(&format!(
-                        ", 已跳过 {} 个 peer 节点上游 (依赖节点配对, 无法导入)",
+                        ", 已跳过 {} 个 peer 节点上游",
                         result.skipped_peer_nodes
                     ));
                 }
@@ -306,7 +306,7 @@ impl CodexSwitchApp {
                     );
                     if result.skipped_peer_nodes > 0 {
                         message.push_str(&format!(
-                            ", 已跳过 {} 个 peer 节点上游 (依赖节点配对, 无法迁移)",
+                            ", 已跳过 {} 个 peer 节点上游",
                             result.skipped_peer_nodes
                         ));
                     }
