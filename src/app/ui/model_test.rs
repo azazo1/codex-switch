@@ -1,7 +1,7 @@
 use super::CodexSwitchApp;
 use super::UiTaskEvent;
 use super::tokens;
-use crate::core::models::{RequestLog, RequestLogSource, Upstream, UpstreamKind, WireApi};
+use crate::core::models::{BalanceProvider, RequestLog, RequestLogSource, Upstream, UpstreamKind, WireApi};
 use crate::proxy::forward::model_test as test_bench;
 use crate::proxy::forward::model_test::ModelTestOutcome;
 use crate::proxy::forward::model_test::ModelTestRawTrace;
@@ -9,22 +9,24 @@ use crate::proxy::forward::model_test::ModelTestStreamPart;
 use crate::storage::RequestLogFilter;
 use chrono::Local;
 use eframe::egui;
-use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const DEFAULT_PROMPT: &str = "请只回复: pong";
 const DEFAULT_MAX_TOKENS: &str = "64";
 const DEFAULT_TIMEOUT_SECS: &str = "120";
+const DEFAULT_REASONING_EFFORT: &str = "medium";
 const HISTORY_LIMIT: i64 = 50;
 const CHAT_HISTORY_HEIGHT: f32 = 260.0;
 const RESULT_TEXT_HEIGHT: f32 = 160.0;
+
+/// 临时上游在测试记录中显示的名称.
+const CUSTOM_UPSTREAM_NAME: &str = "临时上游";
 
 /// 测试种类, 用于把异步结果路由回对应的 UI 状态.
 #[derive(Debug, Clone)]
 pub(super) enum ModelTestKind {
     Single,
-    Batch(String),
     Chat,
 }
 
@@ -32,6 +34,7 @@ pub(super) enum ModelTestKind {
 enum TargetMode {
     Direct,
     Scheduler,
+    Custom,
 }
 
 impl TargetMode {
@@ -39,44 +42,17 @@ impl TargetMode {
         match self {
             Self::Direct => "上游",
             Self::Scheduler => "调度组",
+            Self::Custom => "临时上游",
         }
     }
 
-    const ALL: [Self; 2] = [Self::Direct, Self::Scheduler];
+    const ALL: [Self; 3] = [Self::Direct, Self::Scheduler, Self::Custom];
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
     Single,
-    Batch,
     Chat,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReasoningEffort {
-    Low,
-    Medium,
-    High,
-}
-
-impl ReasoningEffort {
-    const ALL: [Self; 3] = [Self::Low, Self::Medium, Self::High];
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Low => "低",
-            Self::Medium => "中",
-            Self::High => "高",
-        }
-    }
-
-    fn as_request_value(self) -> &'static str {
-        match self {
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -96,14 +72,6 @@ impl SingleResult {
             live_reasoning: String::new(),
         }
     }
-}
-
-#[derive(Debug, Clone)]
-struct BatchRow {
-    upstream_id: String,
-    upstream_name: String,
-    started: Option<Instant>,
-    outcome: Option<ModelTestOutcome>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,6 +101,10 @@ struct ChatEntry {
 pub(super) struct ModelTestUiState {
     target_mode: TargetMode,
     selected_upstream_id: Option<String>,
+    selected_group_id: Option<String>,
+    custom_base_url: String,
+    custom_api_key: String,
+    custom_wire_api: WireApi,
     model_input: String,
     fetched_models: Vec<String>,
     fetched_for_upstream: Option<String>,
@@ -140,22 +112,20 @@ pub(super) struct ModelTestUiState {
     stream: bool,
     max_tokens_input: String,
     reasoning_enabled: bool,
-    reasoning_effort: ReasoningEffort,
+    reasoning_effort_input: String,
     timeout_input: String,
     prompt: String,
     section: Section,
     single_result: SingleResult,
-    batch_selected: BTreeSet<String>,
-    batch_rows: Vec<BatchRow>,
     chat_messages: Vec<ChatEntry>,
     chat_input: String,
     chat_running: bool,
     chat_started: Option<Instant>,
     chat_live_text: String,
     chat_live_reasoning: String,
-    raw_viewer: Option<Arc<ModelTestRawTrace>>,
     history: Vec<RequestLog>,
     history_version_seen: u64,
+    history_clearing: bool,
 }
 
 impl Default for ModelTestUiState {
@@ -163,6 +133,10 @@ impl Default for ModelTestUiState {
         Self {
             target_mode: TargetMode::Direct,
             selected_upstream_id: None,
+            selected_group_id: None,
+            custom_base_url: String::new(),
+            custom_api_key: String::new(),
+            custom_wire_api: WireApi::ChatCompletions,
             model_input: String::new(),
             fetched_models: Vec::new(),
             fetched_for_upstream: None,
@@ -170,7 +144,7 @@ impl Default for ModelTestUiState {
             stream: true,
             max_tokens_input: DEFAULT_MAX_TOKENS.to_string(),
             reasoning_enabled: false,
-            reasoning_effort: ReasoningEffort::Medium,
+            reasoning_effort_input: DEFAULT_REASONING_EFFORT.to_string(),
             timeout_input: DEFAULT_TIMEOUT_SECS.to_string(),
             prompt: DEFAULT_PROMPT.to_string(),
             section: Section::Single,
@@ -180,26 +154,22 @@ impl Default for ModelTestUiState {
                 live_text: String::new(),
                 live_reasoning: String::new(),
             },
-            batch_selected: BTreeSet::new(),
-            batch_rows: Vec::new(),
             chat_messages: Vec::new(),
             chat_input: String::new(),
             chat_running: false,
             chat_started: None,
             chat_live_text: String::new(),
             chat_live_reasoning: String::new(),
-            raw_viewer: None,
             history: Vec::new(),
             history_version_seen: 0,
+            history_clearing: false,
         }
     }
 }
 
 impl ModelTestUiState {
     fn busy(&self) -> bool {
-        self.single_result.started.is_some()
-            || self.chat_running
-            || self.batch_rows.iter().any(|row| row.started.is_some())
+        self.single_result.started.is_some() || self.chat_running
     }
 }
 
@@ -219,11 +189,9 @@ impl CodexSwitchApp {
                 self.model_test_target_section(ui);
                 ui.separator();
                 ui.horizontal(|ui| {
-                    for (section, label) in [
-                        (Section::Single, "单次测试"),
-                        (Section::Batch, "批量对比"),
-                        (Section::Chat, "对话测试"),
-                    ] {
+                    for (section, label) in
+                        [(Section::Single, "单次测试"), (Section::Chat, "对话测试")]
+                    {
                         if ui
                             .selectable_label(self.model_test_ui.section == section, label)
                             .clicked()
@@ -235,7 +203,6 @@ impl CodexSwitchApp {
                 ui.add_space(2.0);
                 match self.model_test_ui.section {
                     Section::Single => self.model_test_single_section(ui),
-                    Section::Batch => self.model_test_batch_section(ui),
                     Section::Chat => self.model_test_chat_section(ui),
                 }
                 ui.separator();
@@ -244,7 +211,6 @@ impl CodexSwitchApp {
         if let Some(section) = switch_to {
             self.model_test_ui.section = section;
         }
-        self.model_test_raw_window(ui.ctx());
     }
 
     fn model_test_target_section(&mut self, ui: &mut egui::Ui) {
@@ -283,54 +249,135 @@ impl CodexSwitchApp {
                     }
                 })
                 .response
-                .on_hover_text("直连上游绕过调度组精确测试单个上游, 经调度组走本地代理完整链路");
-            if self.model_test_ui.target_mode == TargetMode::Direct {
-                ui.separator();
-                ui.label("上游");
-                let selected_name = enabled_upstreams
-                    .iter()
-                    .find(|upstream| {
-                        self.model_test_ui.selected_upstream_id.as_deref() == Some(&upstream.id)
-                    })
-                    .map(|upstream| upstream.name.clone())
-                    .unwrap_or_else(|| "选择上游".to_string());
-                egui::ComboBox::from_id_salt("model_test_upstream")
-                    .selected_text(selected_name)
-                    .show_ui(ui, |ui| {
-                        for upstream in &enabled_upstreams {
-                            let selected = self.model_test_ui.selected_upstream_id.as_deref()
-                                == Some(&upstream.id);
-                            if ui.selectable_label(selected, &upstream.name).clicked() {
-                                if !selected {
-                                    self.model_test_ui.fetched_models.clear();
-                                    self.model_test_ui.fetched_for_upstream = None;
+                .on_hover_text("直连上游精确测试单个上游, 经调度组走本地代理完整链路, 临时上游使用临时的地址与密钥");
+            match self.model_test_ui.target_mode {
+                TargetMode::Direct => {
+                    ui.separator();
+                    ui.label("上游");
+                    let selected_name = enabled_upstreams
+                        .iter()
+                        .find(|upstream| {
+                            self.model_test_ui.selected_upstream_id.as_deref()
+                                == Some(&upstream.id)
+                        })
+                        .map(|upstream| upstream.name.clone())
+                        .unwrap_or_else(|| "选择上游".to_string());
+                    egui::ComboBox::from_id_salt("model_test_upstream")
+                        .selected_text(selected_name)
+                        .show_ui(ui, |ui| {
+                            for upstream in &enabled_upstreams {
+                                let selected = self.model_test_ui.selected_upstream_id.as_deref()
+                                    == Some(&upstream.id);
+                                if ui.selectable_label(selected, &upstream.name).clicked() {
+                                    if !selected {
+                                        self.model_test_ui.fetched_models.clear();
+                                        self.model_test_ui.fetched_for_upstream = None;
+                                    }
+                                    self.model_test_ui.selected_upstream_id =
+                                        Some(upstream.id.clone());
                                 }
-                                self.model_test_ui.selected_upstream_id = Some(upstream.id.clone());
                             }
-                        }
-                    });
-                let selected_is_oauth = enabled_upstreams
-                    .iter()
-                    .find(|upstream| {
-                        self.model_test_ui.selected_upstream_id.as_deref() == Some(&upstream.id)
-                    })
-                    .is_some_and(|upstream| upstream.kind == UpstreamKind::CodexOauth);
-                let fetch_label = if self.model_test_ui.models_fetching {
-                    "拉取中..."
-                } else {
-                    "拉取模型列表"
-                };
-                if ui
-                    .add_enabled(
-                        !self.model_test_ui.models_fetching && !selected_is_oauth,
-                        egui::Button::new(fetch_label),
-                    )
-                    .clicked()
-                {
-                    self.fetch_model_test_models();
+                        });
+                    let selected_is_oauth = enabled_upstreams
+                        .iter()
+                        .find(|upstream| {
+                            self.model_test_ui.selected_upstream_id.as_deref()
+                                == Some(&upstream.id)
+                        })
+                        .is_some_and(|upstream| upstream.kind == UpstreamKind::CodexOauth);
+                    let fetch_label = if self.model_test_ui.models_fetching {
+                        "拉取中..."
+                    } else {
+                        "拉取模型列表"
+                    };
+                    if ui
+                        .add_enabled(
+                            !self.model_test_ui.models_fetching && !selected_is_oauth,
+                            egui::Button::new(fetch_label),
+                        )
+                        .clicked()
+                    {
+                        self.fetch_model_test_models();
+                    }
+                }
+                TargetMode::Scheduler => {
+                    ui.separator();
+                    ui.label("调度组");
+                    let selected_label = self
+                        .model_test_selected_group_name()
+                        .unwrap_or_else(|| "当前调度组".to_string());
+                    egui::ComboBox::from_id_salt("model_test_group")
+                        .selected_text(selected_label)
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(
+                                    self.model_test_ui.selected_group_id.is_none(),
+                                    "当前调度组",
+                                )
+                                .clicked()
+                            {
+                                self.model_test_ui.selected_group_id = None;
+                            }
+                            for group in &self.schedule_groups {
+                                let selected = self
+                                    .model_test_ui
+                                    .selected_group_id
+                                    .as_deref()
+                                    == Some(&group.id);
+                                if ui.selectable_label(selected, &group.name).clicked() {
+                                    self.model_test_ui.selected_group_id =
+                                        Some(group.id.clone());
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text("选择测试请求经哪个调度组路由, 默认使用当前调度组");
+                }
+                TargetMode::Custom => {
+                    ui.separator();
+                    ui.label("Base URL");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.model_test_ui.custom_base_url)
+                            .desired_width(280.0)
+                            .hint_text("https://relay.example.com"),
+                    );
+                    ui.label("API Key");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.model_test_ui.custom_api_key)
+                            .desired_width(160.0)
+                            .password(true)
+                            .hint_text("留空则不带认证"),
+                    );
                 }
             }
         });
+        if self.model_test_ui.target_mode == TargetMode::Custom {
+            ui.horizontal(|ui| {
+                ui.label("请求模式");
+                let wire_label = wire_api_label(self.model_test_ui.custom_wire_api);
+                egui::ComboBox::from_id_salt("model_test_custom_wire_api")
+                    .selected_text(wire_label)
+                    .show_ui(ui, |ui| {
+                        for wire in [
+                            WireApi::ChatCompletions,
+                            WireApi::Responses,
+                            WireApi::AnthropicMessages,
+                        ] {
+                            if ui
+                                .selectable_label(
+                                    self.model_test_ui.custom_wire_api == wire,
+                                    wire_api_label(wire),
+                                )
+                                .clicked()
+                            {
+                                self.model_test_ui.custom_wire_api = wire;
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("临时上游使用的 API 协议");
+            });
+        }
         if self.model_test_ui.target_mode == TargetMode::Direct
             && let Some(upstream) = self.model_test_target_upstream()
             && upstream.kind == UpstreamKind::CodexOauth
@@ -349,7 +396,10 @@ impl CodexSwitchApp {
             );
             let model_list_for_target = self.model_test_ui.fetched_for_upstream.as_deref()
                 == self.model_test_ui.selected_upstream_id.as_deref();
-            if !self.model_test_ui.fetched_models.is_empty() && model_list_for_target {
+            if !self.model_test_ui.fetched_models.is_empty()
+                && model_list_for_target
+                && self.model_test_ui.target_mode == TargetMode::Direct
+            {
                 egui::ComboBox::from_id_salt("model_test_model_list")
                     .selected_text("从列表选择")
                     .show_ui(ui, |ui| {
@@ -360,7 +410,8 @@ impl CodexSwitchApp {
                         }
                     })
                     .response
-                    .on_hover_text("该上游的模型列表");            }
+                    .on_hover_text("该上游的模型列表");
+            }
         });
         ui.horizontal(|ui| {
             ui.checkbox(&mut self.model_test_ui.stream, "流式")
@@ -386,23 +437,14 @@ impl CodexSwitchApp {
                     "推理力度",
                 ),
             )
-            .on_disabled_hover_text("Anthropic 上游的直连测试不支持推理力度");
+            .on_disabled_hover_text("Anthropic 协议的直连测试不支持推理力度");
             if self.model_test_ui.reasoning_enabled && reasoning_supported {
-                egui::ComboBox::from_id_salt("model_test_reasoning")
-                    .selected_text(self.model_test_ui.reasoning_effort.label())
-                    .show_ui(ui, |ui| {
-                        for effort in ReasoningEffort::ALL {
-                            if ui
-                                .selectable_label(
-                                    self.model_test_ui.reasoning_effort == effort,
-                                    effort.label(),
-                                )
-                                .clicked()
-                            {
-                                self.model_test_ui.reasoning_effort = effort;
-                            }
-                        }
-                    });
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.model_test_ui.reasoning_effort_input)
+                        .desired_width(72.0)
+                        .hint_text("low / medium / high"),
+                )
+                .on_hover_text("推理力度原样写入请求, 例如 low, medium, high, xhigh 或 minimal");
             }
         });
         ui.horizontal(|ui| {
@@ -411,14 +453,25 @@ impl CodexSwitchApp {
                 egui::TextEdit::multiline(&mut self.model_test_ui.prompt)
                     .desired_width(520.0)
                     .desired_rows(2)
-                    .hint_text("单次测试与批量对比使用的提示词"),
+                    .hint_text("单次测试使用的提示词"),
             );
         });
+    }
+
+    fn model_test_selected_group_name(&self) -> Option<String> {
+        let id = self.model_test_ui.selected_group_id.as_deref()?;
+        self.schedule_groups
+            .iter()
+            .find(|group| group.id == id)
+            .map(|group| group.name.clone())
     }
 
     fn model_test_reasoning_supported(&self) -> bool {
         if self.model_test_ui.target_mode == TargetMode::Scheduler {
             return true;
+        }
+        if self.model_test_ui.target_mode == TargetMode::Custom {
+            return self.model_test_ui.custom_wire_api != WireApi::AnthropicMessages;
         }
         self.model_test_target_upstream()
             .is_none_or(|upstream| upstream.wire_api != WireApi::AnthropicMessages)
@@ -450,149 +503,6 @@ impl CodexSwitchApp {
             return;
         };
         self.model_test_outcome_card(ui, &outcome);
-    }
-
-    fn model_test_batch_section(&mut self, ui: &mut egui::Ui) {
-        ui.heading("批量对比");
-        let enabled_upstreams: Vec<Upstream> = self
-            .upstreams
-            .iter()
-            .filter(|upstream| upstream.enabled)
-            .cloned()
-            .collect();
-        let batch_running = self
-            .model_test_ui
-            .batch_rows
-            .iter()
-            .any(|row| row.started.is_some());
-        ui.horizontal(|ui| {
-            if ui.button("全选").clicked() {
-                self.model_test_ui.batch_selected = enabled_upstreams
-                    .iter()
-                    .map(|upstream| upstream.id.clone())
-                    .collect();
-            }
-            if ui.button("清空选择").clicked() {
-                self.model_test_ui.batch_selected.clear();
-            }
-            if ui
-                .add_enabled(
-                    !batch_running && !self.model_test_ui.batch_selected.is_empty(),
-                    egui::Button::new(format!(
-                        "开始批量测试 ({})",
-                        self.model_test_ui.batch_selected.len()
-                    )),
-                )
-                .on_hover_text("对勾选的上游以当前模型和 prompt 并发直连测试")
-                .clicked()
-            {
-                self.send_model_test_batch();
-            }
-        });
-        ui.horizontal_wrapped(|ui| {
-            for upstream in &enabled_upstreams {
-                let mut checked = self.model_test_ui.batch_selected.contains(&upstream.id);
-                if ui.checkbox(&mut checked, &upstream.name).changed() {
-                    if checked {
-                        self.model_test_ui
-                            .batch_selected
-                            .insert(upstream.id.clone());
-                    } else {
-                        self.model_test_ui.batch_selected.remove(&upstream.id);
-                    }
-                }
-            }
-        });
-        if self.model_test_ui.batch_rows.is_empty() {
-            return;
-        }
-        ui.add_space(4.0);
-        let mut rows = self.model_test_ui.batch_rows.clone();
-        rows.sort_by_key(|row| match (&row.started, &row.outcome) {
-            (Some(_), _) => (0, 0),
-            (None, Some(outcome)) if outcome.is_success() => (1, outcome.duration_ms),
-            (None, Some(outcome)) => (2, outcome.duration_ms),
-            (None, None) => (3, 0),
-        });
-        let mut token_display_mode = self.token_display_mode;
-        egui::Grid::new("model_test_batch_grid")
-            .striped(true)
-            .num_columns(7)
-            .spacing([14.0, 8.0])
-            .show(ui, |ui| {
-                ui.strong("上游");
-                ui.strong("状态");
-                ui.strong("总耗时");
-                ui.strong("首 token");
-                ui.strong("输入");
-                ui.strong("输出");
-                ui.strong("详情");
-                ui.end_row();
-                for row in &rows {
-                    ui.label(&row.upstream_name);
-                    match (&row.started, &row.outcome) {
-                        (Some(started), _) => {
-                            ui.spinner();
-                            ui.label(format!(
-                                "{:.1}s",
-                                started.elapsed().as_secs_f32()
-                            ));
-                            ui.end_row();
-                        }
-                        (None, Some(outcome)) => {
-                            let (label, color) = outcome_status_label(outcome);
-                            ui.colored_label(color, label);
-                            ui.label(format!("{} ms", outcome.duration_ms));
-                            ui.label(match outcome.first_token_ms {
-                                Some(ms) => format!("{ms} ms"),
-                                None if self.model_test_ui.stream => "未返回".to_string(),
-                                None => "非流式".to_string(),
-                            });
-                            tokens::token_value(
-                                ui,
-                                &mut token_display_mode,
-                                "输入",
-                                outcome.usage.input_tokens,
-                            );
-                            tokens::token_value(
-                                ui,
-                                &mut token_display_mode,
-                                "输出",
-                                outcome.usage.output_tokens,
-                            );
-                            ui.horizontal(|ui| {
-                                if let Some(error) = &outcome.error {
-                                    ui.label(
-                                        egui::RichText::new(truncate_text(error, 60)).weak(),
-                                    )
-                                    .on_hover_text(error);
-                                } else if !outcome.output_text.is_empty() {
-                                    ui.label(egui::RichText::new(truncate_text(
-                                        &outcome.output_text,
-                                        60,
-                                    ))
-                                    .weak())
-                                    .on_hover_text(&outcome.output_text);
-                                }
-                                if outcome.raw.is_some()
-                                    && ui.small_button("报文").clicked()
-                                {
-                                    self.model_test_ui.raw_viewer = outcome.raw.clone();
-                                }
-                            });
-                            ui.end_row();
-                        }
-                        (None, None) => {
-                            ui.label("-");
-                            ui.label("-");
-                            ui.label("-");
-                            ui.label("-");
-                            ui.end_row();
-                        }
-                    }
-                }
-            });
-        self.token_display_mode = token_display_mode;
     }
 
     fn model_test_chat_section(&mut self, ui: &mut egui::Ui) {
@@ -654,8 +564,10 @@ impl CodexSwitchApp {
                                 .weak()
                                 .small(),
                             );
-                            if meta.raw.is_some() && ui.small_button("报文").clicked() {
-                                self.model_test_ui.raw_viewer = meta.raw.clone();
+                            if let Some(raw) = &meta.raw
+                                && ui.small_button("导出 HAR").clicked()
+                            {
+                                self.export_model_test_har(raw.clone(), meta.duration_ms, None);
                             }
                         });
                     }
@@ -703,7 +615,22 @@ impl CodexSwitchApp {
     }
 
     fn model_test_history_section(&mut self, ui: &mut egui::Ui) {
-        ui.heading(format!("测试记录 ({})", self.model_test_ui.history.len()));
+        ui.horizontal(|ui| {
+            ui.heading(format!("测试记录 ({})", self.model_test_ui.history.len()));
+            if ui
+                .add_enabled(
+                    !self.model_test_ui.history.is_empty() && !self.model_test_ui.history_clearing,
+                    egui::Button::new("清除记录"),
+                )
+                .on_hover_text("删除所有测试台产生的请求记录")
+                .clicked()
+            {
+                self.clear_model_test_history();
+            }
+            if self.model_test_ui.history_clearing {
+                ui.spinner();
+            }
+        });
         if self.model_test_ui.history.is_empty() {
             ui.label("暂无测试记录");
             return;
@@ -829,10 +756,11 @@ impl CodexSwitchApp {
                     );
                 });
         }
-        if outcome.raw.is_some()
-            && ui.button("查看原始请求与响应").clicked()
+        if let (Some(raw), duration_ms) = (&outcome.raw, outcome.duration_ms)
+            && ui.button("导出 HAR").clicked()
         {
-            self.model_test_ui.raw_viewer = outcome.raw.clone();
+            let error = outcome.error.as_deref();
+            self.export_model_test_har(raw.clone(), duration_ms, error);
         }
     }
 
@@ -877,12 +805,100 @@ impl CodexSwitchApp {
             max_tokens,
             reasoning_effort: self.model_test_ui.reasoning_enabled.then(|| {
                 self.model_test_ui
-                    .reasoning_effort
-                    .as_request_value()
+                    .reasoning_effort_input
+                    .trim()
                     .to_string()
-            }),
+            }).filter(|value| !value.is_empty()),
             timeout: Duration::from_secs(timeout),
         })
+    }
+
+    /// 构造临时上游对象, 供自定义直连测试使用.
+    fn model_test_custom_upstream(&self) -> Result<Upstream, String> {
+        let base_url = self.model_test_ui.custom_base_url.trim().to_string();
+        if base_url.is_empty() {
+            return Err("请填写临时上游的 Base URL".to_string());
+        }
+        Ok(Upstream::new_relay(
+            CUSTOM_UPSTREAM_NAME.to_string(),
+            base_url,
+            self.model_test_ui.custom_wire_api,
+            true,
+            BalanceProvider::Unsupported,
+        ))
+    }
+
+    /// 按当前发送方式派发一次测试请求, 返回是否成功派发.
+    fn dispatch_model_test(
+        &mut self,
+        kind: ModelTestKind,
+        params: test_bench::ModelTestParams,
+    ) -> bool {
+        match self.model_test_ui.target_mode {
+            TargetMode::Scheduler => {
+                if self.server.is_none() {
+                    self.status = "本地代理未启动, 请先在仪表盘启动服务".to_string();
+                    return false;
+                }
+                let state = self.state.clone();
+                let tx = self.task_tx.clone();
+                let bind_addr = self.bind_addr.clone();
+                let local_key = self.local_key.clone();
+                let group_id = self.model_test_ui.selected_group_id.clone();
+                let sink = self.make_model_test_delta_sink(kind.clone());
+                self.runtime.spawn(async move {
+                    let result = test_bench::run_scheduler_test(
+                        &state,
+                        &bind_addr,
+                        &local_key,
+                        group_id.as_deref(),
+                        params,
+                        Some(sink),
+                    )
+                    .await;
+                    let _ = tx.send(UiTaskEvent::ModelTestFinished { kind, result });
+                });
+                true
+            }
+            TargetMode::Direct => {
+                let Some(upstream) = self.model_test_target_upstream() else {
+                    self.status = "请选择要测试的上游".to_string();
+                    return false;
+                };
+                let state = self.state.clone();
+                let tx = self.task_tx.clone();
+                let sink = self.make_model_test_delta_sink(kind.clone());
+                self.runtime.spawn(async move {
+                    let result =
+                        test_bench::run_direct_test(&state, &upstream, None, params, Some(sink))
+                            .await;
+                    let _ = tx.send(UiTaskEvent::ModelTestFinished { kind, result });
+                });
+                true
+            }
+            TargetMode::Custom => {
+                let Ok(upstream) = self.model_test_custom_upstream() else {
+                    self.status = "请填写临时上游的 Base URL".to_string();
+                    return false;
+                };
+                let api_key = self.model_test_ui.custom_api_key.trim().to_string();
+                let state = self.state.clone();
+                let tx = self.task_tx.clone();
+                let sink = self.make_model_test_delta_sink(kind.clone());
+                self.runtime.spawn(async move {
+                    let result = test_bench::run_direct_test(
+                        &state,
+                        &upstream,
+                        Some(&api_key),
+                        params,
+                        Some(sink),
+                    )
+                    .await;
+                    let _ = tx.send(UiTaskEvent::ModelTestFinished { kind, result });
+                });
+                true
+            }
+        }
     }
 
     fn send_model_test(&mut self, kind: ModelTestKind) {
@@ -901,98 +917,10 @@ impl CodexSwitchApp {
                 return;
             }
         };
-        if self.model_test_ui.target_mode == TargetMode::Scheduler {
-            if self.server.is_none() {
-                self.status = "本地代理未启动, 请先在仪表盘启动服务".to_string();
-                return;
-            }
-            let state = self.state.clone();
-            let tx = self.task_tx.clone();
-            let bind_addr = self.bind_addr.clone();
-            let local_key = self.local_key.clone();
-            let sink = self.make_model_test_delta_sink(kind.clone());
-            self.runtime.spawn(async move {
-                let result = test_bench::run_scheduler_test(
-                    &state,
-                    &bind_addr,
-                    &local_key,
-                    params,
-                    Some(sink),
-                )
-                .await;
-                let _ = tx.send(UiTaskEvent::ModelTestFinished { kind, result });
-            });
-        } else {
-            let Some(upstream) = self.model_test_target_upstream() else {
-                self.status = "请选择要测试的上游".to_string();
-                return;
-            };
-            let state = self.state.clone();
-            let tx = self.task_tx.clone();
-            let sink = self.make_model_test_delta_sink(kind.clone());
-            self.runtime.spawn(async move {
-                let result =
-                    test_bench::run_direct_test(&state, &upstream, params, Some(sink)).await;
-                let _ = tx.send(UiTaskEvent::ModelTestFinished { kind, result });
-            });
+        if self.dispatch_model_test(kind, params) {
+            self.model_test_ui.single_result = SingleResult::running();
+            self.status = "测试请求已发送".to_string();
         }
-        self.model_test_ui.single_result = SingleResult::running();
-        self.status = "测试请求已发送".to_string();
-    }
-
-    fn send_model_test_batch(&mut self) {
-        if self
-            .model_test_ui
-            .batch_rows
-            .iter()
-            .any(|row| row.started.is_some())
-        {
-            return;
-        }
-        let prompt = self.model_test_ui.prompt.trim().to_string();
-        if prompt.is_empty() {
-            self.status = "请填写测试 prompt".to_string();
-            return;
-        }
-        let params = match self.build_model_test_params(vec![test_bench::ModelTestMessage::user(prompt)]) {
-            Ok(params) => params,
-            Err(message) => {
-                self.status = message;
-                return;
-            }
-        };
-        let targets: Vec<Upstream> = self
-            .upstreams
-            .iter()
-            .filter(|upstream| {
-                upstream.enabled && self.model_test_ui.batch_selected.contains(&upstream.id)
-            })
-            .cloned()
-            .collect();
-        if targets.is_empty() {
-            self.status = "请先勾选要测试的上游".to_string();
-            return;
-        }
-        self.model_test_ui.batch_rows = targets
-            .iter()
-            .map(|upstream| BatchRow {
-                upstream_id: upstream.id.clone(),
-                upstream_name: upstream.name.clone(),
-                started: Some(Instant::now()),
-                outcome: None,
-            })
-            .collect();
-        for upstream in targets {
-            let state = self.state.clone();
-            let tx = self.task_tx.clone();
-            let kind = ModelTestKind::Batch(upstream.id.clone());
-            let params = params.clone();
-            self.runtime.spawn(async move {
-                let result = test_bench::run_direct_test(&state, &upstream, params, None).await;
-                let _ = tx.send(UiTaskEvent::ModelTestFinished { kind, result });
-            });
-        }
-        self.status = "批量测试已启动".to_string();
     }
 
     fn send_model_test_chat(&mut self) {
@@ -1029,63 +957,18 @@ impl CodexSwitchApp {
             meta: None,
         });
         self.model_test_ui.chat_input.clear();
-        if self.model_test_ui.target_mode == TargetMode::Scheduler {
-            if self.server.is_none() {
-                self.model_test_ui.chat_messages.push(ChatEntry {
-                    role: ChatRole::Assistant,
-                    text: "本地代理未启动, 请先在仪表盘启动服务".to_string(),
-                    reasoning: String::new(),
-                    error: true,
-                    meta: None,
-                });
-                self.status = "本地代理未启动, 请先在仪表盘启动服务".to_string();
-                return;
-            }
-            let state = self.state.clone();
-            let tx = self.task_tx.clone();
-            let bind_addr = self.bind_addr.clone();
-            let local_key = self.local_key.clone();
-            let sink = self.make_model_test_delta_sink(ModelTestKind::Chat);
-            self.runtime.spawn(async move {
-                let result = test_bench::run_scheduler_test(
-                    &state,
-                    &bind_addr,
-                    &local_key,
-                    params,
-                    Some(sink),
-                )
-                .await;
-                let _ = tx.send(UiTaskEvent::ModelTestFinished {
-                    kind: ModelTestKind::Chat,
-                    result,
-                });
-            });
+        if self.dispatch_model_test(ModelTestKind::Chat, params) {
+            self.model_test_ui.chat_running = true;
+            self.model_test_ui.chat_started = Some(Instant::now());
         } else {
-            let Some(upstream) = self.model_test_target_upstream() else {
-                self.model_test_ui.chat_messages.push(ChatEntry {
-                    role: ChatRole::Assistant,
-                    text: "请先选择要测试的上游".to_string(),
-                    reasoning: String::new(),
-                    error: true,
-                    meta: None,
-                });
-                self.status = "请选择要测试的上游".to_string();
-                return;
-            };
-            let state = self.state.clone();
-            let tx = self.task_tx.clone();
-            let sink = self.make_model_test_delta_sink(ModelTestKind::Chat);
-            self.runtime.spawn(async move {
-                let result =
-                    test_bench::run_direct_test(&state, &upstream, params, Some(sink)).await;
-                let _ = tx.send(UiTaskEvent::ModelTestFinished {
-                    kind: ModelTestKind::Chat,
-                    result,
-                });
+            self.model_test_ui.chat_messages.push(ChatEntry {
+                role: ChatRole::Assistant,
+                text: self.status.clone(),
+                reasoning: String::new(),
+                error: true,
+                meta: None,
             });
         }
-        self.model_test_ui.chat_running = true;
-        self.model_test_ui.chat_started = Some(Instant::now());
     }
 
     fn fetch_model_test_models(&mut self) {
@@ -1130,27 +1013,22 @@ impl CodexSwitchApp {
         kind: ModelTestKind,
         part: ModelTestStreamPart,
     ) {
-        match &kind {
-            ModelTestKind::Batch(_) => {}
-            ModelTestKind::Single => match part {
-                ModelTestStreamPart::Text(text) => {
-                    self.model_test_ui.single_result.live_text.push_str(&text);
-                }
-                ModelTestStreamPart::Reasoning(text) => {
-                    self.model_test_ui
-                        .single_result
-                        .live_reasoning
-                        .push_str(&text);
-                }
-            },
-            ModelTestKind::Chat => match part {
-                ModelTestStreamPart::Text(text) => {
-                    self.model_test_ui.chat_live_text.push_str(&text);
-                }
-                ModelTestStreamPart::Reasoning(text) => {
-                    self.model_test_ui.chat_live_reasoning.push_str(&text);
-                }
-            },
+        match (&kind, part) {
+            (ModelTestKind::Single, ModelTestStreamPart::Text(text)) => {
+                self.model_test_ui.single_result.live_text.push_str(&text);
+            }
+            (ModelTestKind::Single, ModelTestStreamPart::Reasoning(text)) => {
+                self.model_test_ui
+                    .single_result
+                    .live_reasoning
+                    .push_str(&text);
+            }
+            (ModelTestKind::Chat, ModelTestStreamPart::Text(text)) => {
+                self.model_test_ui.chat_live_text.push_str(&text);
+            }
+            (ModelTestKind::Chat, ModelTestStreamPart::Reasoning(text)) => {
+                self.model_test_ui.chat_live_reasoning.push_str(&text);
+            }
         }
     }
 
@@ -1171,17 +1049,6 @@ impl CodexSwitchApp {
                     live_text: String::new(),
                     live_reasoning: String::new(),
                 };
-            }
-            ModelTestKind::Batch(upstream_id) => {
-                if let Some(row) = self
-                    .model_test_ui
-                    .batch_rows
-                    .iter_mut()
-                    .find(|row| row.upstream_id == upstream_id)
-                {
-                    row.started = None;
-                    row.outcome = Some(outcome);
-                }
             }
             ModelTestKind::Chat => {
                 self.model_test_ui.chat_running = false;
@@ -1243,89 +1110,99 @@ impl CodexSwitchApp {
         })
     }
 
-    fn model_test_raw_window(&mut self, ctx: &egui::Context) {
-        let Some(trace) = self.model_test_ui.raw_viewer.clone() else {
+    /// 把一次测试的原始请求与响应导出为 HAR 文件.
+    fn export_model_test_har(
+        &mut self,
+        trace: Arc<ModelTestRawTrace>,
+        duration_ms: i64,
+        error: Option<&str>,
+    ) {
+        let entry = trace.to_har_entry(duration_ms, error);
+        let har = serde_json::json!({
+            "log": {
+                "version": "1.2",
+                "creator": {
+                    "name": "codex-switch",
+                    "version": env!("CARGO_PKG_VERSION"),
+                },
+                "entries": [entry],
+            }
+        });
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name("model-test.har")
+            .add_filter("HAR", &["har"])
+            .save_file()
+        else {
             return;
         };
-        let mut open = true;
-        egui::Window::new("原始请求与响应")
-            .id(egui::Id::new("model_test_raw_window"))
-            .collapsible(false)
-            .resizable(true)
-            .default_width(780.0)
-            .default_height(600.0)
-            .open(&mut open)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.strong("请求 URL");
-                    if ui.small_button("复制").clicked() {
-                        ui.ctx().copy_text(trace.request_url.clone());
-                    }
-                });
-                ui.add(
-                    egui::Label::new(egui::RichText::new(&trace.request_url).monospace())
-                        .wrap(),
-                );
-                ui.add_space(4.0);
-                egui::CollapsingHeader::new("请求头 (敏感值已脱敏)")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        for (name, value) in &trace.request_headers {
-                            ui.horizontal(|ui| {
-                                ui.strong(egui::RichText::new(name).small());
-                                ui.label(egui::RichText::new(value).small().monospace());
-                            });
-                        }
-                        if trace.request_headers.is_empty() {
-                            ui.label("(无)");
-                        }
-                    });
-                egui::CollapsingHeader::new("请求体")
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        raw_body_block(ui, "model_test_raw_request_body", &trace.request_body);
-                    });
-                ui.separator();
-                ui.strong(format!(
-                    "响应状态: {}{}",
-                    trace.response_status,
-                    if trace.response_status == 0 {
-                        " (无响应)"
-                    } else {
-                        ""
-                    }
-                ));
-                if !trace.response_content_type.is_empty() {
-                    ui.label(format!("Content-Type: {}", trace.response_content_type));
-                }
-                egui::CollapsingHeader::new("响应头")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        for (name, value) in &trace.response_headers {
-                            ui.horizontal(|ui| {
-                                ui.strong(egui::RichText::new(name).small());
-                                ui.label(egui::RichText::new(value).small().monospace());
-                            });
-                        }
-                        if trace.response_headers.is_empty() {
-                            ui.label("(无)");
-                        }
-                    });
-                egui::CollapsingHeader::new("响应体 (原始内容)")
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        if trace.response_truncated {
-                            ui.colored_label(
-                                egui::Color32::from_rgb(234, 179, 8),
-                                "内容过长, 已截断到 256KB",
-                            );
-                        }
-                        raw_body_block(ui, "model_test_raw_response_body", &trace.response_body);
-                    });
-            });
-        if !open {
-            self.model_test_ui.raw_viewer = None;
+        match serde_json::to_vec_pretty(&har)
+            .map_err(anyhow::Error::from)
+            .and_then(|bytes| std::fs::write(&path, bytes).map_err(anyhow::Error::from))
+        {
+            Ok(()) => {
+                self.status = format!("已导出 HAR: {}", path.display());
+            }
+            Err(err) => {
+                self.status = format!("导出 HAR 失败: {err}");
+            }
         }
+    }
+
+    /// 应用启动时加载一次测试记录, 后续由版本号驱动增量刷新.
+    pub(super) fn load_model_test_history_on_start(&mut self) {
+        let version = self.state.events.request_log_version();
+        self.model_test_ui.history_version_seen = version;
+        self.model_test_ui.history = self.load_model_test_history_from_store();
+    }
+
+    fn load_model_test_history_from_store(&self) -> Vec<RequestLog> {
+        let filter = RequestLogFilter {
+            source: Some(RequestLogSource::TestBench),
+            ..Default::default()
+        };
+        self.runtime
+            .block_on(
+                self.state
+                    .store
+                    .recent_logs_page_filtered(HISTORY_LIMIT, 0, &filter),
+            )
+            .unwrap_or_default()
+    }
+
+    fn clear_model_test_history(&mut self) {
+        if self.model_test_ui.history_clearing {
+            return;
+        }
+        self.model_test_ui.history_clearing = true;
+        let state = self.state.clone();
+        let tx = self.task_tx.clone();
+        self.runtime.spawn(async move {
+            let filter = RequestLogFilter {
+                source: Some(RequestLogSource::TestBench),
+                ..Default::default()
+            };
+            let result = state.store.delete_request_logs_filtered(&filter).await;
+            if let Ok(deleted) = result {
+                tracing::info!(deleted, "cleared test bench request logs");
+                state.events.bump_request_logs();
+            }
+            let _ = tx.send(UiTaskEvent::ModelTestHistoryCleared {
+                deleted: result.unwrap_or_else(|err| {
+                    tracing::warn!(error = %err, "failed to clear test bench request logs");
+                    -1
+                }),
+            });
+        });
+    }
+
+    pub(super) fn handle_model_test_history_cleared(&mut self, deleted: i64) {
+        self.model_test_ui.history_clearing = false;
+        if deleted < 0 {
+            self.status = "清除测试记录失败, 详见日志".to_string();
+            return;
+        }
+        self.model_test_ui.history.clear();
+        self.status = format!("已清除 {deleted} 条测试记录");
     }
 
     fn refresh_model_test_history_if_needed(&mut self) {
@@ -1334,18 +1211,7 @@ impl CodexSwitchApp {
             return;
         }
         self.model_test_ui.history_version_seen = version;
-        let filter = RequestLogFilter {
-            source: Some(RequestLogSource::TestBench),
-            ..Default::default()
-        };
-        self.model_test_ui.history = self
-            .runtime
-            .block_on(
-                self.state
-                    .store
-                    .recent_logs_page_filtered(HISTORY_LIMIT, 0, &filter),
-            )
-            .unwrap_or_default();
+        self.model_test_ui.history = self.load_model_test_history_from_store();
     }
 }
 
@@ -1406,27 +1272,13 @@ fn model_test_reasoning_block(ui: &mut egui::Ui, reasoning: &str) {
         });
 }
 
-/// 报文查看窗口中的文本块, 可选中可复制.
-fn raw_body_block(ui: &mut egui::Ui, id_salt: &str, body: &str) {
-    ui.horizontal(|ui| {
-        if ui.small_button("复制").clicked() {
-            ui.ctx().copy_text(body.to_string());
-        }
-        ui.label(
-            egui::RichText::new(format!("{} 字符", body.chars().count())).weak()
-                .small(),
-        );
-    });
-    egui::ScrollArea::vertical()
-        .id_salt(id_salt)
-        .max_height(320.0)
-        .show(ui, |ui| {
-            ui.add(
-                egui::Label::new(egui::RichText::new(body).monospace())
-                    .wrap()
-                    .selectable(true),
-            );
-        });
+/// 请求模式下拉框的显示文案.
+fn wire_api_label(wire_api: WireApi) -> &'static str {
+    match wire_api {
+        WireApi::ChatCompletions => "chat",
+        WireApi::Responses => "responses",
+        WireApi::AnthropicMessages => "anthropic",
+    }
 }
 
 fn error_color() -> egui::Color32 {
@@ -1435,12 +1287,4 @@ fn error_color() -> egui::Color32 {
 
 fn success_color() -> egui::Color32 {
     egui::Color32::from_rgb(34, 197, 94)
-}
-
-fn truncate_text(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        return text.to_string();
-    }
-    let truncated: String = text.chars().take(max_chars).collect();
-    format!("{truncated}...")
 }

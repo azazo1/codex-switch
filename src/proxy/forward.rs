@@ -46,6 +46,12 @@ mod select;
 /// 测试台请求经本地代理转发时携带的来源标记头.
 pub(crate) const TEST_SOURCE_HEADER: &str = "x-cs-source";
 
+/// 来源标记头的取值.
+pub(crate) const TEST_SOURCE_HEADER_VALUE: &str = "test-bench";
+
+/// 测试台经调度组请求时指定目标调度组的标记头, 仅对测试台来源生效.
+pub(crate) const TEST_GROUP_HEADER: &str = "x-cs-group-id";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpenAiEndpoint {
     Responses,
@@ -162,9 +168,18 @@ pub async fn handle_openai(
     let source = headers
         .get(TEST_SOURCE_HEADER)
         .and_then(|value| value.to_str().ok())
-        .filter(|value| *value == model_test::TEST_SOURCE_HEADER_VALUE)
+        .filter(|value| *value == TEST_SOURCE_HEADER_VALUE)
         .map(|_| RequestLogSource::TestBench)
         .unwrap_or(RequestLogSource::Proxy);
+    let test_group = if source == RequestLogSource::TestBench {
+        headers
+            .get(TEST_GROUP_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+            .filter(|value| !value.trim().is_empty())
+    } else {
+        None
+    };
     let model = usage::extract_model(&body);
     let reasoning_effort = usage::extract_reasoning_effort(&body);
     let compact = endpoint.starts_with("/responses/compact");
@@ -186,6 +201,7 @@ pub async fn handle_openai(
         endpoint_kind,
         compact,
         temporary_key_id: temporary_key_id.clone(),
+        test_group,
     };
     let result = forward_inner(request).await;
 
@@ -308,6 +324,7 @@ struct ForwardRequest<'a> {
     endpoint_kind: OpenAiEndpoint,
     compact: bool,
     temporary_key_id: Option<String>,
+    test_group: Option<String>,
 }
 
 async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, ForwardFailure> {
@@ -318,6 +335,7 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
         usage::extract_model(&request.body).as_deref(),
         request.endpoint_kind,
         request.compact,
+        request.test_group.as_deref(),
     )
     .await
     {

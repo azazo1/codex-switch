@@ -1,6 +1,6 @@
 //! 模型测试台执行器: 绕过调度组直连上游, 或经本地代理端口走完整链路,
 //! 发送小体积测试请求并统计耗时, 首 token 延迟, tokens 与估算费用.
-//! 流式请求会实时回传正文与思维链增量, 并捕获原始请求/响应报文供 UI 查看.
+//! 流式请求会实时回传正文与思维链增量, 并捕获原始请求/响应报文供导出 HAR.
 
 use crate::app::AppState;
 use crate::core::models::{
@@ -11,20 +11,21 @@ use crate::pricing;
 use crate::proxy::transform;
 use crate::usage;
 
+use super::TEST_GROUP_HEADER;
 use super::TEST_SOURCE_HEADER;
+use super::TEST_SOURCE_HEADER_VALUE;
 use super::headers::{apply_headers, peer_request_headers};
 use super::logging::record_request_log;
+use crate::proxy::upstream_auth;
 
 use axum::http::HeaderMap;
 use bytes::Bytes;
+use chrono::{DateTime, Utc};
 use futures_util::{StreamExt, stream::BoxStream};
 use serde_json::{Value, json};
 use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-/// 测试台请求经本地代理转发时携带的来源标记值.
-pub(crate) const TEST_SOURCE_HEADER_VALUE: &str = "test-bench";
 
 /// 经调度组模式固定使用的本地代理端点, 协议转换由代理内部完成.
 const LOCAL_TEST_ENDPOINT: &str = "/v1/responses";
@@ -34,14 +35,6 @@ const INTERNAL_ERROR_STATUS: i64 = 502;
 /// 原始响应报文捕获上限, 超出后截断, 防止异常响应撑爆内存.
 const RESPONSE_CAPTURE_LIMIT: usize = 256 * 1024;
 
-/// 报文查看时需要脱敏的请求头.
-const SENSITIVE_HEADERS: [&str; 4] = [
-    "authorization",
-    "x-api-key",
-    "proxy-authorization",
-    "cookie",
-];
-
 /// 流式增量类型, 区分正文与思维链.
 #[derive(Debug, Clone)]
 pub enum ModelTestStreamPart {
@@ -49,9 +42,10 @@ pub enum ModelTestStreamPart {
     Reasoning(String),
 }
 
-/// 一次测试的原始请求与响应报文 (敏感头已脱敏).
+/// 一次测试的原始请求与响应报文, 供导出 HAR 使用.
 #[derive(Debug, Clone)]
 pub struct ModelTestRawTrace {
+    pub started_at: DateTime<Utc>,
     pub request_url: String,
     pub request_headers: Vec<(String, String)>,
     pub request_body: String,
@@ -60,6 +54,87 @@ pub struct ModelTestRawTrace {
     pub response_headers: Vec<(String, String)>,
     pub response_body: String,
     pub response_truncated: bool,
+}
+
+impl ModelTestRawTrace {
+    /// 转成 HAR 1.2 格式的单个 entry, time 取请求总耗时 (毫秒).
+    /// 字段结构与 logging::har 的自动记录保持一致, 敏感头同样只输出占位符.
+    pub fn to_har_entry(&self, duration_ms: i64, error: Option<&str>) -> Value {
+        let headers = |pairs: &[(String, String)]| {
+            Value::Array(
+                pairs
+                    .iter()
+                    .map(|(name, value)| {
+                        let value = if redact_header(name) {
+                            "[REDACTED]".to_string()
+                        } else {
+                            value.clone()
+                        };
+                        json!({"name": name, "value": value})
+                    })
+                    .collect(),
+            )
+        };
+        let status_text = reqwest::StatusCode::from_u16(
+            self.response_status.clamp(0, u16::MAX as i64) as u16,
+        )
+        .ok()
+        .and_then(|status| status.canonical_reason())
+        .unwrap_or_default();
+        let mut entry = json!({
+            "startedDateTime": self.started_at.with_timezone(&chrono::Local).to_rfc3339(),
+            "time": duration_ms,
+            "request": {
+                "method": "POST",
+                "url": self.request_url,
+                "httpVersion": "HTTP/1.1",
+                "headers": headers(&self.request_headers),
+                "queryString": [],
+                "cookies": [],
+                "headersSize": -1,
+                "bodySize": self.request_body.len(),
+                "postData": {
+                    "mimeType": "application/json",
+                    "text": self.request_body,
+                },
+            },
+            "response": {
+                "status": self.response_status,
+                "statusText": status_text,
+                "httpVersion": "HTTP/1.1",
+                "headers": headers(&self.response_headers),
+                "content": {
+                    "size": self.response_body.len(),
+                    "mimeType": self.response_content_type,
+                    "text": self.response_body,
+                },
+                "redirectURL": "",
+                "headersSize": -1,
+                "bodySize": self.response_body.len(),
+            },
+            "cache": {},
+            "timings": {
+                "send": 0,
+                "wait": duration_ms,
+                "receive": 0,
+            },
+        });
+        if let Some(error) = error {
+            entry["_error"] = json!(error);
+        }
+        if self.response_truncated {
+            entry["_truncated"] = json!(true);
+        }
+        entry
+    }
+}
+
+/// 导出 HAR 时需要脱敏的请求头, 与 logging::har 的策略一致.
+fn redact_header(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "authorization" | "x-api-key" | "proxy-authorization" | "cookie" | "set-cookie"
+    )
 }
 
 /// UI 侧接收流式增量的回调.
@@ -134,20 +209,26 @@ impl ModelTestOutcome {
 /// 最终发出的请求信息, 用于组装原始报文.
 #[derive(Debug, Clone)]
 struct RequestTrace {
+    started_at: DateTime<Utc>,
     url: String,
     headers: Vec<(String, String)>,
     body: String,
 }
 
 /// 直连指定上游执行一次测试, 并把结果写入 request_logs (来源标记为测试台).
+/// `api_key` 用于临时上游的明文密钥, 空字符串表示不带认证;
+/// 保存过的上游传 None, 认证信息从凭据存储读取.
 pub async fn run_direct_test(
     state: &AppState,
     upstream: &Upstream,
+    api_key: Option<&str>,
     params: ModelTestParams,
     on_delta: Option<ModelTestDeltaSink>,
 ) -> ModelTestOutcome {
     let started = Instant::now();
-    let mut outcome = send_direct(state, upstream, &params, started, &on_delta).await;
+    let started_at = Utc::now();
+    let mut outcome = send_direct(state, upstream, api_key, &params, started, started_at, &on_delta)
+        .await;
     outcome.estimated_cost_usd =
         estimate_outcome_cost(state, &params.model, &outcome.usage, Some(upstream)).await;
     let log = RequestLog {
@@ -171,14 +252,17 @@ pub async fn run_direct_test(
 }
 
 /// 经本地代理端口执行一次测试, 日志由代理正常链路落库.
+/// `group_id` 指定调度组, 缺省时使用当前调度组.
 pub async fn run_scheduler_test(
     state: &AppState,
     bind_addr: &str,
     local_key: &str,
+    group_id: Option<&str>,
     params: ModelTestParams,
     on_delta: Option<ModelTestDeltaSink>,
 ) -> ModelTestOutcome {
     let started = Instant::now();
+    let started_at = Utc::now();
     let url = format!("http://{}{LOCAL_TEST_ENDPOINT}", bind_addr.trim());
     let value = build_request_body(WireApi::Responses, &params);
     let body = match serde_json::to_vec(&value) {
@@ -192,7 +276,7 @@ pub async fn run_scheduler_test(
         }
     };
     let request_body = serde_json::to_string_pretty(&value).unwrap_or_default();
-    let request = state
+    let mut request = state
         .http
         .post(&url)
         .header("content-type", "application/json")
@@ -200,6 +284,9 @@ pub async fn run_scheduler_test(
         .header(TEST_SOURCE_HEADER, TEST_SOURCE_HEADER_VALUE)
         .body(body)
         .timeout(params.timeout);
+    if let Some(group_id) = group_id.map(str::trim).filter(|value| !value.is_empty()) {
+        request = request.header(TEST_GROUP_HEADER, group_id);
+    }
     let Ok(built) = request.build() else {
         return ModelTestOutcome::failed(
             INTERNAL_ERROR_STATUS,
@@ -208,14 +295,20 @@ pub async fn run_scheduler_test(
         );
     };
     let trace = RequestTrace {
+        started_at,
         url: built.url().to_string(),
-        headers: sanitize_headers(built.headers()),
+        headers: header_pairs(built.headers()),
         body: request_body,
     };
     match state.http.execute(built).await {
         Ok(response) => {
-            consume_response(TestResponse::Http(response), started, trace, on_delta.as_ref())
-                .await
+            consume_response(
+                TestResponse::Http(response),
+                started,
+                trace,
+                on_delta.as_ref(),
+            )
+            .await
         }
         Err(err) => {
             let mut outcome = ModelTestOutcome::failed(
@@ -247,8 +340,10 @@ pub async fn fetch_upstream_model_ids(
 async fn send_direct(
     state: &AppState,
     upstream: &Upstream,
+    api_key: Option<&str>,
     params: &ModelTestParams,
     started: Instant,
+    started_at: DateTime<Utc>,
     on_delta: &Option<ModelTestDeltaSink>,
 ) -> ModelTestOutcome {
     let wire_api = effective_wire_api(upstream);
@@ -265,8 +360,17 @@ async fn send_direct(
     };
     let request_body = serde_json::to_string_pretty(&value).unwrap_or_default();
     let url = target_url_for(upstream, wire_api);
-    let (response, trace) = match send_request(state, upstream, &url, body, request_body, params.timeout)
-        .await
+    let (response, trace) = match send_request(
+        state,
+        upstream,
+        api_key,
+        &url,
+        body,
+        request_body,
+        params.timeout,
+        started_at,
+    )
+    .await
     {
         Ok(pair) => pair,
         Err((err, trace)) => {
@@ -314,10 +418,12 @@ type SendOutcome = Result<(TestResponse, RequestTrace), (anyhow::Error, Option<R
 async fn send_request(
     state: &AppState,
     upstream: &Upstream,
+    api_key: Option<&str>,
     url: &str,
     body: Vec<u8>,
     request_body: String,
     timeout: Duration,
+    started_at: DateTime<Utc>,
 ) -> SendOutcome {
     match upstream.kind {
         UpstreamKind::PeerNode => {
@@ -329,10 +435,14 @@ async fn send_request(
                     hyper::header::HeaderValue::from_static("application/json"),
                 );
                 let trace = RequestTrace {
+                    started_at,
                     url: url.to_string(),
-                    headers: sanitize_header_pairs(headers.iter().map(|(name, value)| {
-                        (name.to_string(), value.to_str().unwrap_or("").to_string())
-                    })),
+                    headers: headers
+                        .iter()
+                        .map(|(name, value)| {
+                            (name.to_string(), value.to_str().unwrap_or("").to_string())
+                        })
+                        .collect(),
                     body: request_body,
                 };
                 let send_future = http.send("POST", url, headers, body);
@@ -351,11 +461,25 @@ async fn send_request(
                     .header("content-type", "application/json")
                     .body(body)
                     .timeout(timeout);
-                request = apply_headers(state, upstream, request, &HeaderMap::new(), None).await?;
+                request = match api_key {
+                    // 临时上游: 空字符串表示不带认证, 非空直接使用.
+                    Some(api_key) => {
+                        let request = if api_key.is_empty() {
+                            request
+                        } else {
+                            upstream_auth::apply_api_key_auth(request, upstream, api_key)
+                        };
+                        upstream_auth::apply_anthropic_version(request, upstream)
+                    }
+                    None => {
+                        apply_headers(state, upstream, request, &HeaderMap::new(), None).await?
+                    }
+                };
                 let built = request.build()?;
                 let trace = RequestTrace {
+                    started_at,
                     url: built.url().to_string(),
-                    headers: sanitize_headers(built.headers()),
+                    headers: header_pairs(built.headers()),
                     body: request_body,
                 };
                 let response = http.execute(built).await?;
@@ -409,12 +533,12 @@ impl TestResponse {
 
     fn response_headers(&self) -> Vec<(String, String)> {
         match self {
-            Self::Http(response) => sanitize_header_pairs(response.headers().iter().map(
+            Self::Http(response) => response.headers().iter().map(
                 |(name, value)| (name.to_string(), value.to_str().unwrap_or("").to_string()),
-            )),
-            Self::Peer(response) => sanitize_header_pairs(response.headers.iter().map(
+            ).collect(),
+            Self::Peer(response) => response.headers.iter().map(
                 |(name, value)| (name.to_string(), value.to_str().unwrap_or("").to_string()),
-            )),
+            ).collect(),
         }
     }
 
@@ -622,6 +746,7 @@ fn finish_outcome(
     error: Option<String>,
 ) -> ModelTestOutcome {
     let raw = Arc::new(ModelTestRawTrace {
+        started_at: request_trace.started_at,
         request_url: request_trace.url,
         request_headers: request_trace.headers,
         request_body: request_trace.body,
@@ -647,6 +772,7 @@ fn finish_outcome(
 /// 网络层失败时只有请求侧信息, 响应内容为空.
 fn empty_response_trace(trace: RequestTrace) -> ModelTestRawTrace {
     ModelTestRawTrace {
+        started_at: trace.started_at,
         request_url: trace.url,
         request_headers: trace.headers,
         request_body: trace.body,
@@ -891,30 +1017,10 @@ pub(super) fn extract_error_message(value: &Value) -> Option<String> {
         })
 }
 
-fn sanitize_headers(headers: &reqwest::header::HeaderMap) -> Vec<(String, String)> {
-    sanitize_header_pairs(headers.iter().map(|(name, value)| {
-        (name.to_string(), value.to_str().unwrap_or("").to_string())
-    }))
-}
-
-fn sanitize_header_pairs(headers: impl Iterator<Item = (String, String)>) -> Vec<(String, String)> {
+fn header_pairs(headers: &reqwest::header::HeaderMap) -> Vec<(String, String)> {
     headers
-        .map(|(name, value)| {
-            let sanitized = if SENSITIVE_HEADERS
-                .iter()
-                .any(|sensitive| name.eq_ignore_ascii_case(sensitive))
-            {
-                let prefix: String = value.chars().take(12).collect();
-                if value.chars().count() > 12 {
-                    format!("{prefix}...(已脱敏)")
-                } else {
-                    prefix
-                }
-            } else {
-                value
-            };
-            (name, sanitized)
-        })
+        .iter()
+        .map(|(name, value)| (name.to_string(), value.to_str().unwrap_or("").to_string()))
         .collect()
 }
 
@@ -1059,31 +1165,35 @@ mod tests {
     }
 
     #[test]
-    fn sanitizes_sensitive_headers_only() {
-        let headers = [
-            ("authorization", "Bearer cs-secret-value"),
-            ("x-api-key", "sk-1234567890abcdef"),
-            ("content-type", "application/json"),
-        ]
-        .into_iter()
-        .map(|(name, value)| {
-            (
-                reqwest::header::HeaderName::from_bytes(name.as_bytes()).unwrap(),
-                reqwest::header::HeaderValue::from_str(value).unwrap(),
-            )
-        })
-        .collect::<reqwest::header::HeaderMap>();
-        let sanitized = sanitize_headers(&headers);
-        let find = |name: &str| {
-            sanitized
-                .iter()
-                .find(|(key, _)| key.eq_ignore_ascii_case(name))
-                .map(|(_, value)| value.clone())
-                .unwrap()
+    fn builds_har_entry_with_request_and_response() {
+        let trace = ModelTestRawTrace {
+            started_at: Utc::now(),
+            request_url: "https://relay.example.com/v1/chat/completions".to_string(),
+            request_headers: vec![
+                ("content-type".to_string(), "application/json".to_string()),
+                ("authorization".to_string(), "Bearer cs-secret".to_string()),
+            ],
+            request_body: "{\"model\":\"gpt-test\"}".to_string(),
+            response_status: 200,
+            response_content_type: "application/json".to_string(),
+            response_headers: vec![("server".to_string(), "test".to_string())],
+            response_body: "{\"ok\":true}".to_string(),
+            response_truncated: false,
         };
-        assert!(find("authorization").ends_with("(已脱敏)"));
-        assert!(find("authorization").starts_with("Bearer cs-s"));
-        assert!(find("x-api-key").ends_with("(已脱敏)"));
-        assert_eq!(find("content-type"), "application/json");
+
+        let entry = trace.to_har_entry(123, None);
+        assert_eq!(entry["request"]["method"], "POST");
+        assert_eq!(entry["request"]["url"], trace.request_url);
+        assert_eq!(entry["request"]["postData"]["text"], trace.request_body);
+        assert_eq!(entry["response"]["status"], 200);
+        assert_eq!(entry["response"]["content"]["text"], trace.response_body);
+        assert_eq!(entry["time"], 123);
+        assert_eq!(entry["timings"]["wait"], 123);
+        assert_eq!(entry["request"]["headers"][0]["name"], "content-type");
+        assert_eq!(entry["request"]["headers"][1]["value"], "[REDACTED]");
+        assert!(entry.get("_error").is_none());
+
+        let failed = trace.to_har_entry(456, Some("timeout"));
+        assert_eq!(failed["_error"], "timeout");
     }
 }
