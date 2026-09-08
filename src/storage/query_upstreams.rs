@@ -354,14 +354,7 @@ impl Store {
         let mut imported = Vec::with_capacity(payload.upstreams.len());
         for item in &payload.upstreams {
             let mut upstream = item.upstream.clone();
-            let exists = sqlx::query("SELECT id FROM upstreams WHERE id = ?1")
-                .bind(&upstream.id)
-                .fetch_optional(&mut *tx)
-                .await?
-                .is_some();
-            if exists {
-                upstream.id = uuid::Uuid::new_v4().to_string();
-            }
+            upstream.id = uuid::Uuid::new_v4().to_string();
             let now = Utc::now();
             upstream.created_at = now;
             upstream.updated_at = now;
@@ -643,21 +636,24 @@ mod tests {
             .unwrap()
             .expect("upstream exists");
         let json = export.to_json().unwrap();
+        assert!(!json.contains(&upstream.id), "导出 JSON 不应包含上游 id");
+        assert!(
+            !json.contains("created_at") && !json.contains("updated_at"),
+            "导出 JSON 不应包含时间戳"
+        );
         let parsed = UpstreamExport::from_json(&json).unwrap();
         assert_eq!(parsed.upstreams.len(), 1);
         let item = &parsed.upstreams[0];
-        assert_eq!(item.upstream.id, upstream.id);
+        assert!(item.upstream.id.is_empty());
+        assert_eq!(item.upstream.created_at.timestamp(), 0);
         assert_eq!(
             item.credentials.get("api_key").map(String::as_str),
             Some("sk-test")
         );
 
-        let mut imported = store
-            .import_upstreams(&parsed)
-            .await
-            .unwrap();
+        let mut imported = store.import_upstreams(&parsed).await.unwrap();
         let imported = imported.pop().unwrap();
-        assert_ne!(imported.id, upstream.id, "同 id 冲突时应生成新 id");
+        assert_ne!(imported.id, upstream.id, "导入时应生成新 id");
         assert_eq!(imported.name, upstream.name);
         assert_eq!(imported.base_url, upstream.base_url);
         assert_eq!(
