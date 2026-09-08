@@ -30,7 +30,7 @@ just dist
 
 归档文件名使用自动生成的构建版本号. 精确 tag 使用包版本, 例如 `codex-switch-0.11.0-linux-x86_64.tar.gz`; 非 tag commit 会在最近版本后追加 7 位短 hash, 例如 `codex-switch-0.11.0-a1b2c3d-linux-x86_64.tar.gz`.
 
-构建产物会自动显示版本和构建 commit: 精确 tag 显示 `vX.Y.Z`, 非 tag 显示 `vX.Y.Z-<7 位 commit>`, 工作区有未提交改动时使用 `^` 分隔.
+版本号注入默认关闭: 直接 `cargo build` 的日常开发构建显示 `dev-build`, 构建脚本也不会读取 `.git`, 增量编译缓存不受 commit 影响. `just dist` 和 CI 的发布构建通过 `CODEX_SWITCH_BUILD_VERSION` 注入自动生成的版本号, 产物显示: 精确 tag 显示 `vX.Y.Z`, 非 tag 显示 `vX.Y.Z-<7 位 commit>`, 工作区有未提交改动时使用 `^` 分隔.
 
 Windows 构建会将 `assets/app-icon.ico` 内嵌到 `.exe` 中. 图标包含从 16x16 到 256x256 的多档尺寸.
 

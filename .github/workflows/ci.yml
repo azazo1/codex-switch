@@ -218,6 +218,8 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: 构建 release 二进制文件
+        env:
+          CODEX_SWITCH_BUILD_VERSION: v${{ needs.version.outputs.build_version }}
         run: cargo build --locked --release --bins --target ${{ matrix.target }}
 
       - name: 校验 Linux 二进制文件

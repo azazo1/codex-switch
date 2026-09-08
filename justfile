@@ -19,20 +19,20 @@ run:
     cargo run
 
 # just dist
-# 根据当前平台生成发布产物.
+# 根据当前平台生成发布产物, 构建时注入自动生成的版本号.
 [macos]
 dist:
-    cargo build --locked --release --bins
+    CODEX_SWITCH_BUILD_VERSION="v$(bash scripts/build-version.sh)" cargo build --locked --release --bins
     bash scripts/dist-macos.sh target/release
 
 [linux]
 dist:
-    cargo build --locked --release --bins
+    CODEX_SWITCH_BUILD_VERSION="v$(bash scripts/build-version.sh)" cargo build --locked --release --bins
     bash scripts/dist-linux.sh target/release
 
 [windows]
 dist:
-    cargo build --locked --release --bins
+    CODEX_SWITCH_BUILD_VERSION="v$(powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-version.ps1 | tr -d '\r')" cargo build --locked --release --bins
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dist-windows.ps1
 
 # just macos-app
