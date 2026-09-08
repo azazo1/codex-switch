@@ -1295,9 +1295,9 @@ fn model_test_reasoning_block(ui: &mut egui::Ui, id_salt: egui::Id, reasoning: &
 /// 请求模式下拉框的显示文案.
 fn wire_api_label(wire_api: WireApi) -> &'static str {
     match wire_api {
-        WireApi::ChatCompletions => "chat",
-        WireApi::Responses => "responses",
-        WireApi::AnthropicMessages => "anthropic",
+        WireApi::ChatCompletions => "Chat Completions",
+        WireApi::Responses => "Responses",
+        WireApi::AnthropicMessages => "Anthropic Messages",
     }
 }
 
