@@ -825,7 +825,8 @@ pub(super) fn build_request_body(wire_api: WireApi, params: &ModelTestParams) ->
                 "max_output_tokens": params.max_tokens,
             });
             if let Some(effort) = &params.reasoning_effort {
-                body["reasoning"] = json!({"effort": effort});
+                // 带 summary 上游才会下发 reasoning summary text, 与 Codex CLI 行为一致.
+                body["reasoning"] = json!({"effort": effort, "summary": "auto"});
             }
             body
         }
