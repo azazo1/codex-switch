@@ -406,20 +406,22 @@ impl UpstreamEditor {
                     .on_hover_text(
                         "依据 Base URL 在本地判断, 不发起任何请求; 模型列表按此结果解析.",
                     );
-                if ui
+            }
+            // 中转站可能只识别出余额 provider, 此时同样允许套用.
+            if detected.has_suggestion()
+                && ui
                     .button("应用识别结果")
                     .on_hover_text(
-                        "按识别结果改写 Base URL, Wire API, 认证方式和过滤开关, 保存后生效.",
+                        "按识别结果改写 Base URL, Wire API, 认证方式, 过滤开关和余额 provider, 保存后生效.",
                     )
                     .clicked()
-                {
-                    let changed = detected.apply_to(&mut self.upstream);
-                    self.apply_status = if changed.is_empty() {
-                        "当前设置与识别结果一致".to_string()
-                    } else {
-                        format!("已按识别结果改写: {}", changed.join(", "))
-                    };
-                }
+            {
+                let changed = detected.apply_to(&mut self.upstream);
+                self.apply_status = if changed.is_empty() {
+                    "当前设置与识别结果一致".to_string()
+                } else {
+                    format!("已按识别结果改写: {}", changed.join(", "))
+                };
             }
         });
         if !self.apply_status.is_empty() {
@@ -502,10 +504,12 @@ impl UpstreamEditor {
             );
         });
         provider_combo(ui, &mut self.upstream.balance_provider);
-        if self.upstream.balance_provider == BalanceProvider::Auto
-            && let Some(provider) = balance::detect_provider(&self.upstream.base_url)
+        if let Some(provider) = upstream_detection::detect_upstream(&self.upstream.base_url)
+            .suggestion
+            .balance_provider
         {
-            ui.label(format!("自动识别: {}", provider.as_str()));
+            ui.label(format!("识别为: {}", provider.as_str()))
+                .on_hover_text("依据 Base URL 判断的余额 provider, 可手动选择覆盖或点上方按钮写入.");
         }
         balance_alert_form(ui, &mut self.balance_alert);
         ui.separator();

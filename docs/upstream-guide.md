@@ -31,18 +31,20 @@ Codex Switch 只依据 Base URL 在本地判断上游属于哪一类, 不发起�
 
 | 识别结果 | 判定条件 | 建议值 |
 | --- | --- | --- |
-| `OpenAI 兼容` | DeepSeek, SiliconFlow, StepFun, OpenRouter, Novita 等官方站点 | Chat Completions, Bearer |
+| `OpenAI 兼容` | DeepSeek, SiliconFlow, StepFun, OpenRouter, Novita 等官方站点 | Chat Completions, Bearer, 对应余额 provider |
 | `Anthropic` | `api.anthropic.com` | Anthropic Messages, `x-api-key` |
-| `智谱 /api/v1` | Base URL 以 `/api` 或 `/api/v1` 结尾, 或只填智谱域名 | Responses, Bearer |
-| `智谱 paas` | 智谱域名下的其他路径, 例如 `/api/paas/v4` | Chat Completions, Bearer |
+| `智谱 /api/v1` | Base URL 以 `/api` 或 `/api/v1` 结尾, 或只填智谱域名 | Responses, Bearer, 余额 `zhipu` |
+| `智谱 paas` | 智谱域名下的其他路径, 例如 `/api/paas/v4` | Chat Completions, Bearer, 余额 `zhipu` |
 | `OpenCode` | `opencode.ai` | Chat Completions, Bearer, 过滤 server_tool |
-| `未识别` | 其他地址 | 保持手填值 |
+| `未识别` | 其他地址 | 保持手填值, 已知面板域名仍会填余额 provider |
 
 识别结果同时决定模型列表的解析方式. 智谱 `/api/v1` 返回 `{"models":[{"slug": ...}]}`, 且鉴权失败也返回 HTTP 200, 只能读取响应体里的 `code` 和 `success` 判断. 其他形状按 `data` 数组加 `id` 字段解析, 并回退识别 `models` 数组, 顶层数组, `name` 和 `slug` 字段.
 
 智谱和 OpenCode 的裸域名下没有模型列表端点, 因此只填域名时新增表单会显示 `补全为 <地址>` 按钮, 点一下把 Base URL 补成完整路径, 例如 `https://open.bigmodel.cn/api/v1`.
 
-识别结果只是默认值, 任何维度都可以手动覆盖. 手动改过 Wire API 或认证方式后, 新增表单不再自动改写这两项. 编辑页点击 `应用识别结果` 会一并改写 Base URL, Wire API, 认证方式, 支持 compact 和过滤 server_tool, 保存后生效.
+余额 provider 与协议识别共用同一份域名判断, 见[查询余额](#查询余额). NewApi 和 Sub2Api 这类中转站没有固定协议特征, 但填了对应域名时仍会自动填入余额 provider.
+
+识别结果只是默认值, 任何维度都可以手动覆盖. 手动改过 Wire API 或认证方式后, 新增表单不再自动改写这两项. 编辑页点击 `应用识别结果` 会一并改写 Base URL, Wire API, 认证方式, 支持 compact, 过滤 server_tool 和余额 provider, 保存后生效.
 
 ## 选择 Wire API
 

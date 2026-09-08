@@ -78,29 +78,9 @@ struct CommonBalanceUrl {
     kind: CommonBalanceUrlKind,
 }
 
+/// 依据 Base URL 判断余额 provider, 与表单预填共用同一份域名判断.
 pub fn detect_provider(base_url: &str) -> Option<BalanceProvider> {
-    let url = base_url.to_lowercase();
-    if url.contains("api.deepseek.com") {
-        Some(BalanceProvider::DeepSeek)
-    } else if url.contains("api.stepfun.ai") || url.contains("api.stepfun.com") {
-        Some(BalanceProvider::StepFun)
-    } else if url.contains("api.siliconflow.cn") {
-        Some(BalanceProvider::SiliconFlowCn)
-    } else if url.contains("api.siliconflow.com") {
-        Some(BalanceProvider::SiliconFlowGlobal)
-    } else if url.contains("openrouter.ai") {
-        Some(BalanceProvider::OpenRouter)
-    } else if url.contains("api.novita.ai") {
-        Some(BalanceProvider::Novita)
-    } else if url.contains("open.bigmodel.cn") {
-        Some(BalanceProvider::Zhipu)
-    } else if url.contains("sub2api") {
-        Some(BalanceProvider::Sub2Api)
-    } else if url.contains("new-api") || url.contains("newapi") || url.contains("one-api") {
-        Some(BalanceProvider::NewApi)
-    } else {
-        None
-    }
+    crate::core::upstream_detection::detect_balance_provider(base_url)
 }
 
 pub async fn query_and_store(

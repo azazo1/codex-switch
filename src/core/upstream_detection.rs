@@ -5,7 +5,7 @@
 //! 识别出的模型列表形状会直接参与响应解析, 因此智谱 `/api/v1` 这种
 //! 使用 `{"models":[{"slug": ...}]}` 的端点也能被正确读出.
 
-use crate::core::models::{ApiKeyAuthScheme, Upstream, WireApi};
+use crate::core::models::{ApiKeyAuthScheme, BalanceProvider, Upstream, WireApi};
 use serde_json::Value;
 
 /// OpenAI 兼容形状的模型列表容器键.
@@ -58,6 +58,7 @@ pub struct SuggestedSettings {
     pub api_key_auth_scheme: Option<ApiKeyAuthScheme>,
     pub supports_compact: Option<bool>,
     pub filter_chat_server_tools: Option<bool>,
+    pub balance_provider: Option<BalanceProvider>,
 }
 
 /// 上游识别结果.
@@ -110,6 +111,12 @@ impl DetectedUpstream {
             upstream.filter_chat_server_tools = filter;
             changed.push("过滤 server_tool");
         }
+        if let Some(provider) = suggestion.balance_provider
+            && upstream.balance_provider != provider
+        {
+            upstream.balance_provider = provider;
+            changed.push("余额 provider");
+        }
         // Anthropic 上游始终不支持 compact, 这里补齐与编辑器一致的约束.
         if upstream.wire_api == WireApi::AnthropicMessages && upstream.supports_compact {
             upstream.supports_compact = false;
@@ -118,6 +125,16 @@ impl DetectedUpstream {
             }
         }
         changed
+    }
+
+    /// 是否有任何可写入的建议. 中转站等无法判断协议时仍可能识别出余额 provider.
+    pub fn has_suggestion(self) -> bool {
+        let s = self.suggestion;
+        s.wire_api.is_some()
+            || s.api_key_auth_scheme.is_some()
+            || s.supports_compact.is_some()
+            || s.filter_chat_server_tools.is_some()
+            || s.balance_provider.is_some()
     }
 
     /// 判断一次模型列表查询是否失败, 返回可读错误.
@@ -169,6 +186,7 @@ pub const DEFAULT_DETECTION: DetectedUpstream = DetectedUpstream {
         api_key_auth_scheme: None,
         supports_compact: None,
         filter_chat_server_tools: None,
+        balance_provider: None,
     },
     models_container: OPENAI_CONTAINER,
     models_id_field: "id",
@@ -191,9 +209,45 @@ pub fn detect_upstream(base_url: &str) -> DetectedUpstream {
         return opencode_detection();
     }
     if is_known_openai_compatible(&url) {
-        return openai_compatible_detection();
+        return openai_compatible_detection(&url);
+    }
+    // 协议无法判断的中转站仍可能识别出余额 provider.
+    if let Some(provider) = detect_balance_provider(&url) {
+        return DetectedUpstream {
+            suggestion: SuggestedSettings {
+                balance_provider: Some(provider),
+                ..SuggestedSettings::default()
+            },
+            ..DEFAULT_DETECTION
+        };
     }
     DEFAULT_DETECTION
+}
+
+/// 依据 Base URL 判断余额 provider, 供余额查询和表单预填共用.
+pub fn detect_balance_provider(base_url: &str) -> Option<BalanceProvider> {
+    let url = base_url.trim().to_ascii_lowercase();
+    if url.contains("api.deepseek.com") {
+        Some(BalanceProvider::DeepSeek)
+    } else if url.contains("api.stepfun.ai") || url.contains("api.stepfun.com") {
+        Some(BalanceProvider::StepFun)
+    } else if url.contains("api.siliconflow.cn") {
+        Some(BalanceProvider::SiliconFlowCn)
+    } else if url.contains("api.siliconflow.com") {
+        Some(BalanceProvider::SiliconFlowGlobal)
+    } else if url.contains("openrouter.ai") {
+        Some(BalanceProvider::OpenRouter)
+    } else if url.contains("api.novita.ai") {
+        Some(BalanceProvider::Novita)
+    } else if url.contains("open.bigmodel.cn") || url.contains("api.z.ai") {
+        Some(BalanceProvider::Zhipu)
+    } else if url.contains("sub2api") {
+        Some(BalanceProvider::Sub2Api)
+    } else if url.contains("new-api") || url.contains("newapi") || url.contains("one-api") {
+        Some(BalanceProvider::NewApi)
+    } else {
+        None
+    }
 }
 
 fn anthropic_detection() -> DetectedUpstream {
@@ -204,6 +258,7 @@ fn anthropic_detection() -> DetectedUpstream {
             api_key_auth_scheme: Some(ApiKeyAuthScheme::XApiKey),
             supports_compact: Some(false),
             filter_chat_server_tools: None,
+            balance_provider: None,
         },
         models_container: OPENAI_CONTAINER,
         models_id_field: "id",
@@ -211,7 +266,7 @@ fn anthropic_detection() -> DetectedUpstream {
     }
 }
 
-fn openai_compatible_detection() -> DetectedUpstream {
+fn openai_compatible_detection(url: &str) -> DetectedUpstream {
     DetectedUpstream {
         kind: DetectedKind::OpenAiCompatible,
         suggestion: SuggestedSettings {
@@ -219,6 +274,7 @@ fn openai_compatible_detection() -> DetectedUpstream {
             api_key_auth_scheme: Some(ApiKeyAuthScheme::Bearer),
             supports_compact: None,
             filter_chat_server_tools: None,
+            balance_provider: detect_balance_provider(url),
         },
         models_container: OPENAI_CONTAINER,
         models_id_field: "id",
@@ -236,6 +292,7 @@ fn opencode_detection() -> DetectedUpstream {
             api_key_auth_scheme: Some(ApiKeyAuthScheme::Bearer),
             supports_compact: None,
             filter_chat_server_tools: Some(true),
+            balance_provider: None,
         },
         models_container: OPENAI_CONTAINER,
         models_id_field: "id",
@@ -270,6 +327,7 @@ fn zhipu_detection(url: &str) -> DetectedUpstream {
                 api_key_auth_scheme: Some(ApiKeyAuthScheme::Bearer),
                 supports_compact: None,
                 filter_chat_server_tools: None,
+                balance_provider: Some(BalanceProvider::Zhipu),
             },
             models_container: ZHIPU_SLUG_CONTAINER,
             models_id_field: "slug",
@@ -283,6 +341,7 @@ fn zhipu_detection(url: &str) -> DetectedUpstream {
             api_key_auth_scheme: Some(ApiKeyAuthScheme::Bearer),
             supports_compact: None,
             filter_chat_server_tools: None,
+            balance_provider: Some(BalanceProvider::Zhipu),
         },
         models_container: OPENAI_CONTAINER,
         models_id_field: "id",
@@ -403,6 +462,69 @@ mod tests {
         );
         assert!(opencode.base_url_hint("https://opencode.ai/zen/go/v1").is_none());
         assert!(opencode.base_url_hint("https://opencode.ai/zen/v1").is_none());
+    }
+
+    #[test]
+    fn detects_balance_provider_from_base_url() {
+        assert_eq!(
+            detect_balance_provider("https://api.deepseek.com/v1"),
+            Some(BalanceProvider::DeepSeek)
+        );
+        assert_eq!(
+            detect_balance_provider("https://openrouter.ai/api/v1"),
+            Some(BalanceProvider::OpenRouter)
+        );
+        assert_eq!(
+            detect_balance_provider("https://open.bigmodel.cn/api/v1"),
+            Some(BalanceProvider::Zhipu)
+        );
+        assert_eq!(
+            detect_balance_provider("https://api.z.ai/api/v1"),
+            Some(BalanceProvider::Zhipu)
+        );
+        assert_eq!(
+            detect_balance_provider("https://relay.example.com/v1"),
+            None
+        );
+
+        // 识别结果携带余额 provider, 供表单预填.
+        assert_eq!(
+            detect_upstream("https://api.deepseek.com").suggestion.balance_provider,
+            Some(BalanceProvider::DeepSeek)
+        );
+        assert_eq!(
+            detect_upstream("https://open.bigmodel.cn").suggestion.balance_provider,
+            Some(BalanceProvider::Zhipu)
+        );
+        // 中转站没有协议建议, 但能识别余额 provider.
+        let panel = detect_upstream("https://example.com/new-api/v1");
+        assert_eq!(panel.kind, DetectedKind::Unknown);
+        assert!(panel.has_suggestion());
+        assert_eq!(
+            panel.suggestion.balance_provider,
+            Some(BalanceProvider::NewApi)
+        );
+        assert!(panel.suggestion.wire_api.is_none());
+        // 完全不认识的中转站没有任何建议.
+        let unknown = detect_upstream("https://relay.example.com/v1");
+        assert!(!unknown.has_suggestion());
+        assert_eq!(unknown.suggestion.balance_provider, None);
+    }
+
+    #[test]
+    fn apply_to_writes_balance_provider() {
+        let detected = detect_upstream("https://api.deepseek.com/v1");
+        let mut upstream = Upstream::new_relay(
+            "deepseek".to_string(),
+            "https://api.deepseek.com/v1".to_string(),
+            WireApi::ChatCompletions,
+            true,
+            BalanceProvider::Auto,
+        );
+        let changed = detected.apply_to(&mut upstream);
+
+        assert!(changed.contains(&"余额 provider"));
+        assert_eq!(upstream.balance_provider, BalanceProvider::DeepSeek);
     }
 
     #[test]
