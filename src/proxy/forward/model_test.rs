@@ -1,6 +1,7 @@
 //! 模型测试台执行器: 绕过调度组直连上游, 或经本地代理端口走完整链路,
 //! 发送小体积测试请求并统计耗时, 首 token 延迟, tokens 与估算费用.
 //! 流式请求会实时回传正文与思维链增量, 并捕获原始请求/响应报文供导出 HAR.
+//! 请求日志照常落库供日志页查看, 测试台自身的记录随 outcome 交由 UI 保存在内存中.
 
 use crate::app::AppState;
 use crate::core::models::{
@@ -184,6 +185,14 @@ pub struct ModelTestOutcome {
     pub estimated_cost_usd: Option<f64>,
     pub error: Option<String>,
     pub raw: Option<Arc<ModelTestRawTrace>>,
+    /// 测试使用的模型名.
+    pub model: String,
+    /// 是否为流式请求, 用于区分首 token 未返回与非流式.
+    pub stream: bool,
+    /// 上游显示名, 经调度组测试时为 None.
+    pub upstream_name: Option<String>,
+    /// 实际请求的端点路径.
+    pub endpoint: String,
 }
 
 impl ModelTestOutcome {
@@ -202,6 +211,10 @@ impl ModelTestOutcome {
             estimated_cost_usd: None,
             error: Some(error),
             raw: None,
+            model: String::new(),
+            stream: false,
+            upstream_name: None,
+            endpoint: String::new(),
         }
     }
 }
@@ -215,7 +228,8 @@ struct RequestTrace {
     body: String,
 }
 
-/// 直连指定上游执行一次测试, 并把结果写入 request_logs (来源标记为测试台).
+/// 直连指定上游执行一次测试. 请求日志照常写入数据库供日志页查看,
+/// 测试台自身的记录由 UI 保存在内存中.
 /// `api_key` 用于临时上游的明文密钥, 空字符串表示不带认证;
 /// 保存过的上游传 None, 认证信息从凭据存储读取.
 pub async fn run_direct_test(
@@ -231,27 +245,35 @@ pub async fn run_direct_test(
         .await;
     outcome.estimated_cost_usd =
         estimate_outcome_cost(state, &params.model, &outcome.usage, Some(upstream)).await;
-    let log = RequestLog {
-        ts: None,
-        upstream_id: Some(upstream.id.clone()),
-        upstream_name: Some(upstream.name.clone()),
-        source: RequestLogSource::TestBench,
-        endpoint: endpoint_path(effective_wire_api(upstream)).to_string(),
-        model: Some(params.model.clone()),
-        target_model: None,
-        reasoning_effort: params.reasoning_effort.clone(),
-        status: outcome.status,
-        usage: outcome.usage.clone(),
-        estimated_cost_usd: outcome.estimated_cost_usd,
-        duration_ms: outcome.duration_ms,
-        first_token_ms: outcome.first_token_ms,
-        error: outcome.error.clone(),
-    };
-    record_request_log(state, log, None).await;
+    outcome.model = params.model.clone();
+    outcome.stream = params.stream;
+    outcome.upstream_name = Some(upstream.name.clone());
+    outcome.endpoint = endpoint_path(effective_wire_api(upstream)).to_string();
+    record_request_log(
+        state,
+        RequestLog {
+            ts: None,
+            upstream_id: Some(upstream.id.clone()),
+            upstream_name: Some(upstream.name.clone()),
+            source: RequestLogSource::TestBench,
+            endpoint: outcome.endpoint.clone(),
+            model: Some(params.model.clone()),
+            target_model: None,
+            reasoning_effort: params.reasoning_effort.clone(),
+            status: outcome.status,
+            usage: outcome.usage.clone(),
+            estimated_cost_usd: outcome.estimated_cost_usd,
+            duration_ms: outcome.duration_ms,
+            first_token_ms: outcome.first_token_ms,
+            error: outcome.error.clone(),
+        },
+        None,
+    )
+    .await;
     outcome
 }
 
-/// 经本地代理端口执行一次测试, 日志由代理正常链路落库.
+/// 经本地代理端口执行一次测试, 请求日志由代理正常链路落库.
 /// `group_id` 指定调度组, 缺省时使用当前调度组.
 pub async fn run_scheduler_test(
     state: &AppState,
@@ -261,10 +283,26 @@ pub async fn run_scheduler_test(
     params: ModelTestParams,
     on_delta: Option<ModelTestDeltaSink>,
 ) -> ModelTestOutcome {
+    let mut outcome =
+        run_scheduler_test_inner(state, bind_addr, local_key, group_id, &params, on_delta).await;
+    outcome.model = params.model;
+    outcome.stream = params.stream;
+    outcome.endpoint = LOCAL_TEST_ENDPOINT.to_string();
+    outcome
+}
+
+async fn run_scheduler_test_inner(
+    state: &AppState,
+    bind_addr: &str,
+    local_key: &str,
+    group_id: Option<&str>,
+    params: &ModelTestParams,
+    on_delta: Option<ModelTestDeltaSink>,
+) -> ModelTestOutcome {
     let started = Instant::now();
     let started_at = Utc::now();
     let url = format!("http://{}{LOCAL_TEST_ENDPOINT}", bind_addr.trim());
-    let value = build_request_body(WireApi::Responses, &params);
+    let value = build_request_body(WireApi::Responses, params);
     let body = match serde_json::to_vec(&value) {
         Ok(body) => body,
         Err(err) => {
@@ -767,6 +805,11 @@ fn finish_outcome(
         estimated_cost_usd: None,
         error,
         raw: Some(raw),
+        // 元数据字段由 run_direct_test / run_scheduler_test 在外层统一填充.
+        model: String::new(),
+        stream: false,
+        upstream_name: None,
+        endpoint: String::new(),
     }
 }
 

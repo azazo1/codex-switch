@@ -1,13 +1,12 @@
 use super::CodexSwitchApp;
 use super::UiTaskEvent;
 use super::tokens;
-use crate::core::models::{BalanceProvider, RequestLog, RequestLogSource, Upstream, UpstreamKind, WireApi};
+use crate::core::models::{BalanceProvider, Upstream, UpstreamKind, WireApi};
 use crate::proxy::forward::model_test as test_bench;
 use crate::proxy::forward::model_test::ModelTestOutcome;
 use crate::proxy::forward::model_test::ModelTestRawTrace;
 use crate::proxy::forward::model_test::ModelTestStreamPart;
-use crate::storage::RequestLogFilter;
-use chrono::Local;
+use chrono::{DateTime, Local};
 use eframe::egui;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -16,7 +15,6 @@ const DEFAULT_PROMPT: &str = "请只回复: pong";
 const DEFAULT_MAX_TOKENS: &str = "64";
 const DEFAULT_TIMEOUT_SECS: &str = "120";
 const DEFAULT_REASONING_EFFORT: &str = "medium";
-const HISTORY_LIMIT: i64 = 50;
 const CHAT_HISTORY_HEIGHT: f32 = 260.0;
 const RESULT_TEXT_HEIGHT: f32 = 160.0;
 
@@ -80,12 +78,41 @@ enum ChatRole {
     Assistant,
 }
 
+/// 测试台内存记录: 一次测试的完整信息, 只保存在 UI 中, 不写入数据库,
+/// 携带原始请求/响应报文, 因此"导出全部"可以导出完整的 HAR.
 #[derive(Debug, Clone)]
-struct ChatMeta {
+struct ModelTestRecord {
+    finished_at: DateTime<Local>,
+    upstream_name: Option<String>,
+    endpoint: String,
+    model: String,
+    stream: bool,
+    status: i64,
+    error: Option<String>,
     duration_ms: i64,
     first_token_ms: Option<i64>,
     total_tokens: i64,
+    estimated_cost_usd: Option<f64>,
     raw: Option<Arc<ModelTestRawTrace>>,
+}
+
+impl ModelTestRecord {
+    fn from_outcome(outcome: &ModelTestOutcome) -> Self {
+        Self {
+            finished_at: Local::now(),
+            upstream_name: outcome.upstream_name.clone(),
+            endpoint: outcome.endpoint.clone(),
+            model: outcome.model.clone(),
+            stream: outcome.stream,
+            status: outcome.status,
+            error: outcome.error.clone(),
+            duration_ms: outcome.duration_ms,
+            first_token_ms: outcome.first_token_ms,
+            total_tokens: outcome.usage.total_tokens,
+            estimated_cost_usd: outcome.estimated_cost_usd,
+            raw: outcome.raw.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -94,7 +121,9 @@ struct ChatEntry {
     text: String,
     reasoning: String,
     error: bool,
-    meta: Option<ChatMeta>,
+    /// 已完成回复对应的完整测试记录, 用于展示耗时与导出 HAR;
+    /// 用户消息与派发前就失败的条目为 None.
+    record: Option<Arc<ModelTestRecord>>,
 }
 
 #[derive(Debug)]
@@ -123,9 +152,7 @@ pub(super) struct ModelTestUiState {
     chat_started: Option<Instant>,
     chat_live_text: String,
     chat_live_reasoning: String,
-    history: Vec<RequestLog>,
-    history_version_seen: u64,
-    history_clearing: bool,
+    history: Vec<ModelTestRecord>,
 }
 
 impl Default for ModelTestUiState {
@@ -161,8 +188,6 @@ impl Default for ModelTestUiState {
             chat_live_text: String::new(),
             chat_live_reasoning: String::new(),
             history: Vec::new(),
-            history_version_seen: 0,
-            history_clearing: false,
         }
     }
 }
@@ -175,7 +200,6 @@ impl ModelTestUiState {
 
 impl CodexSwitchApp {
     pub(super) fn model_test_ui(&mut self, ui: &mut egui::Ui) {
-        self.refresh_model_test_history_if_needed();
         if self.model_test_ui.busy() {
             ui.ctx().request_repaint_after(Duration::from_millis(200));
         }
@@ -488,9 +512,10 @@ impl CodexSwitchApp {
             }
         });
         if self.model_test_ui.single_result.started.is_some() {
+            // live 块与完成后的结果卡使用同一思维链 id, 展开状态跨阶段保留.
             model_test_stream_block(
                 ui,
-                egui::Id::new("model_test_single_live"),
+                single_reasoning_base_id(),
                 &self.model_test_ui.single_result.live_reasoning,
                 &self.model_test_ui.single_result.live_text,
                 true,
@@ -543,7 +568,7 @@ impl CodexSwitchApp {
                     if !entry.reasoning.is_empty() {
                         model_test_reasoning_block(
                             ui,
-                            egui::Id::new("model_test_chat_reasoning").with(message_index),
+                            chat_reasoning_base_id(message_index).with("reasoning"),
                             &entry.reasoning,
                         );
                     }
@@ -558,29 +583,36 @@ impl CodexSwitchApp {
                         )
                         .wrap(),
                     );
-                    if let Some(meta) = &entry.meta {
+                    if let Some(record) = &entry.record {
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new(format!(
                                     "耗时 {} ms, 首 token {}, 总 tokens {}",
-                                    meta.duration_ms,
-                                    meta.first_token_ms
+                                    record.duration_ms,
+                                    record
+                                        .first_token_ms
                                         .map(|ms| format!("{ms} ms"))
                                         .unwrap_or_else(|| "未返回".to_string()),
-                                    tokens::format_tokens(self.token_display_mode, meta.total_tokens),
+                                    tokens::format_tokens(
+                                        self.token_display_mode,
+                                        record.total_tokens,
+                                    ),
                                 ))
                                 .weak()
                                 .small(),
                             );
-                            if let Some(raw) = &meta.raw
+                            if let Some(raw) = &record.raw
                                 && ui.small_button("导出 HAR").clicked()
                             {
-                                har_export = Some((raw.clone(), meta.duration_ms));
+                                har_export = Some((raw.clone(), record.duration_ms));
                             }
                         });
                     }
                 }
                 if self.model_test_ui.chat_running {
+                    // 流式期间用户消息已入列, len 即完成后 assistant 条目的下标,
+                    // 用它派生思维链 id, 生成结束后折叠区的展开状态得以延续.
+                    let live_entry_index = self.model_test_ui.chat_messages.len();
                     if !self.model_test_ui.chat_live_text.is_empty()
                         || !self.model_test_ui.chat_live_reasoning.is_empty()
                     {
@@ -590,7 +622,7 @@ impl CodexSwitchApp {
                         });
                         model_test_stream_block(
                             ui,
-                            egui::Id::new("model_test_chat_live"),
+                            chat_reasoning_base_id(live_entry_index),
                             &self.model_test_ui.chat_live_reasoning,
                             &self.model_test_ui.chat_live_text,
                             false,
@@ -649,10 +681,10 @@ impl CodexSwitchApp {
             ui.heading(format!("测试记录 ({})", self.model_test_ui.history.len()));
             if ui
                 .add_enabled(
-                    !self.model_test_ui.history.is_empty() && !self.model_test_ui.history_clearing,
+                    !self.model_test_ui.history.is_empty(),
                     egui::Button::new("导出全部"),
                 )
-                .on_hover_text("把全部测试记录导出为一个 HAR 文件, 记录只含元数据, 不含请求与响应体")
+                .on_hover_text("把全部测试记录导出为一个 HAR 文件, 记录保存在内存中, 包含完整请求与响应报文, 敏感头已脱敏")
                 .on_disabled_hover_text("暂无测试记录")
                 .clicked()
             {
@@ -660,16 +692,15 @@ impl CodexSwitchApp {
             }
             if ui
                 .add_enabled(
-                    !self.model_test_ui.history.is_empty() && !self.model_test_ui.history_clearing,
+                    !self.model_test_ui.history.is_empty(),
                     egui::Button::new("清除记录"),
                 )
-                .on_hover_text("删除所有测试台产生的请求记录")
+                .on_hover_text("清空内存中的测试记录, 不影响日志页中的请求日志")
                 .clicked()
             {
-                self.clear_model_test_history();
-            }
-            if self.model_test_ui.history_clearing {
-                ui.spinner();
+                let count = self.model_test_ui.history.len();
+                self.model_test_ui.history.clear();
+                self.status = format!("已清除 {count} 条测试记录");
             }
         });
         if self.model_test_ui.history.is_empty() {
@@ -693,39 +724,32 @@ impl CodexSwitchApp {
                 ui.strong("Tokens");
                 ui.strong("费用");
                 ui.end_row();
-                for log in &self.model_test_ui.history {
-                    ui.label(log
-                        .ts
-                        .map(|ts| ts.with_timezone(&Local).format("%m-%d %H:%M:%S").to_string())
-                        .unwrap_or_else(|| "-".to_string()));
-                    ui.label(
-                        log.upstream_name
-                            .as_deref()
-                            .unwrap_or("未选择"),
-                    );
-                    ui.label(log.model.as_deref().unwrap_or("-"));
-                    let (label, color) = match &log.error {
+                for record in &self.model_test_ui.history {
+                    ui.label(record.finished_at.format("%m-%d %H:%M:%S").to_string());
+                    ui.label(record.upstream_name.as_deref().unwrap_or("调度组"));
+                    ui.label(&record.model);
+                    let (label, color) = match &record.error {
                         Some(_) => ("失败", error_color()),
-                        None if (200..300).contains(&log.status) => ("成功", success_color()),
+                        None if (200..300).contains(&record.status) => ("成功", success_color()),
                         None => ("失败", error_color()),
                     };
-                    let hover = log
+                    let hover = record
                         .error
                         .clone()
-                        .unwrap_or_else(|| "测试台请求".to_string());
+                        .unwrap_or_else(|| format!("测试台请求 {}", record.endpoint));
                     ui.colored_label(color, label).on_hover_text(hover);
-                    ui.label(format!("{} ms", log.duration_ms));
-                    ui.label(match log.first_token_ms {
+                    ui.label(format!("{} ms", record.duration_ms));
+                    ui.label(match record.first_token_ms {
                         Some(ms) => format!("{ms} ms"),
-                        None if self.model_test_ui.stream => "未返回".to_string(),
+                        None if record.stream => "未返回".to_string(),
                         None => "非流式".to_string(),
                     });
                     tokens::token_number(
                         ui,
                         &mut token_display_mode,
-                        log.usage.total_tokens,
+                        record.total_tokens,
                     );
-                    match log.estimated_cost_usd {
+                    match record.estimated_cost_usd {
                         Some(cost) => {
                             tokens::cost_value(ui, &mut currency_display_mode, rate, cost);
                         }
@@ -777,9 +801,10 @@ impl CodexSwitchApp {
             ui.colored_label(error_color(), format!("错误: {error}"));
         }
         if !outcome.reasoning_text.is_empty() {
+            // 与流式阶段的思维链折叠区同 id, 输出结束后保持展开状态.
             model_test_reasoning_block(
                 ui,
-                egui::Id::new("model_test_single_reasoning"),
+                single_reasoning_base_id().with("reasoning"),
                 &outcome.reasoning_text,
             );
         }
@@ -1006,7 +1031,7 @@ impl CodexSwitchApp {
             text: content,
             reasoning: String::new(),
             error: false,
-            meta: None,
+            record: None,
         });
         self.model_test_ui.chat_input.clear();
         if self.dispatch_model_test(ModelTestKind::Chat, params) {
@@ -1018,7 +1043,7 @@ impl CodexSwitchApp {
                 text: self.status.clone(),
                 reasoning: String::new(),
                 error: true,
-                meta: None,
+                record: None,
             });
         }
     }
@@ -1093,6 +1118,8 @@ impl CodexSwitchApp {
         let duration_ms = outcome.duration_ms;
         let first_token_ms = outcome.first_token_ms;
         let error_text = outcome.error.clone();
+        let record = Arc::new(ModelTestRecord::from_outcome(&outcome));
+        self.model_test_ui.history.push((*record).clone());
         match kind {
             ModelTestKind::Single => {
                 self.model_test_ui.single_result = SingleResult {
@@ -1113,12 +1140,7 @@ impl CodexSwitchApp {
                         text: outcome.output_text,
                         reasoning: outcome.reasoning_text,
                         error: false,
-                        meta: Some(ChatMeta {
-                            duration_ms,
-                            first_token_ms,
-                            total_tokens: outcome.usage.total_tokens,
-                            raw: outcome.raw,
-                        }),
+                        record: Some(record),
                     }
                 } else {
                     ChatEntry {
@@ -1128,12 +1150,7 @@ impl CodexSwitchApp {
                             .unwrap_or_else(|| format!("请求失败 ({})", outcome.status)),
                         reasoning: String::new(),
                         error: true,
-                        meta: outcome.raw.map(|raw| ChatMeta {
-                            duration_ms,
-                            first_token_ms,
-                            total_tokens: outcome.usage.total_tokens,
-                            raw: Some(raw),
-                        }),
+                        record: Some(record),
                     }
                 };
                 self.model_test_ui.chat_messages.push(entry);
@@ -1174,13 +1191,13 @@ impl CodexSwitchApp {
     }
 
     /// 把测试记录表格中的全部记录导出为一个 HAR 文件.
-    /// 落库的记录只保存元数据, 导出的 entry 不含请求与响应体.
+    /// 记录在内存中保存了完整报文, 导出内容与单条导出一致.
     fn export_model_test_history_har(&mut self) {
         let entries: Vec<serde_json::Value> = self
             .model_test_ui
             .history
             .iter()
-            .map(request_log_har_entry)
+            .map(model_test_record_har_entry)
             .collect();
         self.save_har_document("model-test-history.har", har_document(entries));
     }
@@ -1206,72 +1223,18 @@ impl CodexSwitchApp {
             }
         }
     }
+}
 
-    /// 应用启动时加载一次测试记录, 后续由版本号驱动增量刷新.
-    pub(super) fn load_model_test_history_on_start(&mut self) {
-        let version = self.state.events.request_log_version();
-        self.model_test_ui.history_version_seen = version;
-        self.model_test_ui.history = self.load_model_test_history_from_store();
-    }
+/// 单次测试思维链区域的基准 id, 流式 live 块与结果卡都必须由它派生,
+/// 输出结束后思维链才不会因 id 变化而自动收起.
+fn single_reasoning_base_id() -> egui::Id {
+    egui::Id::new("model_test_single_reasoning")
+}
 
-    fn load_model_test_history_from_store(&self) -> Vec<RequestLog> {
-        let filter = RequestLogFilter {
-            source: Some(RequestLogSource::TestBench),
-            ..Default::default()
-        };
-        self.runtime
-            .block_on(
-                self.state
-                    .store
-                    .recent_logs_page_filtered(HISTORY_LIMIT, 0, &filter),
-            )
-            .unwrap_or_default()
-    }
-
-    fn clear_model_test_history(&mut self) {
-        if self.model_test_ui.history_clearing {
-            return;
-        }
-        self.model_test_ui.history_clearing = true;
-        let state = self.state.clone();
-        let tx = self.task_tx.clone();
-        self.runtime.spawn(async move {
-            let filter = RequestLogFilter {
-                source: Some(RequestLogSource::TestBench),
-                ..Default::default()
-            };
-            let result = state.store.delete_request_logs_filtered(&filter).await;
-            if let Ok(deleted) = result {
-                tracing::info!(deleted, "cleared test bench request logs");
-                state.events.bump_request_logs();
-            }
-            let _ = tx.send(UiTaskEvent::ModelTestHistoryCleared {
-                deleted: result.unwrap_or_else(|err| {
-                    tracing::warn!(error = %err, "failed to clear test bench request logs");
-                    -1
-                }),
-            });
-        });
-    }
-
-    pub(super) fn handle_model_test_history_cleared(&mut self, deleted: i64) {
-        self.model_test_ui.history_clearing = false;
-        if deleted < 0 {
-            self.status = "清除测试记录失败, 详见日志".to_string();
-            return;
-        }
-        self.model_test_ui.history.clear();
-        self.status = format!("已清除 {deleted} 条测试记录");
-    }
-
-    fn refresh_model_test_history_if_needed(&mut self) {
-        let version = self.state.events.request_log_version();
-        if version == self.model_test_ui.history_version_seen {
-            return;
-        }
-        self.model_test_ui.history_version_seen = version;
-        self.model_test_ui.history = self.load_model_test_history_from_store();
-    }
+/// 第 i 条对话消息思维链区域的基准 id, message_index 是 assistant 条目
+/// 在消息列表中的最终下标, live 与完成后共用.
+fn chat_reasoning_base_id(message_index: usize) -> egui::Id {
+    egui::Id::new("model_test_chat_reasoning").with(message_index)
 }
 
 fn outcome_status_label(outcome: &ModelTestOutcome) -> (&'static str, egui::Color32) {
@@ -1296,64 +1259,65 @@ fn har_document(entries: Vec<serde_json::Value>) -> serde_json::Value {
     })
 }
 
-/// 把一条测试记录转成 HAR entry. 落库记录没有请求与响应体,
-/// 表格里看不到的 body 无从导出, 只保留状态, 耗时等元数据.
-fn request_log_har_entry(log: &RequestLog) -> serde_json::Value {
-    let status_text = reqwest::StatusCode::from_u16(log.status.clamp(0, u16::MAX as i64) as u16)
-        .ok()
-        .and_then(|status| status.canonical_reason())
-        .unwrap_or_default();
-    let started_date_time = log
-        .ts
-        .map(|ts| ts.with_timezone(&Local).to_rfc3339())
-        .unwrap_or_default();
-    let mut entry = serde_json::json!({
-        "startedDateTime": started_date_time,
-        "time": log.duration_ms,
-        "request": {
-            "method": "POST",
-            "url": log.endpoint,
-            "httpVersion": "HTTP/1.1",
-            "headers": [],
-            "queryString": [],
-            "cookies": [],
-            "headersSize": -1,
-            "bodySize": -1,
-        },
-        "response": {
-            "status": log.status,
-            "statusText": status_text,
-            "httpVersion": "HTTP/1.1",
-            "headers": [],
-            "content": {
-                "size": -1,
-                "mimeType": "",
-            },
-            "redirectURL": "",
-            "headersSize": -1,
-            "bodySize": -1,
-        },
-        "cache": {},
-        "timings": {
-            "send": 0,
-            "wait": log.duration_ms,
-            "receive": 0,
-        },
-    });
-    if let Some(upstream) = &log.upstream_name {
+/// 把一条内存记录转成 HAR entry: 有原始报文时导出完整报文,
+/// 无报文 (网络层失败未拿到响应) 时退化为仅含元数据的 entry.
+fn model_test_record_har_entry(record: &ModelTestRecord) -> serde_json::Value {
+    let mut entry = match &record.raw {
+        Some(raw) => raw.to_har_entry(record.duration_ms, None),
+        None => {
+            let status_text = reqwest::StatusCode::from_u16(
+                record.status.clamp(0, u16::MAX as i64) as u16,
+            )
+            .ok()
+            .and_then(|status| status.canonical_reason())
+            .unwrap_or_default();
+            serde_json::json!({
+                "startedDateTime": record.finished_at.to_rfc3339(),
+                "time": record.duration_ms,
+                "request": {
+                    "method": "POST",
+                    "url": record.endpoint,
+                    "httpVersion": "HTTP/1.1",
+                    "headers": [],
+                    "queryString": [],
+                    "cookies": [],
+                    "headersSize": -1,
+                    "bodySize": -1,
+                },
+                "response": {
+                    "status": record.status,
+                    "statusText": status_text,
+                    "httpVersion": "HTTP/1.1",
+                    "headers": [],
+                    "content": {
+                        "size": -1,
+                        "mimeType": "",
+                    },
+                    "redirectURL": "",
+                    "headersSize": -1,
+                    "bodySize": -1,
+                },
+                "cache": {},
+                "timings": {
+                    "send": 0,
+                    "wait": record.duration_ms,
+                    "receive": 0,
+                },
+            })
+        }
+    };
+    if let Some(upstream) = &record.upstream_name {
         entry["_upstream"] = serde_json::json!(upstream);
     }
-    if let Some(model) = &log.model {
-        entry["_model"] = serde_json::json!(model);
-    }
-    if let Some(ms) = log.first_token_ms {
+    entry["_model"] = serde_json::json!(record.model);
+    if let Some(ms) = record.first_token_ms {
         entry["_first_token_ms"] = serde_json::json!(ms);
     }
-    entry["_total_tokens"] = serde_json::json!(log.usage.total_tokens);
-    if let Some(cost) = log.estimated_cost_usd {
+    entry["_total_tokens"] = serde_json::json!(record.total_tokens);
+    if let Some(cost) = record.estimated_cost_usd {
         entry["_estimated_cost_usd"] = serde_json::json!(cost);
     }
-    if let Some(error) = &log.error
+    if let Some(error) = &record.error
         && !error.is_empty()
     {
         entry["_error"] = serde_json::json!(error);
@@ -1362,7 +1326,8 @@ fn request_log_har_entry(log: &RequestLog) -> serde_json::Value {
 }
 
 /// 渲染流式/已完成的回复块: 思维链折叠区 + 正文区, live 为 true 时标注生成中.
-/// id_salt 必须在块的生命周期内稳定, 否则折叠展开状态会随内容变化丢失.
+/// 思维链折叠头的 id 是 id_salt.with("reasoning"), 调用方在流式阶段与完成阶段
+/// 必须派生自同一基准 id, 否则折叠展开状态会重置, 输出结束时思维链看似被自动收起.
 fn model_test_stream_block(
     ui: &mut egui::Ui,
     id_salt: egui::Id,
