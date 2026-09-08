@@ -724,13 +724,14 @@ impl CodexSwitchApp {
                         &mut token_display_mode,
                         log.usage.total_tokens,
                     );
-                    tokens::estimated_cost(
-                        ui,
-                        &mut currency_display_mode,
-                        rate,
-                        "费用",
-                        log.estimated_cost_usd,
-                    );
+                    match log.estimated_cost_usd {
+                        Some(cost) => {
+                            tokens::cost_value(ui, &mut currency_display_mode, rate, cost);
+                        }
+                        None => {
+                            ui.label("-").on_hover_text("无价格缓存");
+                        }
+                    }
                     ui.end_row();
                 }
             });
