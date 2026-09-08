@@ -4,10 +4,13 @@ use super::tokens;
 use crate::core::models::{RequestLog, RequestLogSource, Upstream, UpstreamKind, WireApi};
 use crate::proxy::forward::model_test as test_bench;
 use crate::proxy::forward::model_test::ModelTestOutcome;
+use crate::proxy::forward::model_test::ModelTestRawTrace;
+use crate::proxy::forward::model_test::ModelTestStreamPart;
 use crate::storage::RequestLogFilter;
 use chrono::Local;
 use eframe::egui;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const DEFAULT_PROMPT: &str = "请只回复: pong";
@@ -80,6 +83,19 @@ impl ReasoningEffort {
 struct SingleResult {
     started: Option<Instant>,
     outcome: Option<ModelTestOutcome>,
+    live_text: String,
+    live_reasoning: String,
+}
+
+impl SingleResult {
+    fn running() -> Self {
+        Self {
+            started: Some(Instant::now()),
+            outcome: None,
+            live_text: String::new(),
+            live_reasoning: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -96,17 +112,19 @@ enum ChatRole {
     Assistant,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct ChatMeta {
     duration_ms: i64,
     first_token_ms: Option<i64>,
     total_tokens: i64,
+    raw: Option<Arc<ModelTestRawTrace>>,
 }
 
 #[derive(Debug, Clone)]
 struct ChatEntry {
     role: ChatRole,
     text: String,
+    reasoning: String,
     error: bool,
     meta: Option<ChatMeta>,
 }
@@ -133,6 +151,9 @@ pub(super) struct ModelTestUiState {
     chat_input: String,
     chat_running: bool,
     chat_started: Option<Instant>,
+    chat_live_text: String,
+    chat_live_reasoning: String,
+    raw_viewer: Option<Arc<ModelTestRawTrace>>,
     history: Vec<RequestLog>,
     history_version_seen: u64,
 }
@@ -156,6 +177,8 @@ impl Default for ModelTestUiState {
             single_result: SingleResult {
                 started: None,
                 outcome: None,
+                live_text: String::new(),
+                live_reasoning: String::new(),
             },
             batch_selected: BTreeSet::new(),
             batch_rows: Vec::new(),
@@ -163,6 +186,9 @@ impl Default for ModelTestUiState {
             chat_input: String::new(),
             chat_running: false,
             chat_started: None,
+            chat_live_text: String::new(),
+            chat_live_reasoning: String::new(),
+            raw_viewer: None,
             history: Vec::new(),
             history_version_seen: 0,
         }
@@ -218,6 +244,7 @@ impl CodexSwitchApp {
         if let Some(section) = switch_to {
             self.model_test_ui.section = section;
         }
+        self.model_test_raw_window(ui.ctx());
     }
 
     fn model_test_target_section(&mut self, ui: &mut egui::Ui) {
@@ -410,6 +437,15 @@ impl CodexSwitchApp {
                 }
             }
         });
+        if self.model_test_ui.single_result.started.is_some() {
+            model_test_stream_block(
+                ui,
+                &self.model_test_ui.single_result.live_reasoning,
+                &self.model_test_ui.single_result.live_text,
+                true,
+            );
+            return;
+        }
         let Some(outcome) = self.model_test_ui.single_result.outcome.clone() else {
             return;
         };
@@ -538,6 +574,11 @@ impl CodexSwitchApp {
                                     .weak())
                                     .on_hover_text(&outcome.output_text);
                                 }
+                                if outcome.raw.is_some()
+                                    && ui.small_button("报文").clicked()
+                                {
+                                    self.model_test_ui.raw_viewer = outcome.raw.clone();
+                                }
                             });
                             ui.end_row();
                         }
@@ -596,7 +637,10 @@ impl CodexSwitchApp {
                             .wrap(),
                         );
                     });
-                    if let Some(meta) = entry.meta {
+                    if !entry.reasoning.is_empty() {
+                        model_test_reasoning_block(ui, &entry.reasoning);
+                    }
+                    if let Some(meta) = &entry.meta {
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new(format!(
@@ -610,10 +654,27 @@ impl CodexSwitchApp {
                                 .weak()
                                 .small(),
                             );
+                            if meta.raw.is_some() && ui.small_button("报文").clicked() {
+                                self.model_test_ui.raw_viewer = meta.raw.clone();
+                            }
                         });
                     }
                 }
                 if self.model_test_ui.chat_running {
+                    if !self.model_test_ui.chat_live_text.is_empty()
+                        || !self.model_test_ui.chat_live_reasoning.is_empty()
+                    {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.colored_label(egui::Color32::from_rgb(34, 197, 94), "[模型]");
+                            ui.label(egui::RichText::new("生成中...").weak());
+                        });
+                        model_test_stream_block(
+                            ui,
+                            &self.model_test_ui.chat_live_reasoning,
+                            &self.model_test_ui.chat_live_text,
+                            false,
+                        );
+                    }
                     ui.horizontal(|ui| {
                         ui.spinner();
                         if let Some(started) = self.model_test_ui.chat_started {
@@ -746,6 +807,9 @@ impl CodexSwitchApp {
         if let Some(error) = &outcome.error {
             ui.colored_label(error_color(), format!("错误: {error}"));
         }
+        if !outcome.reasoning_text.is_empty() {
+            model_test_reasoning_block(ui, &outcome.reasoning_text);
+        }
         if !outcome.output_text.is_empty() {
             ui.horizontal(|ui| {
                 ui.label("回复");
@@ -764,6 +828,11 @@ impl CodexSwitchApp {
                             .selectable(true),
                     );
                 });
+        }
+        if outcome.raw.is_some()
+            && ui.button("查看原始请求与响应").clicked()
+        {
+            self.model_test_ui.raw_viewer = outcome.raw.clone();
         }
     }
 
@@ -841,9 +910,16 @@ impl CodexSwitchApp {
             let tx = self.task_tx.clone();
             let bind_addr = self.bind_addr.clone();
             let local_key = self.local_key.clone();
+            let sink = self.make_model_test_delta_sink(kind.clone());
             self.runtime.spawn(async move {
-                let result =
-                    test_bench::run_scheduler_test(&state, &bind_addr, &local_key, params).await;
+                let result = test_bench::run_scheduler_test(
+                    &state,
+                    &bind_addr,
+                    &local_key,
+                    params,
+                    Some(sink),
+                )
+                .await;
                 let _ = tx.send(UiTaskEvent::ModelTestFinished { kind, result });
             });
         } else {
@@ -853,15 +929,14 @@ impl CodexSwitchApp {
             };
             let state = self.state.clone();
             let tx = self.task_tx.clone();
+            let sink = self.make_model_test_delta_sink(kind.clone());
             self.runtime.spawn(async move {
-                let result = test_bench::run_direct_test(&state, &upstream, params).await;
+                let result =
+                    test_bench::run_direct_test(&state, &upstream, params, Some(sink)).await;
                 let _ = tx.send(UiTaskEvent::ModelTestFinished { kind, result });
             });
         }
-        self.model_test_ui.single_result = SingleResult {
-            started: Some(Instant::now()),
-            outcome: None,
-        };
+        self.model_test_ui.single_result = SingleResult::running();
         self.status = "测试请求已发送".to_string();
     }
 
@@ -913,7 +988,7 @@ impl CodexSwitchApp {
             let kind = ModelTestKind::Batch(upstream.id.clone());
             let params = params.clone();
             self.runtime.spawn(async move {
-                let result = test_bench::run_direct_test(&state, &upstream, params).await;
+                let result = test_bench::run_direct_test(&state, &upstream, params, None).await;
                 let _ = tx.send(UiTaskEvent::ModelTestFinished { kind, result });
             });
         }
@@ -949,6 +1024,7 @@ impl CodexSwitchApp {
         self.model_test_ui.chat_messages.push(ChatEntry {
             role: ChatRole::User,
             text: content,
+            reasoning: String::new(),
             error: false,
             meta: None,
         });
@@ -958,6 +1034,7 @@ impl CodexSwitchApp {
                 self.model_test_ui.chat_messages.push(ChatEntry {
                     role: ChatRole::Assistant,
                     text: "本地代理未启动, 请先在仪表盘启动服务".to_string(),
+                    reasoning: String::new(),
                     error: true,
                     meta: None,
                 });
@@ -968,9 +1045,16 @@ impl CodexSwitchApp {
             let tx = self.task_tx.clone();
             let bind_addr = self.bind_addr.clone();
             let local_key = self.local_key.clone();
+            let sink = self.make_model_test_delta_sink(ModelTestKind::Chat);
             self.runtime.spawn(async move {
-                let result =
-                    test_bench::run_scheduler_test(&state, &bind_addr, &local_key, params).await;
+                let result = test_bench::run_scheduler_test(
+                    &state,
+                    &bind_addr,
+                    &local_key,
+                    params,
+                    Some(sink),
+                )
+                .await;
                 let _ = tx.send(UiTaskEvent::ModelTestFinished {
                     kind: ModelTestKind::Chat,
                     result,
@@ -981,6 +1065,7 @@ impl CodexSwitchApp {
                 self.model_test_ui.chat_messages.push(ChatEntry {
                     role: ChatRole::Assistant,
                     text: "请先选择要测试的上游".to_string(),
+                    reasoning: String::new(),
                     error: true,
                     meta: None,
                 });
@@ -989,8 +1074,10 @@ impl CodexSwitchApp {
             };
             let state = self.state.clone();
             let tx = self.task_tx.clone();
+            let sink = self.make_model_test_delta_sink(ModelTestKind::Chat);
             self.runtime.spawn(async move {
-                let result = test_bench::run_direct_test(&state, &upstream, params).await;
+                let result =
+                    test_bench::run_direct_test(&state, &upstream, params, Some(sink)).await;
                 let _ = tx.send(UiTaskEvent::ModelTestFinished {
                     kind: ModelTestKind::Chat,
                     result,
@@ -1038,6 +1125,35 @@ impl CodexSwitchApp {
         }
     }
 
+    pub(super) fn handle_model_test_delta(
+        &mut self,
+        kind: ModelTestKind,
+        part: ModelTestStreamPart,
+    ) {
+        match &kind {
+            ModelTestKind::Batch(_) => {}
+            ModelTestKind::Single => match part {
+                ModelTestStreamPart::Text(text) => {
+                    self.model_test_ui.single_result.live_text.push_str(&text);
+                }
+                ModelTestStreamPart::Reasoning(text) => {
+                    self.model_test_ui
+                        .single_result
+                        .live_reasoning
+                        .push_str(&text);
+                }
+            },
+            ModelTestKind::Chat => match part {
+                ModelTestStreamPart::Text(text) => {
+                    self.model_test_ui.chat_live_text.push_str(&text);
+                }
+                ModelTestStreamPart::Reasoning(text) => {
+                    self.model_test_ui.chat_live_reasoning.push_str(&text);
+                }
+            },
+        }
+    }
+
     pub(super) fn handle_model_test_finished(
         &mut self,
         kind: ModelTestKind,
@@ -1052,6 +1168,8 @@ impl CodexSwitchApp {
                 self.model_test_ui.single_result = SingleResult {
                     started: None,
                     outcome: Some(outcome),
+                    live_text: String::new(),
+                    live_reasoning: String::new(),
                 };
             }
             ModelTestKind::Batch(upstream_id) => {
@@ -1068,15 +1186,19 @@ impl CodexSwitchApp {
             ModelTestKind::Chat => {
                 self.model_test_ui.chat_running = false;
                 self.model_test_ui.chat_started = None;
+                self.model_test_ui.chat_live_text.clear();
+                self.model_test_ui.chat_live_reasoning.clear();
                 let entry = if success {
                     ChatEntry {
                         role: ChatRole::Assistant,
                         text: outcome.output_text,
+                        reasoning: outcome.reasoning_text,
                         error: false,
                         meta: Some(ChatMeta {
                             duration_ms,
                             first_token_ms,
                             total_tokens: outcome.usage.total_tokens,
+                            raw: outcome.raw,
                         }),
                     }
                 } else {
@@ -1085,8 +1207,14 @@ impl CodexSwitchApp {
                         text: error_text
                             .clone()
                             .unwrap_or_else(|| format!("请求失败 ({})", outcome.status)),
+                        reasoning: String::new(),
                         error: true,
-                        meta: None,
+                        meta: outcome.raw.map(|raw| ChatMeta {
+                            duration_ms,
+                            first_token_ms,
+                            total_tokens: outcome.usage.total_tokens,
+                            raw: Some(raw),
+                        }),
                     }
                 };
                 self.model_test_ui.chat_messages.push(entry);
@@ -1104,6 +1232,99 @@ impl CodexSwitchApp {
                 "测试失败: {}",
                 error_text.as_deref().unwrap_or("未知错误")
             );
+        }
+    }
+
+    /// 构造把流式增量转发回 UI 事件的回调.
+    fn make_model_test_delta_sink(&self, kind: ModelTestKind) -> test_bench::ModelTestDeltaSink {
+        let tx = self.task_tx.clone();
+        Box::new(move |part| {
+            let _ = tx.send(UiTaskEvent::ModelTestDelta { kind: kind.clone(), part });
+        })
+    }
+
+    fn model_test_raw_window(&mut self, ctx: &egui::Context) {
+        let Some(trace) = self.model_test_ui.raw_viewer.clone() else {
+            return;
+        };
+        let mut open = true;
+        egui::Window::new("原始请求与响应")
+            .id(egui::Id::new("model_test_raw_window"))
+            .collapsible(false)
+            .resizable(true)
+            .default_width(780.0)
+            .default_height(600.0)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.strong("请求 URL");
+                    if ui.small_button("复制").clicked() {
+                        ui.ctx().copy_text(trace.request_url.clone());
+                    }
+                });
+                ui.add(
+                    egui::Label::new(egui::RichText::new(&trace.request_url).monospace())
+                        .wrap(),
+                );
+                ui.add_space(4.0);
+                egui::CollapsingHeader::new("请求头 (敏感值已脱敏)")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        for (name, value) in &trace.request_headers {
+                            ui.horizontal(|ui| {
+                                ui.strong(egui::RichText::new(name).small());
+                                ui.label(egui::RichText::new(value).small().monospace());
+                            });
+                        }
+                        if trace.request_headers.is_empty() {
+                            ui.label("(无)");
+                        }
+                    });
+                egui::CollapsingHeader::new("请求体")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        raw_body_block(ui, "model_test_raw_request_body", &trace.request_body);
+                    });
+                ui.separator();
+                ui.strong(format!(
+                    "响应状态: {}{}",
+                    trace.response_status,
+                    if trace.response_status == 0 {
+                        " (无响应)"
+                    } else {
+                        ""
+                    }
+                ));
+                if !trace.response_content_type.is_empty() {
+                    ui.label(format!("Content-Type: {}", trace.response_content_type));
+                }
+                egui::CollapsingHeader::new("响应头")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        for (name, value) in &trace.response_headers {
+                            ui.horizontal(|ui| {
+                                ui.strong(egui::RichText::new(name).small());
+                                ui.label(egui::RichText::new(value).small().monospace());
+                            });
+                        }
+                        if trace.response_headers.is_empty() {
+                            ui.label("(无)");
+                        }
+                    });
+                egui::CollapsingHeader::new("响应体 (原始内容)")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        if trace.response_truncated {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(234, 179, 8),
+                                "内容过长, 已截断到 256KB",
+                            );
+                        }
+                        raw_body_block(ui, "model_test_raw_response_body", &trace.response_body);
+                    });
+            });
+        if !open {
+            self.model_test_ui.raw_viewer = None;
         }
     }
 
@@ -1134,6 +1355,78 @@ fn outcome_status_label(outcome: &ModelTestOutcome) -> (&'static str, egui::Colo
     } else {
         ("失败", error_color())
     }
+}
+
+/// 渲染流式/已完成的回复块: 思维链折叠区 + 正文区, live 为 true 时标注生成中.
+fn model_test_stream_block(
+    ui: &mut egui::Ui,
+    reasoning: &str,
+    text: &str,
+    live: bool,
+) {
+    if !reasoning.is_empty() {
+        model_test_reasoning_block(ui, reasoning);
+    }
+    ui.horizontal(|ui| {
+        ui.label("回复");
+        if live {
+            ui.label(egui::RichText::new("生成中...").weak());
+        }
+    });
+    egui::ScrollArea::vertical()
+        .id_salt("model_test_stream_text")
+        .max_height(RESULT_TEXT_HEIGHT)
+        .stick_to_bottom(live)
+        .show(ui, |ui| {
+            let display = if text.is_empty() && live {
+                "(等待输出...)"
+            } else {
+                text
+            };
+            ui.add(egui::Label::new(display).wrap().selectable(true));
+        });
+}
+
+/// 渲染折叠的思维链区块.
+fn model_test_reasoning_block(ui: &mut egui::Ui, reasoning: &str) {
+    egui::CollapsingHeader::new("思维链")
+        .id_salt(egui::Id::new("model_test_reasoning").with(reasoning.len()))
+        .default_open(false)
+        .show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("model_test_reasoning_text")
+                .max_height(RESULT_TEXT_HEIGHT)
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(reasoning).weak())
+                            .wrap()
+                            .selectable(true),
+                    );
+                });
+        });
+}
+
+/// 报文查看窗口中的文本块, 可选中可复制.
+fn raw_body_block(ui: &mut egui::Ui, id_salt: &str, body: &str) {
+    ui.horizontal(|ui| {
+        if ui.small_button("复制").clicked() {
+            ui.ctx().copy_text(body.to_string());
+        }
+        ui.label(
+            egui::RichText::new(format!("{} 字符", body.chars().count())).weak()
+                .small(),
+        );
+    });
+    egui::ScrollArea::vertical()
+        .id_salt(id_salt)
+        .max_height(320.0)
+        .show(ui, |ui| {
+            ui.add(
+                egui::Label::new(egui::RichText::new(body).monospace())
+                    .wrap()
+                    .selectable(true),
+            );
+        });
 }
 
 fn error_color() -> egui::Color32 {

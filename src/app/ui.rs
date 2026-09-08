@@ -416,6 +416,10 @@ enum UiTaskEvent {
         upstream_id: String,
         result: anyhow::Result<Vec<String>>,
     },
+    ModelTestDelta {
+        kind: model_test::ModelTestKind,
+        part: crate::proxy::forward::model_test::ModelTestStreamPart,
+    },
     ModelTestFinished {
         kind: model_test::ModelTestKind,
         result: crate::proxy::forward::model_test::ModelTestOutcome,
@@ -1040,6 +1044,9 @@ impl CodexSwitchApp {
                 }
                 UiTaskEvent::ModelTestModelsFetched { upstream_id, result } => {
                     self.handle_model_test_models_fetched(upstream_id, result);
+                }
+                UiTaskEvent::ModelTestDelta { kind, part } => {
+                    self.handle_model_test_delta(kind, part);
                 }
                 UiTaskEvent::ModelTestFinished { kind, result } => {
                     self.handle_model_test_finished(kind, result);
