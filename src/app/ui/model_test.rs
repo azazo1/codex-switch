@@ -447,15 +447,6 @@ impl CodexSwitchApp {
                 .on_hover_text("推理力度原样写入请求, 例如 low, medium, high, xhigh 或 minimal");
             }
         });
-        ui.horizontal(|ui| {
-            ui.label("测试 prompt");
-            ui.add(
-                egui::TextEdit::multiline(&mut self.model_test_ui.prompt)
-                    .desired_width(520.0)
-                    .desired_rows(2)
-                    .hint_text("单次测试使用的提示词"),
-            );
-        });
     }
 
     fn model_test_selected_group_name(&self) -> Option<String> {
@@ -479,8 +470,14 @@ impl CodexSwitchApp {
 
     fn model_test_single_section(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
+            ui.label("测试 prompt:");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.model_test_ui.prompt)
+                    .desired_width(380.0)
+                    .hint_text("单次测试使用的提示词"),
+            );
             let running = self.model_test_ui.single_result.started.is_some();
-            if ui.add_enabled(!running, egui::Button::new("发送测试")).clicked() {
+            if ui.add_enabled(!running, egui::Button::new("发送")).clicked() {
                 self.send_model_test(ModelTestKind::Single);
             }
             if running {
@@ -523,11 +520,15 @@ impl CodexSwitchApp {
         });
         // 循环借用 chat_messages 期间不能调用 &mut self 的导出方法, 先记录意图再执行.
         let mut har_export: Option<(Arc<ModelTestRawTrace>, i64)> = None;
-        let chat_history = egui::ScrollArea::vertical()
-            .id_salt("model_test_chat_history")
-            .max_height(CHAT_HISTORY_HEIGHT)
-            .stick_to_bottom(true)
-            .show(ui, |ui| {
+        // 对话内容不占满页面宽度, 统一限制为可用宽度的 75%.
+        let chat_width = (ui.available_width() * 0.75).round();
+        let chat_history = nested_scroll_area(
+            ui,
+            egui::Id::new("model_test_chat_history"),
+            CHAT_HISTORY_HEIGHT,
+            chat_width,
+            true,
+            |ui| {
                 if self.model_test_ui.chat_messages.is_empty() {
                     ui.label("暂无消息, 在下方输入内容开始对话");
                 }
@@ -605,22 +606,38 @@ impl CodexSwitchApp {
                         }
                     });
                 }
-            });
+            },
+        );
         stop_scroll_chaining(ui, chat_history.inner_rect);
         if let Some((raw, duration_ms)) = har_export {
             self.export_model_test_har(raw, duration_ms, None);
         }
         ui.add_space(4.0);
-        let send_clicked = ui
-            .add_enabled(!self.model_test_ui.chat_running, egui::Button::new("发送"))
-            .clicked();
-        let input_response = ui.add(
-            egui::TextEdit::singleline(&mut self.model_test_ui.chat_input)
-                .desired_width(f32::INFINITY)
-                .hint_text("输入消息, Enter 发送"),
+        // 右到左布局: 输入框占满剩余宽度, 发送按钮贴在最右侧.
+        // 同样用显式 max_rect, 避免依赖页面滚动后可能失效的剩余视口高度.
+        let mut send_clicked = false;
+        let mut enter_pressed = false;
+        let input_rect = egui::Rect::from_min_size(
+            ui.cursor().min,
+            egui::vec2(chat_width, ui.spacing().interact_size.y),
         );
-        let enter_pressed =
-            input_response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(input_rect)
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+            |ui| {
+                send_clicked = ui
+                    .add_enabled(!self.model_test_ui.chat_running, egui::Button::new("发送"))
+                    .clicked();
+                let input_response = ui.add(
+                    egui::TextEdit::singleline(&mut self.model_test_ui.chat_input)
+                        .desired_width(f32::INFINITY)
+                        .hint_text("输入消息, Enter 发送"),
+                );
+                enter_pressed = input_response.lost_focus()
+                    && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            },
+        );
         if (send_clicked || enter_pressed) && !self.model_test_ui.chat_running {
             self.send_model_test_chat();
         }
@@ -629,6 +646,17 @@ impl CodexSwitchApp {
     fn model_test_history_section(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading(format!("测试记录 ({})", self.model_test_ui.history.len()));
+            if ui
+                .add_enabled(
+                    !self.model_test_ui.history.is_empty() && !self.model_test_ui.history_clearing,
+                    egui::Button::new("导出全部"),
+                )
+                .on_hover_text("把全部测试记录导出为一个 HAR 文件, 记录只含元数据, 不含请求与响应体")
+                .on_disabled_hover_text("暂无测试记录")
+                .clicked()
+            {
+                self.export_model_test_history_har();
+            }
             if ui
                 .add_enabled(
                     !self.model_test_ui.history.is_empty() && !self.model_test_ui.history_clearing,
@@ -754,29 +782,35 @@ impl CodexSwitchApp {
             );
         }
         if !outcome.output_text.is_empty() {
-            ui.horizontal(|ui| {
-                ui.label("回复");
-                if ui.button("复制").clicked() {
-                    ui.ctx().copy_text(outcome.output_text.clone());
-                    self.status = "回复已复制".to_string();
-                }
-            });
-            egui::ScrollArea::vertical()
-                .id_salt("model_test_single_output")
-                .max_height(RESULT_TEXT_HEIGHT)
-                .show(ui, |ui| {
+            ui.label("回复");
+            nested_scroll_area(
+                ui,
+                egui::Id::new("model_test_single_output"),
+                RESULT_TEXT_HEIGHT,
+                ui.available_width(),
+                false,
+                |ui| {
                     ui.add(
                         egui::Label::new(&outcome.output_text)
                             .wrap()
                             .selectable(true),
                     );
-                });
+                },
+            );
         }
-        if let (Some(raw), duration_ms) = (&outcome.raw, outcome.duration_ms)
-            && ui.button("导出 HAR").clicked()
-        {
-            let error = outcome.error.as_deref();
-            self.export_model_test_har(raw.clone(), duration_ms, error);
+        if !outcome.output_text.is_empty() || outcome.raw.is_some() {
+            ui.horizontal(|ui| {
+                if !outcome.output_text.is_empty() && ui.button("复制").clicked() {
+                    ui.ctx().copy_text(outcome.output_text.clone());
+                    self.status = "回复已复制".to_string();
+                }
+                if let (Some(raw), duration_ms) = (&outcome.raw, outcome.duration_ms)
+                    && ui.button("导出 HAR").clicked()
+                {
+                    let error = outcome.error.as_deref();
+                    self.export_model_test_har(raw.clone(), duration_ms, error);
+                }
+            });
         }
     }
 
@@ -1134,18 +1168,25 @@ impl CodexSwitchApp {
         error: Option<&str>,
     ) {
         let entry = trace.to_har_entry(duration_ms, error);
-        let har = serde_json::json!({
-            "log": {
-                "version": "1.2",
-                "creator": {
-                    "name": "codex-switch",
-                    "version": env!("CARGO_PKG_VERSION"),
-                },
-                "entries": [entry],
-            }
-        });
+        self.save_har_document("model-test.har", har_document(vec![entry]));
+    }
+
+    /// 把测试记录表格中的全部记录导出为一个 HAR 文件.
+    /// 落库的记录只保存元数据, 导出的 entry 不含请求与响应体.
+    fn export_model_test_history_har(&mut self) {
+        let entries: Vec<serde_json::Value> = self
+            .model_test_ui
+            .history
+            .iter()
+            .map(request_log_har_entry)
+            .collect();
+        self.save_har_document("model-test-history.har", har_document(entries));
+    }
+
+    /// 弹出保存对话框并写入 HAR 文件.
+    fn save_har_document(&mut self, default_file_name: &str, har: serde_json::Value) {
         let Some(path) = rfd::FileDialog::new()
-            .set_file_name("model-test.har")
+            .set_file_name(default_file_name)
             .add_filter("HAR", &["har"])
             .save_file()
         else {
@@ -1239,6 +1280,85 @@ fn outcome_status_label(outcome: &ModelTestOutcome) -> (&'static str, egui::Colo
     }
 }
 
+/// 组装 HAR 1.2 文档.
+fn har_document(entries: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({
+        "log": {
+            "version": "1.2",
+            "creator": {
+                "name": "codex-switch",
+                "version": env!("CARGO_PKG_VERSION"),
+            },
+            "entries": entries,
+        }
+    })
+}
+
+/// 把一条测试记录转成 HAR entry. 落库记录没有请求与响应体,
+/// 表格里看不到的 body 无从导出, 只保留状态, 耗时等元数据.
+fn request_log_har_entry(log: &RequestLog) -> serde_json::Value {
+    let status_text = reqwest::StatusCode::from_u16(log.status.clamp(0, u16::MAX as i64) as u16)
+        .ok()
+        .and_then(|status| status.canonical_reason())
+        .unwrap_or_default();
+    let started_date_time = log
+        .ts
+        .map(|ts| ts.with_timezone(&Local).to_rfc3339())
+        .unwrap_or_default();
+    let mut entry = serde_json::json!({
+        "startedDateTime": started_date_time,
+        "time": log.duration_ms,
+        "request": {
+            "method": "POST",
+            "url": log.endpoint,
+            "httpVersion": "HTTP/1.1",
+            "headers": [],
+            "queryString": [],
+            "cookies": [],
+            "headersSize": -1,
+            "bodySize": -1,
+        },
+        "response": {
+            "status": log.status,
+            "statusText": status_text,
+            "httpVersion": "HTTP/1.1",
+            "headers": [],
+            "content": {
+                "size": -1,
+                "mimeType": "",
+            },
+            "redirectURL": "",
+            "headersSize": -1,
+            "bodySize": -1,
+        },
+        "cache": {},
+        "timings": {
+            "send": 0,
+            "wait": log.duration_ms,
+            "receive": 0,
+        },
+    });
+    if let Some(upstream) = &log.upstream_name {
+        entry["_upstream"] = serde_json::json!(upstream);
+    }
+    if let Some(model) = &log.model {
+        entry["_model"] = serde_json::json!(model);
+    }
+    if let Some(ms) = log.first_token_ms {
+        entry["_first_token_ms"] = serde_json::json!(ms);
+    }
+    entry["_total_tokens"] = serde_json::json!(log.usage.total_tokens);
+    if let Some(cost) = log.estimated_cost_usd {
+        entry["_estimated_cost_usd"] = serde_json::json!(cost);
+    }
+    if let Some(error) = &log.error
+        && !error.is_empty()
+    {
+        entry["_error"] = serde_json::json!(error);
+    }
+    entry
+}
+
 /// 渲染流式/已完成的回复块: 思维链折叠区 + 正文区, live 为 true 时标注生成中.
 /// id_salt 必须在块的生命周期内稳定, 否则折叠展开状态会随内容变化丢失.
 fn model_test_stream_block(
@@ -1257,19 +1377,22 @@ fn model_test_stream_block(
             ui.label(egui::RichText::new("生成中...").weak());
         }
     });
-    let inner_rect = egui::ScrollArea::vertical()
-        .id_salt(id_salt.with("text"))
-        .max_height(RESULT_TEXT_HEIGHT)
-        .stick_to_bottom(live)
-        .show(ui, |ui| {
+    let inner_rect = nested_scroll_area(
+        ui,
+        id_salt.with("text"),
+        RESULT_TEXT_HEIGHT,
+        ui.available_width(),
+        live,
+        |ui| {
             let display = if text.is_empty() && live {
                 "(等待输出...)"
             } else {
                 text
             };
             ui.add(egui::Label::new(display).wrap().selectable(true));
-        })
-        .inner_rect;
+        },
+    )
+    .inner_rect;
     stop_scroll_chaining(ui, inner_rect);
 }
 
@@ -1279,20 +1402,46 @@ fn model_test_reasoning_block(ui: &mut egui::Ui, id_salt: egui::Id, reasoning: &
         .id_salt(id_salt)
         .default_open(false)
         .show(ui, |ui| {
-            let inner_rect = egui::ScrollArea::vertical()
-                .id_salt(id_salt.with("text"))
-                .max_height(RESULT_TEXT_HEIGHT)
-                .stick_to_bottom(true)
-                .show(ui, |ui| {
+            let inner_rect = nested_scroll_area(
+                ui,
+                id_salt.with("text"),
+                RESULT_TEXT_HEIGHT,
+                ui.available_width(),
+                true,
+                |ui| {
                     ui.add(
                         egui::Label::new(egui::RichText::new(reasoning).weak())
                             .wrap()
                             .selectable(true),
                     );
-                })
-                .inner_rect;
+                },
+            )
+            .inner_rect;
             stop_scroll_chaining(ui, inner_rect);
         });
+}
+
+/// 在显式定宽定高的子区域内渲染嵌套滚动区, 高度按内容收缩, 上限 max_height.
+/// 嵌套 ScrollArea 不能直接依赖外层剩余视口高度: 页面下滚后它可能塌缩甚至
+/// 得到负的可用矩形, 导致布局错乱, 必须用显式 max_rect 定尺寸.
+fn nested_scroll_area<R>(
+    ui: &mut egui::Ui,
+    id_salt: egui::Id,
+    max_height: f32,
+    width: f32,
+    stick_to_bottom: bool,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::scroll_area::ScrollAreaOutput<R> {
+    let rect =
+        egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, max_height));
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt(id_salt)
+            .max_height(max_height)
+            .stick_to_bottom(stick_to_bottom)
+            .show(ui, add_contents)
+    })
+    .inner
 }
 
 /// 指针悬停在嵌套滚动区上时清掉越过边界的剩余滚动量,
