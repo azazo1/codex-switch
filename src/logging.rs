@@ -497,12 +497,23 @@ fn init_file_tracing(
     )?;
     let proxy_filter =
         EnvFilter::try_new(PROXY_FILTER_DEBUG).context("failed to create proxy env log filter")?;
+    let main_filter = env_filter
+        .add_directive(
+            "codex_switch::proxy=off"
+                .parse()
+                .context("failed to add proxy off directive to main env filter")?,
+        )
+        .add_directive(
+            "tower_http=off"
+                .parse()
+                .context("failed to add tower_http off directive to main env filter")?,
+        );
     tracing_subscriber::registry()
         .with(
             fmt::layer()
                 .with_ansi(false)
                 .with_writer(Mutex::new(log_writer))
-                .with_filter(env_filter),
+                .with_filter(main_filter),
         )
         .with(
             fmt::layer()
@@ -688,6 +699,10 @@ mod tests {
         assert!(
             content.contains("env override repro event"),
             "log file is empty or missing the event: {content:?}"
+        );
+        assert!(
+            !content.contains("proxy repro event"),
+            "proxy event leaked into the main log file: {content:?}"
         );
         let proxy_content = fs::read_to_string(&proxy_log_path).unwrap();
         assert!(
