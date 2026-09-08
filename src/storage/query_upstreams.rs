@@ -2,10 +2,12 @@ use crate::core::models::{
     ApiKeyAuthScheme, BalanceProvider, ErrorRetryPolicy, UnknownModalityPolicy, Upstream,
     UpstreamKind, WireApi,
 };
+use crate::core::upstream_transfer::{UpstreamExport, UPSTREAM_EXPORT_VERSION};
 use crate::storage::Store;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use sqlx::Row;
+use std::collections::BTreeMap;
 
 pub(crate) struct SavedOAuthAccount {
     pub upstream: Upstream,
@@ -284,6 +286,63 @@ impl Store {
             .await?;
         Ok(row.map(|r| r.get::<String, _>("value")))
     }
+
+    /// 导出单个上游及其全部凭据, 上游不存在时返回 None.
+    pub async fn export_upstream(&self, id: &str) -> anyhow::Result<Option<UpstreamExport>> {
+        let Some(upstream) = self.get_upstream(id).await? else {
+            return Ok(None);
+        };
+        let rows =
+            sqlx::query("SELECT name, value FROM credentials WHERE upstream_id = ?1 ORDER BY name")
+                .bind(id)
+                .fetch_all(self.pool())
+                .await?;
+        let credentials: BTreeMap<String, String> = rows
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get::<String, _>("name"),
+                    row.get::<String, _>("value"),
+                )
+            })
+            .collect();
+        tracing::info!(
+            upstream_id = %id,
+            credential_count = credentials.len(),
+            "upstream exported"
+        );
+        Ok(Some(UpstreamExport::new(upstream, credentials)))
+    }
+
+    /// 导入上游: 目标 id 已被占用时生成新 id, 凭据随上游一并写入.
+    pub async fn import_upstream(&self, payload: &UpstreamExport) -> anyhow::Result<Upstream> {
+        if payload.version > UPSTREAM_EXPORT_VERSION {
+            anyhow::bail!(
+                "导出格式版本过高: v{}, 当前支持 v{UPSTREAM_EXPORT_VERSION}",
+                payload.version
+            );
+        }
+        let mut upstream = payload.upstream.clone();
+        if self.get_upstream(&upstream.id).await?.is_some() {
+            upstream.id = uuid::Uuid::new_v4().to_string();
+        }
+        let now = Utc::now();
+        upstream.created_at = now;
+        upstream.updated_at = now;
+        let mut tx = self.pool().begin().await?;
+        insert_upstream(&mut tx, &upstream).await?;
+        for (name, value) in &payload.credentials {
+            save_credential_in_tx(&mut tx, &upstream.id, name, value).await?;
+        }
+        tx.commit().await?;
+        tracing::info!(
+            upstream_id = %upstream.id,
+            name = %upstream.name,
+            credential_count = payload.credentials.len(),
+            "upstream imported"
+        );
+        Ok(upstream)
+    }
 }
 
 async fn insert_upstream(
@@ -519,5 +578,51 @@ mod tests {
             saved.unknown_modality_policy,
             UnknownModalityPolicy::Multimodal
         );
+    }
+
+    #[tokio::test]
+    async fn exports_and_imports_upstream_with_credentials() {
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-upstream-transfer-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let store = Store::open(path).await.unwrap();
+        let upstream = Upstream::new_relay(
+            "relay".to_string(),
+            "https://example.com/v1".to_string(),
+            WireApi::Responses,
+            false,
+            BalanceProvider::Unsupported,
+        );
+        store.save_upstream(&upstream).await.unwrap();
+        store
+            .save_credential(&upstream.id, "api_key", "sk-test")
+            .await
+            .unwrap();
+
+        let export = store
+            .export_upstream(&upstream.id)
+            .await
+            .unwrap()
+            .expect("upstream exists");
+        let json = export.to_json().unwrap();
+        let parsed = UpstreamExport::from_json(&json).unwrap();
+        assert_eq!(parsed.upstream.id, upstream.id);
+        assert_eq!(parsed.credentials.get("api_key").map(String::as_str), Some("sk-test"));
+
+        let imported = store.import_upstream(&parsed).await.unwrap();
+        assert_ne!(imported.id, upstream.id, "同 id 冲突时应生成新 id");
+        assert_eq!(imported.name, upstream.name);
+        assert_eq!(imported.base_url, upstream.base_url);
+        assert_eq!(
+            store
+                .get_credential(&imported.id, "api_key")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("sk-test")
+        );
+
+        assert!(store.export_upstream("missing-id").await.unwrap().is_none());
     }
 }

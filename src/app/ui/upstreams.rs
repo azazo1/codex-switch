@@ -3,6 +3,7 @@ use crate::core::models::{
     ApiKeyAuthScheme, BalanceSnapshot, CacheKeepaliveMode, UpstreamBalanceAlertSettings,
     UpstreamCacheKeepaliveSettings, UpstreamKind, WireApi,
 };
+use crate::core::upstream_transfer::UpstreamExport;
 use eframe::egui;
 
 impl CodexSwitchApp {
@@ -87,7 +88,14 @@ impl CodexSwitchApp {
         ui.separator();
         self.oauth_accounts_ui(ui);
         ui.separator();
-        ui.heading("上游列表");
+        ui.horizontal(|ui| {
+            ui.heading("上游列表");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("导入上游").clicked() {
+                    self.upstream_import_open = true;
+                }
+            });
+        });
         let upstreams = self.upstreams.clone();
         let balance_snapshots = self.balance_snapshots.clone();
         let cache_settings = self.cache_keepalive_settings.clone();
@@ -184,6 +192,67 @@ impl CodexSwitchApp {
             self.refresh_all();
         }
         self.show_upstream_editor(ui.ctx());
+        self.show_upstream_import(ui.ctx());
+    }
+
+    pub(super) fn show_upstream_import(&mut self, ctx: &egui::Context) {
+        if !self.upstream_import_open {
+            return;
+        }
+        let mut open = true;
+        let mut close_requested = false;
+        let mut import_requested = false;
+        let text = &mut self.upstream_import_text;
+        egui::Window::new("导入上游")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(520.0)
+            .show(ctx, |ui| {
+                ui.label("粘贴导出的上游 JSON, 导入后会生成新的上游记录.");
+                egui::ScrollArea::vertical()
+                    .id_salt("upstream_import_text_scroll")
+                    .max_height(280.0)
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(text)
+                                .code_editor()
+                                .desired_width(f32::INFINITY)
+                                .hint_text(r#"{"version": 1, "upstream": {...}, ...}"#),
+                        );
+                    });
+                ui.horizontal(|ui| {
+                    if ui.button("导入").clicked() {
+                        import_requested = true;
+                    }
+                    if ui.button("取消").clicked() {
+                        close_requested = true;
+                    }
+                });
+            });
+        self.upstream_import_open = open && !close_requested;
+        if import_requested {
+            self.import_upstream_from_text();
+        }
+    }
+
+    fn import_upstream_from_text(&mut self) {
+        let payload = match UpstreamExport::from_json(&self.upstream_import_text) {
+            Ok(payload) => payload,
+            Err(err) => {
+                self.status = format!("导入失败: {err}");
+                return;
+            }
+        };
+        match self.runtime.block_on(self.state.store.import_upstream(&payload)) {
+            Ok(upstream) => {
+                self.upstream_import_text.clear();
+                self.upstream_import_open = false;
+                self.status = format!("已导入上游 \"{}\"", upstream.name);
+                self.refresh_all();
+            }
+            Err(err) => self.status = format!("导入失败: {err}"),
+        }
     }
 
     pub(super) fn delete_upstream(&mut self, id: &str) {

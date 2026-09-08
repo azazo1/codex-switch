@@ -105,6 +105,15 @@ impl CodexSwitchApp {
                     if ui.button("取消").clicked() {
                         action = EditorAction::Cancel;
                     }
+                    if ui
+                        .button("导出")
+                        .on_hover_text(
+                            "导出已保存的上游配置 (含凭据) 为 JSON 并复制到剪贴板, 当前未保存的修改不会被导出",
+                        )
+                        .clicked()
+                    {
+                        action = EditorAction::Export;
+                    }
                 });
             });
         if !open {
@@ -118,6 +127,30 @@ impl CodexSwitchApp {
             EditorAction::Save => {
                 self.save_upstream_editor();
             }
+            EditorAction::Export => {
+                let id = self
+                    .upstream_editor
+                    .as_ref()
+                    .map(|editor| editor.upstream.id.clone());
+                if let Some(id) = id {
+                    self.export_upstream_to_clipboard(ctx, &id);
+                }
+            }
+        }
+    }
+
+    fn export_upstream_to_clipboard(&mut self, ctx: &egui::Context, id: &str) {
+        match self.runtime.block_on(self.state.store.export_upstream(id)) {
+            Ok(Some(export)) => match export.to_json() {
+                Ok(json) => {
+                    ctx.copy_text(json);
+                    self.status =
+                        "已导出上游到剪贴板, JSON 包含 API Key 等凭据, 请注意保管".to_string();
+                }
+                Err(err) => self.status = format!("导出上游失败: {err}"),
+            },
+            Ok(None) => self.status = "导出失败: 上游不存在".to_string(),
+            Err(err) => self.status = format!("导出上游失败: {err}"),
         }
     }
 
@@ -600,4 +633,5 @@ enum EditorAction {
     None,
     Save,
     Cancel,
+    Export,
 }
