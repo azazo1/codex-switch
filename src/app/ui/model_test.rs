@@ -523,7 +523,7 @@ impl CodexSwitchApp {
         });
         // 循环借用 chat_messages 期间不能调用 &mut self 的导出方法, 先记录意图再执行.
         let mut har_export: Option<(Arc<ModelTestRawTrace>, i64)> = None;
-        egui::ScrollArea::vertical()
+        let chat_history = egui::ScrollArea::vertical()
             .id_salt("model_test_chat_history")
             .max_height(CHAT_HISTORY_HEIGHT)
             .stick_to_bottom(true)
@@ -534,24 +534,11 @@ impl CodexSwitchApp {
                 for (message_index, entry) in
                     self.model_test_ui.chat_messages.iter().enumerate()
                 {
-                    ui.horizontal_wrapped(|ui| {
-                        let (role_label, color) = match entry.role {
-                            ChatRole::User => ("[用户]", egui::Color32::from_rgb(96, 165, 250)),
-                            ChatRole::Assistant => ("[模型]", egui::Color32::from_rgb(34, 197, 94)),
-                        };
-                        ui.colored_label(color, role_label);
-                        let text_color = if entry.error {
-                            egui::Color32::from_rgb(239, 68, 68)
-                        } else {
-                            ui.visuals().text_color()
-                        };
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(&entry.text).color(text_color),
-                            )
-                            .wrap(),
-                        );
-                    });
+                    let (role_label, color) = match entry.role {
+                        ChatRole::User => ("[用户]", egui::Color32::from_rgb(96, 165, 250)),
+                        ChatRole::Assistant => ("[模型]", egui::Color32::from_rgb(34, 197, 94)),
+                    };
+                    ui.colored_label(color, role_label);
                     if !entry.reasoning.is_empty() {
                         model_test_reasoning_block(
                             ui,
@@ -559,6 +546,17 @@ impl CodexSwitchApp {
                             &entry.reasoning,
                         );
                     }
+                    let text_color = if entry.error {
+                        egui::Color32::from_rgb(239, 68, 68)
+                    } else {
+                        ui.visuals().text_color()
+                    };
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(&entry.text).color(text_color),
+                        )
+                        .wrap(),
+                    );
                     if let Some(meta) = &entry.meta {
                         ui.horizontal(|ui| {
                             ui.label(
@@ -608,6 +606,7 @@ impl CodexSwitchApp {
                     });
                 }
             });
+        stop_scroll_chaining(ui, chat_history.inner_rect);
         if let Some((raw, duration_ms)) = har_export {
             self.export_model_test_har(raw, duration_ms, None);
         }
@@ -1258,7 +1257,7 @@ fn model_test_stream_block(
             ui.label(egui::RichText::new("生成中...").weak());
         }
     });
-    egui::ScrollArea::vertical()
+    let inner_rect = egui::ScrollArea::vertical()
         .id_salt(id_salt.with("text"))
         .max_height(RESULT_TEXT_HEIGHT)
         .stick_to_bottom(live)
@@ -1269,7 +1268,9 @@ fn model_test_stream_block(
                 text
             };
             ui.add(egui::Label::new(display).wrap().selectable(true));
-        });
+        })
+        .inner_rect;
+    stop_scroll_chaining(ui, inner_rect);
 }
 
 /// 渲染折叠的思维链区块, 流式中展开会自动跟随最新内容.
@@ -1278,7 +1279,7 @@ fn model_test_reasoning_block(ui: &mut egui::Ui, id_salt: egui::Id, reasoning: &
         .id_salt(id_salt)
         .default_open(false)
         .show(ui, |ui| {
-            egui::ScrollArea::vertical()
+            let inner_rect = egui::ScrollArea::vertical()
                 .id_salt(id_salt.with("text"))
                 .max_height(RESULT_TEXT_HEIGHT)
                 .stick_to_bottom(true)
@@ -1288,8 +1289,19 @@ fn model_test_reasoning_block(ui: &mut egui::Ui, id_salt: egui::Id, reasoning: &
                             .wrap()
                             .selectable(true),
                     );
-                });
+                })
+                .inner_rect;
+            stop_scroll_chaining(ui, inner_rect);
         });
+}
+
+/// 指针悬停在嵌套滚动区上时清掉越过边界的剩余滚动量,
+/// 防止内层滚到头后滚动链带动外层滚动区.
+/// 内层自身需要的滚动量已在 show 内部被消费, 不受影响.
+fn stop_scroll_chaining(ui: &mut egui::Ui, inner_rect: egui::Rect) {
+    if ui.rect_contains_pointer(inner_rect) {
+        ui.input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
+    }
 }
 
 /// 请求模式下拉框的显示文案.
