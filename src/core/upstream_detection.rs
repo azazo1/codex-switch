@@ -14,6 +14,12 @@ const OPENAI_CONTAINER: &str = "data";
 /// 智谱 `/api/v1` 的模型列表容器键.
 const ZHIPU_SLUG_CONTAINER: &str = "models";
 
+/// 智谱域名下已知可用的 Base URL 路径 (拼接后能取到模型列表).
+const ZHIPU_ENDPOINT_PATHS: &[&str] = &["/api/v1", "/api/paas/v4", "/api/coding/paas/v4"];
+
+/// OpenCode 域名下已知可用的 Base URL 路径.
+const OPENCODE_ENDPOINT_PATHS: &[&str] = &["/zen/go/v1", "/zen/v1"];
+
 /// 识别出的上游类型, 决定模型列表的响应形状与默认协议.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetectedKind {
@@ -69,14 +75,17 @@ pub struct DetectedUpstream {
 
 impl DetectedUpstream {
     /// 把识别结果写入上游记录, 返回被改写的维度名称.
-    /// Base URL 需要补全路径时一并改写, 例如只填智谱域名会补成 `/api/v1`.
+    /// Base URL 不完整时先补全, 再按补全后的地址重新识别, 避免沿用旧路径得出的结论.
     pub fn apply_to(self, upstream: &mut Upstream) -> Vec<&'static str> {
         let mut changed = Vec::new();
-        if let Some(hint) = self.base_url_hint(&upstream.base_url) {
+        let detected = if let Some(hint) = self.base_url_hint(&upstream.base_url) {
             upstream.base_url = hint.to_string();
             changed.push("Base URL");
-        }
-        let suggestion = self.suggestion;
+            detect_upstream(&upstream.base_url)
+        } else {
+            self
+        };
+        let suggestion = detected.suggestion;
         if let Some(wire_api) = suggestion.wire_api
             && upstream.wire_api != wire_api
         {
@@ -125,29 +134,30 @@ impl DetectedUpstream {
         failed.then(|| error_text(value))
     }
 
-    /// 当前 Base URL 拼不出可用的模型列表地址时, 返回建议地址.
-    /// 智谱裸域名下的 `/v1/models` 由 nginx 直接 404, OpenCode 裸域名同理,
-    /// 都必须补上路径段.
+    /// 当前 Base URL 不是该平台的已知可用端点时, 返回建议地址.
+    /// 智谱和 OpenCode 只有特定路径才有模型列表, 裸域名或输错路径 (例如 `/a`)
+    /// 拼出的 `/v1/models` 会被 nginx 直接 404, 需要补全.
     pub fn base_url_hint(self, base_url: &str) -> Option<&'static str> {
-        if !matches!(
-            self.kind,
-            DetectedKind::ZhipuApiV1 | DetectedKind::ZhipuPaas | DetectedKind::OpenCode
-        ) {
-            return None;
-        }
-        if !url_path(base_url).trim_end_matches('/').is_empty() {
-            return None;
-        }
         let url = base_url.trim().to_ascii_lowercase();
-        if url.contains("bigmodel.cn") {
-            Some("https://open.bigmodel.cn/api/v1")
-        } else if url.contains("z.ai") {
-            Some("https://api.z.ai/api/v1")
-        } else if url.contains("opencode.ai") {
-            Some("https://opencode.ai/zen/go/v1")
-        } else {
-            None
+        let path = url_path(&url);
+        let path = path.trim_end_matches('/');
+        if url.contains("bigmodel.cn") || url.contains("z.ai") {
+            if ZHIPU_ENDPOINT_PATHS.contains(&path) {
+                return None;
+            }
+            return Some(if url.contains("bigmodel.cn") {
+                "https://open.bigmodel.cn/api/v1"
+            } else {
+                "https://api.z.ai/api/v1"
+            });
         }
+        if url.contains("opencode.ai") {
+            if OPENCODE_ENDPOINT_PATHS.contains(&path) {
+                return None;
+            }
+            return Some("https://opencode.ai/zen/go/v1");
+        }
+        None
     }
 }
 
@@ -352,33 +362,47 @@ mod tests {
     }
 
     #[test]
-    fn suggests_zhipu_base_url_when_path_missing() {
-        let detected = detect_upstream("https://open.bigmodel.cn");
+    fn suggests_base_url_for_unusable_paths() {
+        let zhipu = detect_upstream("https://open.bigmodel.cn");
         assert_eq!(
-            detected.base_url_hint("https://open.bigmodel.cn"),
+            zhipu.base_url_hint("https://open.bigmodel.cn"),
             Some("https://open.bigmodel.cn/api/v1")
         );
         assert_eq!(
             detect_upstream("https://api.z.ai").base_url_hint("https://api.z.ai"),
             Some("https://api.z.ai/api/v1")
         );
-        // 已经带了路径就不再提示.
-        assert!(
-            detect_upstream("https://open.bigmodel.cn/api/v1")
-                .base_url_hint("https://open.bigmodel.cn/api/v1")
-                .is_none()
-        );
-        assert!(
-            detect_upstream("https://open.bigmodel.cn/api/paas/v4")
-                .base_url_hint("https://open.bigmodel.cn/api/paas/v4")
-                .is_none()
-        );
-        // OpenCode 裸域名同样补全.
+        // 输错或写了一半的路径同样提示, 例如只输入到 /a.
         assert_eq!(
-            detect_upstream("https://opencode.ai")
-                .base_url_hint("https://opencode.ai"),
+            zhipu.base_url_hint("https://open.bigmodel.cn/a"),
+            Some("https://open.bigmodel.cn/api/v1")
+        );
+        assert_eq!(
+            zhipu.base_url_hint("https://open.bigmodel.cn/ap"),
+            Some("https://open.bigmodel.cn/api/v1")
+        );
+
+        // 已知可用路径不再提示.
+        for base in [
+            "https://open.bigmodel.cn/api/v1",
+            "https://open.bigmodel.cn/api/paas/v4",
+            "https://open.bigmodel.cn/api/coding/paas/v4",
+        ] {
+            assert!(zhipu.base_url_hint(base).is_none(), "不应提示 {base}");
+        }
+
+        // OpenCode 裸域名和错误路径补全, 已知路径不提示.
+        let opencode = detect_upstream("https://opencode.ai");
+        assert_eq!(
+            opencode.base_url_hint("https://opencode.ai"),
             Some("https://opencode.ai/zen/go/v1")
         );
+        assert_eq!(
+            opencode.base_url_hint("https://opencode.ai/a"),
+            Some("https://opencode.ai/zen/go/v1")
+        );
+        assert!(opencode.base_url_hint("https://opencode.ai/zen/go/v1").is_none());
+        assert!(opencode.base_url_hint("https://opencode.ai/zen/v1").is_none());
     }
 
     #[test]
@@ -400,6 +424,23 @@ mod tests {
         // 已经补全后再次应用不再改写地址.
         let again = detect_upstream(&upstream.base_url).apply_to(&mut upstream);
         assert!(!again.contains(&"Base URL"));
+    }
+
+    #[test]
+    fn apply_to_redetects_after_filling_base_url() {
+        // 只输入到 /a 时, 旧地址被识别为 ZhipuPaas, 补全后必须按 /api/v1 重新识别.
+        let mut upstream = Upstream::new_relay(
+            "zhipu".to_string(),
+            "https://open.bigmodel.cn/a".to_string(),
+            WireApi::ChatCompletions,
+            true,
+            BalanceProvider::Zhipu,
+        );
+        let changed = detect_upstream(&upstream.base_url).apply_to(&mut upstream);
+
+        assert!(changed.contains(&"Base URL"));
+        assert_eq!(upstream.base_url, "https://open.bigmodel.cn/api/v1");
+        assert_eq!(upstream.wire_api, WireApi::Responses);
     }
 
     #[test]
