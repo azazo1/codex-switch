@@ -5,6 +5,7 @@ use crate::core::models::{
     ApiKeyAuthScheme, BalanceProvider, CacheKeepaliveMode, ErrorRetryPolicy, UnknownModalityPolicy,
     Upstream, UpstreamBalanceAlertSettings, UpstreamCacheKeepaliveSettings, UpstreamKind, WireApi,
 };
+use crate::core::upstream_detection::{self, DetectedKind};
 use eframe::egui;
 
 const BALANCE_PROVIDERS: &[BalanceProvider] = &[
@@ -31,6 +32,8 @@ pub(super) struct UpstreamEditor {
     api_key: String,
     newapi_user_key: String,
     newapi_user_id: String,
+    /// 点过 "应用识别结果" 之后显示的一次性提示.
+    apply_status: String,
 }
 
 impl UpstreamEditor {
@@ -52,6 +55,7 @@ impl UpstreamEditor {
             api_key: String::new(),
             newapi_user_key: String::new(),
             newapi_user_id: String::new(),
+            apply_status: String::new(),
         }
     }
 }
@@ -392,8 +396,33 @@ impl UpstreamEditor {
     fn relay_form_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label("Base URL");
-            ui.text_edit_singleline(&mut self.upstream.base_url);
+            let response = ui.text_edit_singleline(&mut self.upstream.base_url);
+            if response.changed() {
+                self.apply_status.clear();
+            }
+            let detected = upstream_detection::detect_upstream(&self.upstream.base_url);
+            if detected.kind != DetectedKind::Unknown {
+                ui.label(format!("识别: {}", detected.kind.label()))
+                    .on_hover_text(
+                        "依据 Base URL 在本地判断, 不发起任何请求; 模型列表按此结果解析.",
+                    );
+                if ui
+                    .button("应用识别结果")
+                    .on_hover_text("按识别结果改写 Wire API 和认证方式, 保存后生效.")
+                    .clicked()
+                {
+                    let changed = detected.suggestion.apply_to(&mut self.upstream);
+                    self.apply_status = if changed.is_empty() {
+                        "当前设置与识别结果一致".to_string()
+                    } else {
+                        format!("已按识别结果改写: {}", changed.join(", "))
+                    };
+                }
+            }
         });
+        if !self.apply_status.is_empty() {
+            ui.label(&self.apply_status);
+        }
         ui.horizontal(|ui| {
             ui.label("API Key");
             ui.add(

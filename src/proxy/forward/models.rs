@@ -2,6 +2,7 @@ use crate::app::AppState;
 use crate::core::models::{
     ScheduleGroup, ScheduleMode, ScheduleRouteRule, ScheduleRouteTargetKind, Upstream, UpstreamKind,
 };
+use crate::core::upstream_detection::{self, DetectedUpstream};
 use crate::proxy::transform;
 use crate::scheduler::{glob_captures, rewrite_model_template};
 use axum::http::HeaderMap;
@@ -359,11 +360,20 @@ async fn query_upstream_models(
     }
 }
 
+/// 取上游的识别结果; 节点上游的响应由对端 Codex Switch 生成, 固定为 OpenAI 形状.
+fn detect_for_models(upstream: &Upstream) -> DetectedUpstream {
+    if upstream.kind == UpstreamKind::PeerNode {
+        return upstream_detection::DEFAULT_DETECTION;
+    }
+    upstream_detection::detect_upstream(&upstream.base_url)
+}
+
 pub(super) async fn query_relay_models(
     state: &AppState,
     headers: &HeaderMap,
     upstream: &Upstream,
 ) -> anyhow::Result<Vec<Value>> {
+    let detected = detect_for_models(upstream);
     let target_url = if upstream.kind == UpstreamKind::PeerNode {
         format!("{}/v1/models", upstream.base_url.trim_end_matches('/'))
     } else {
@@ -397,16 +407,10 @@ pub(super) async fn query_relay_models(
         let value = response.json::<Value>().await?;
         (status, value)
     };
-    if !status.is_success() {
-        anyhow::bail!(
-            "{}",
-            value
-                .pointer("/error/message")
-                .and_then(Value::as_str)
-                .unwrap_or("models endpoint returned an error")
-        );
+    if let Some(message) = detected.models_error(status.is_success(), &value) {
+        anyhow::bail!("{message}");
     }
-    let items = normalize_models_response(&value, upstream);
+    let items = normalize_models_response(&value, upstream, detected);
     let capabilities = items
         .iter()
         .filter_map(|item| {
@@ -478,27 +482,38 @@ fn remap_model_item(item: Value, visible_model: &str) -> Value {
     Value::Object(model)
 }
 
-fn normalize_models_response(value: &Value, upstream: &Upstream) -> Vec<Value> {
-    if let Some(items) = value.get("data").and_then(Value::as_array) {
-        return items
-            .iter()
-            .filter_map(|item| normalize_model_item(item, upstream))
-            .collect();
-    }
-    if let Some(items) = value.as_array() {
-        return items
-            .iter()
-            .filter_map(|item| normalize_model_item(item, upstream))
-            .collect();
-    }
-    Vec::new()
+fn normalize_models_response(
+    value: &Value,
+    upstream: &Upstream,
+    detected: DetectedUpstream,
+) -> Vec<Value> {
+    // 识别结果给出的容器优先, 其余已知形状依次回退.
+    let items = value
+        .get(detected.models_container)
+        .and_then(Value::as_array)
+        .or_else(|| value.get("data").and_then(Value::as_array))
+        .or_else(|| value.get("models").and_then(Value::as_array))
+        .or_else(|| value.as_array());
+    let Some(items) = items else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| normalize_model_item(item, upstream, detected))
+        .collect()
 }
 
-fn normalize_model_item(item: &Value, upstream: &Upstream) -> Option<Value> {
+fn normalize_model_item(
+    item: &Value,
+    upstream: &Upstream,
+    detected: DetectedUpstream,
+) -> Option<Value> {
     let id = item
-        .get("id")
-        .or_else(|| item.get("name"))
-        .and_then(Value::as_str)?;
+        .get(detected.models_id_field)
+        .and_then(Value::as_str)
+        .or_else(|| item.get("id").and_then(Value::as_str))
+        .or_else(|| item.get("name").and_then(Value::as_str))
+        .or_else(|| item.get("slug").and_then(Value::as_str))?;
     let mut model = item.as_object().cloned().unwrap_or_default();
     model.insert("id".to_string(), json!(id));
     model
@@ -540,12 +555,37 @@ mod tests {
         let items = normalize_models_response(
             &json!({"object":"list","data":[{"id":"gpt-test"},{"name":"named-model"}]}),
             &upstream,
+            detect_for_models(&upstream),
         );
 
         assert_eq!(items[0]["id"], "gpt-test");
         assert_eq!(items[0]["object"], "model");
         assert_eq!(items[1]["id"], "named-model");
         assert_eq!(items[1]["owned_by"], "mock");
+    }
+
+    #[test]
+    fn normalizes_zhipu_api_v1_models_response() {
+        let upstream = Upstream::new_relay(
+            "zhipu".to_string(),
+            "https://open.bigmodel.cn/api/v1".to_string(),
+            WireApi::Responses,
+            true,
+            BalanceProvider::Zhipu,
+        );
+        let items = normalize_models_response(
+            &json!({"models":[
+                {"slug":"glm-5.3","display_name":"glm-5.3","input_modalities":["text"]},
+                {"slug":"glm-5.3-flash","display_name":"glm-5.3-flash","input_modalities":["text","image"]}
+            ]}),
+            &upstream,
+            detect_for_models(&upstream),
+        );
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["id"], "glm-5.3");
+        assert_eq!(items[1]["id"], "glm-5.3-flash");
+        assert_eq!(items[1]["owned_by"], "zhipu");
     }
 
     #[test]

@@ -10,6 +10,7 @@ use crate::core::models::{
     ScheduleGroupChild, ScheduleGroupMember, ScheduleRouteRule, TemporaryAccessKey, Upstream,
     UpstreamBalanceAlertSettings, UpstreamCacheKeepaliveSettings, WireApi,
 };
+use crate::core::upstream_detection::{self, DetectedKind};
 use crate::live::{LiveOutputSettings, LiveRequestSnapshot};
 use crate::peer::discovery::DiscoveredPeer;
 use crate::pricing;
@@ -518,6 +519,9 @@ pub struct CodexSwitchApp {
     relay_api_key_auth_scheme: ApiKeyAuthScheme,
     relay_supports_compact: bool,
     relay_filter_chat_server_tools: bool,
+    /// 用户是否手动选过 Wire API 与认证方式, 选过之后不再被识别结果覆盖.
+    relay_wire_api_touched: bool,
+    relay_auth_touched: bool,
     quota_snapshots: Vec<(String, Option<QuotaSnapshot>)>,
     balance_snapshots: Vec<(String, Option<BalanceSnapshot>)>,
     upstream_editor: Option<UpstreamEditor>,
@@ -708,6 +712,8 @@ impl CodexSwitchApp {
             relay_api_key_auth_scheme: ApiKeyAuthScheme::Bearer,
             relay_supports_compact: true,
             relay_filter_chat_server_tools: false,
+            relay_wire_api_touched: false,
+            relay_auth_touched: false,
             quota_snapshots: Vec::new(),
             balance_snapshots: Vec::new(),
             upstream_editor: None,
@@ -1279,6 +1285,28 @@ impl CodexSwitchApp {
         }
     }
 
+    /// 依据 Base URL 的识别结果刷新新增表单的默认值, 不发起网络请求.
+    /// 只在表单尚未被手动调整过的维度上写入, 避免覆盖用户的选择.
+    fn apply_relay_detection_hint(&mut self) {
+        let detected = upstream_detection::detect_upstream(&self.relay_base_url);
+        if detected.kind == DetectedKind::Unknown {
+            return;
+        }
+        if let Some(wire_api) = detected.suggestion.wire_api
+            && !self.relay_wire_api_touched
+        {
+            self.relay_wire_api = wire_api;
+        }
+        if let Some(scheme) = detected.suggestion.api_key_auth_scheme
+            && !self.relay_auth_touched
+        {
+            self.relay_api_key_auth_scheme = scheme;
+        }
+        if self.relay_wire_api == WireApi::AnthropicMessages {
+            self.relay_supports_compact = false;
+        }
+    }
+
     fn add_relay(&mut self) {
         let name = self.relay_name.trim().to_string();
         let base_url = self.relay_base_url.trim().to_string();
@@ -1293,6 +1321,7 @@ impl CodexSwitchApp {
             return;
         }
         let provider = balance::detect_provider(&base_url).unwrap_or(BalanceProvider::Auto);
+        let detected = upstream_detection::detect_upstream(&base_url).kind;
         let mut upstream = Upstream::new_relay(
             name,
             base_url,
@@ -1322,7 +1351,13 @@ impl CodexSwitchApp {
                 self.relay_base_url.clear();
                 self.relay_proxy_url.clear();
                 self.relay_api_key.clear();
-                self.status = "已添加 API Key 上游".to_string();
+                self.relay_wire_api_touched = false;
+                self.relay_auth_touched = false;
+                self.status = if detected == DetectedKind::Unknown {
+                    "已添加 API Key 上游".to_string()
+                } else {
+                    format!("已添加 API Key 上游 (识别为 {})", detected.label())
+                };
                 self.refresh_all();
             }
             Err(err) => self.status = format!("添加失败: {err}"),

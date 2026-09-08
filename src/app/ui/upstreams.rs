@@ -3,6 +3,7 @@ use crate::core::models::{
     ApiKeyAuthScheme, BalanceSnapshot, CacheKeepaliveMode, UpstreamBalanceAlertSettings,
     UpstreamCacheKeepaliveSettings, UpstreamKind, WireApi,
 };
+use crate::core::upstream_detection::{self, DetectedKind};
 use crate::core::upstream_transfer::UpstreamExport;
 use eframe::egui;
 
@@ -15,7 +16,21 @@ impl CodexSwitchApp {
         });
         ui.horizontal(|ui| {
             ui.label("Base URL");
-            ui.text_edit_singleline(&mut self.relay_base_url);
+            let response = ui.text_edit_singleline(&mut self.relay_base_url);
+            if response.changed() {
+                self.apply_relay_detection_hint();
+            }
+            let detected = upstream_detection::detect_upstream(&self.relay_base_url);
+            if detected.kind != DetectedKind::Unknown {
+                ui.label(format!("识别: {}", detected.kind.label()))
+                    .on_hover_text(
+                        "依据 Base URL 在本地判断, 不发起任何请求; 结果只作为默认值, 可以随时手改.",
+                    );
+            }
+            if let Some(hint) = detected.base_url_hint(&self.relay_base_url) {
+                ui.label(format!("建议改为 {hint}"))
+                    .on_hover_text("当前地址下没有模型列表端点, 使用该地址才能查询模型.");
+            }
         });
         ui.horizontal(|ui| {
             ui.label("代理 URL");
@@ -34,6 +49,8 @@ impl CodexSwitchApp {
                 .clicked()
             {
                 self.relay_api_key_auth_scheme = ApiKeyAuthScheme::Bearer;
+                self.relay_wire_api_touched = true;
+                self.relay_auth_touched = true;
             }
             if ui
                 .radio_value(
@@ -44,6 +61,8 @@ impl CodexSwitchApp {
                 .clicked()
             {
                 self.relay_api_key_auth_scheme = ApiKeyAuthScheme::Bearer;
+                self.relay_wire_api_touched = true;
+                self.relay_auth_touched = true;
             }
             if ui
                 .radio_value(
@@ -55,20 +74,32 @@ impl CodexSwitchApp {
             {
                 self.relay_api_key_auth_scheme = ApiKeyAuthScheme::XApiKey;
                 self.relay_supports_compact = false;
+                self.relay_wire_api_touched = true;
+                self.relay_auth_touched = true;
             }
         });
         ui.horizontal(|ui| {
             ui.label("API Key 认证");
-            ui.radio_value(
-                &mut self.relay_api_key_auth_scheme,
-                ApiKeyAuthScheme::Bearer,
-                "Bearer",
-            );
-            ui.radio_value(
-                &mut self.relay_api_key_auth_scheme,
-                ApiKeyAuthScheme::XApiKey,
-                "x-api-key",
-            );
+            if ui
+                .radio_value(
+                    &mut self.relay_api_key_auth_scheme,
+                    ApiKeyAuthScheme::Bearer,
+                    "Bearer",
+                )
+                .clicked()
+            {
+                self.relay_auth_touched = true;
+            }
+            if ui
+                .radio_value(
+                    &mut self.relay_api_key_auth_scheme,
+                    ApiKeyAuthScheme::XApiKey,
+                    "x-api-key",
+                )
+                .clicked()
+            {
+                self.relay_auth_touched = true;
+            }
             ui.add_enabled_ui(self.relay_wire_api != WireApi::AnthropicMessages, |ui| {
                 ui.checkbox(&mut self.relay_supports_compact, "支持 compact");
             });

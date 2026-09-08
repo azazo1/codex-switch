@@ -25,6 +25,24 @@ Base URL 可以填写站点根地址, 或以 `/v1`, `/v4` 这类 `/vN` 结尾的
 
 代理 URL 会应用到该上游的模型请求和余额查询. 填写无效 URL 时无法保存. 留空时使用系统代理设置.
 
+## Base URL 识别
+
+Codex Switch 只依据 Base URL 在本地判断上游属于哪一类, 不发起任何网络请求. 新增表单会随输入实时显示识别结果并填入 Wire API 和认证方式的默认值, 上游编辑页显示识别结果并提供 `应用识别结果` 按钮, 由你决定是否改写已有配置.
+
+| 识别结果 | 判定条件 | 建议值 |
+| --- | --- | --- |
+| `OpenAI 兼容` | DeepSeek, SiliconFlow, StepFun, OpenRouter, Novita 等官方站点 | Chat Completions, Bearer |
+| `Anthropic` | `api.anthropic.com` | Anthropic Messages, `x-api-key` |
+| `智谱 /api/v1` | Base URL 以 `/api` 或 `/api/v1` 结尾, 或只填智谱域名 | Responses, Bearer |
+| `智谱 paas` | 智谱域名下的其他路径, 例如 `/api/paas/v4` | Chat Completions, Bearer |
+| `未识别` | 其他地址 | 保持手填值 |
+
+识别结果同时决定模型列表的解析方式. 智谱 `/api/v1` 返回 `{"models":[{"slug": ...}]}`, 且鉴权失败也返回 HTTP 200, 只能读取响应体里的 `code` 和 `success` 判断. 其他形状按 `data` 数组加 `id` 字段解析, 并回退识别 `models` 数组, 顶层数组, `name` 和 `slug` 字段.
+
+智谱裸域名下的 `/v1/models` 会被 nginx 直接 404, 因此只填裸域名时表单会额外提示建议地址, 例如 `https://open.bigmodel.cn/api/v1`.
+
+识别结果只是默认值, 任何维度都可以手动覆盖. 手动改过 Wire API 或认证方式后, 新增表单不再自动改写这两项; 编辑页只有在点击 `应用识别结果` 时才改写.
+
 ## 选择 Wire API
 
 优先按照上游真实能力选择:
