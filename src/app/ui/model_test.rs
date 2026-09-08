@@ -624,16 +624,17 @@ impl CodexSwitchApp {
         ui.scope_builder(
             egui::UiBuilder::new()
                 .max_rect(input_rect)
-                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
             |ui| {
-                send_clicked = ui
-                    .add_enabled(!self.model_test_ui.chat_running, egui::Button::new("发送"))
-                    .clicked();
+                ui.label("对话 prompt:");
                 let input_response = ui.add(
                     egui::TextEdit::singleline(&mut self.model_test_ui.chat_input)
                         .desired_width(380.0)
                         .hint_text("输入消息, Enter 发送"),
                 );
+                send_clicked = ui
+                    .add_enabled(!self.model_test_ui.chat_running, egui::Button::new("发送"))
+                    .clicked();
                 enter_pressed = input_response.lost_focus()
                     && ui.input(|input| input.key_pressed(egui::Key::Enter));
             },
