@@ -12,6 +12,7 @@ use std::collections::BTreeSet;
 const LOG_RANGE_LABEL_WIDTH: f32 = 220.0;
 const LOG_PAGE_BUTTON_WIDTH: f32 = 32.0;
 const LOG_PAGE_SLOT_COUNT: usize = 7;
+const LOG_MODEL_WIDTH: f32 = 100.0;
 const DEFAULT_REASONING_EFFORT_OPTIONS: [&str; 5] = ["Minimal", "Low", "Medium", "High", "XHigh"];
 
 impl CodexSwitchApp {
@@ -49,8 +50,7 @@ impl CodexSwitchApp {
                         for (index, log) in self.logs.iter().enumerate() {
                             let hover = log_hover_text(log, &self.state.model_capabilities);
                             ui.label(upstream_text(log)).on_hover_text(hover.clone());
-                            let model_response = ui.label(model_text(log));
-                            model_response.on_hover_text(hover);
+                            log_model_label(ui, &model_text(log)).on_hover_text(hover);
                             ui.label(log.reasoning_effort.as_deref().unwrap_or("-"));
                             log_token_cell(ui, &mut token_display_mode, log);
                             log_cost_cell(
@@ -789,6 +789,28 @@ fn log_cost_cell(
             ui.label("-").on_hover_text("无价格缓存");
         }
     }
+}
+
+fn log_model_label(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    if text.contains('\n') {
+        ui.vertical(|ui| {
+            for line in text.lines() {
+                truncated_log_label(ui, line);
+            }
+        })
+        .response
+    } else {
+        truncated_log_label(ui, text)
+    }
+}
+
+fn truncated_log_label(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    ui.add_sized(
+        [LOG_MODEL_WIDTH, ui.spacing().interact_size.y],
+        egui::Label::new(text)
+            .truncate()
+            .show_tooltip_when_elided(false),
+    )
 }
 
 fn model_text(log: &RequestLog) -> String {
