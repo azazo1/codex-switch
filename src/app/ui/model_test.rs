@@ -34,8 +34,8 @@ enum TargetMode {
 impl TargetMode {
     fn label(self) -> &'static str {
         match self {
-            Self::Direct => "直连上游",
-            Self::Scheduler => "经调度组",
+            Self::Direct => "上游",
+            Self::Scheduler => "调度组",
         }
     }
 
