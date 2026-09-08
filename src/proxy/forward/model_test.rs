@@ -415,6 +415,7 @@ fn target_url_for(upstream: &Upstream, wire_api: WireApi) -> String {
 
 type SendOutcome = Result<(TestResponse, RequestTrace), (anyhow::Error, Option<RequestTrace>)>;
 
+#[allow(clippy::too_many_arguments)]
 async fn send_request(
     state: &AppState,
     upstream: &Upstream,

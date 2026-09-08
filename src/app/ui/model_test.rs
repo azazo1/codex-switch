@@ -520,6 +520,8 @@ impl CodexSwitchApp {
                 self.model_test_ui.chat_input.clear();
             }
         });
+        // 循环借用 chat_messages 期间不能调用 &mut self 的导出方法, 先记录意图再执行.
+        let mut har_export: Option<(Arc<ModelTestRawTrace>, i64)> = None;
         egui::ScrollArea::vertical()
             .id_salt("model_test_chat_history")
             .max_height(CHAT_HISTORY_HEIGHT)
@@ -567,7 +569,7 @@ impl CodexSwitchApp {
                             if let Some(raw) = &meta.raw
                                 && ui.small_button("导出 HAR").clicked()
                             {
-                                self.export_model_test_har(raw.clone(), meta.duration_ms, None);
+                                har_export = Some((raw.clone(), meta.duration_ms));
                             }
                         });
                     }
@@ -598,6 +600,9 @@ impl CodexSwitchApp {
                     });
                 }
             });
+        if let Some((raw, duration_ms)) = har_export {
+            self.export_model_test_har(raw, duration_ms, None);
+        }
         ui.add_space(4.0);
         let send_clicked = ui
             .add_enabled(!self.model_test_ui.chat_running, egui::Button::new("发送"))
