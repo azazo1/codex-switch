@@ -424,6 +424,9 @@ enum UiTaskEvent {
         kind: model_test::ModelTestKind,
         result: crate::proxy::forward::model_test::ModelTestOutcome,
     },
+    ModelTestHistoryCleared {
+        deleted: i64,
+    },
     Tray(TrayCommand),
 }
 
@@ -738,6 +741,7 @@ impl CodexSwitchApp {
         };
         let _ = crate::logging::set_debug_log_enabled(app.debug_log_enabled);
         app.refresh_all();
+        app.load_model_test_history_on_start();
         app.fetch_price_cache_once();
         app
     }
@@ -1059,6 +1063,9 @@ impl CodexSwitchApp {
                 }
                 UiTaskEvent::ModelTestFinished { kind, result } => {
                     self.handle_model_test_finished(kind, result);
+                }
+                UiTaskEvent::ModelTestHistoryCleared { deleted } => {
+                    self.handle_model_test_history_cleared(deleted);
                 }
                 UiTaskEvent::Tray(command) => self.handle_tray_command(ctx, command),
             }

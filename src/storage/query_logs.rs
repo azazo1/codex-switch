@@ -273,6 +273,22 @@ impl Store {
         Ok(row.get("count"))
     }
 
+    /// 按过滤条件删除日志并重建汇总, 返回删除行数.
+    pub async fn delete_request_logs_filtered(
+        &self,
+        filter: &RequestLogFilter,
+    ) -> anyhow::Result<i64> {
+        let mut tx = self.pool().begin().await?;
+        let mut builder = QueryBuilder::<Sqlite>::new("DELETE FROM request_logs");
+        append_request_log_filters(&mut builder, filter);
+        let deleted = builder.build().execute(&mut *tx).await?.rows_affected();
+        if deleted > 0 {
+            rebuild_usage_rollups(&mut tx).await?;
+        }
+        tx.commit().await?;
+        Ok(deleted as i64)
+    }
+
     pub async fn cleanup_request_logs(
         &self,
         retention: RequestLogRetention,
@@ -755,6 +771,32 @@ mod tests {
         assert_eq!(deleted, 1);
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].status, 200);
+        assert_eq!(stats.total_requests, 1);
+        assert_eq!(stats.total_usage.total_tokens, 5);
+    }
+
+    #[tokio::test]
+    async fn delete_request_logs_filtered_removes_only_matching_source() {
+        let path =
+            std::env::temp_dir().join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
+        let store = Store::open(path).await.unwrap();
+        let upstream = save_test_upstream(&store, "relay-a").await;
+        let mut proxy_log = test_log(Some(&upstream.id), Some("relay-a"), 5);
+        proxy_log.source = RequestLogSource::Proxy;
+        let mut test_log_row = test_log(Some(&upstream.id), Some("relay-a"), 7);
+        test_log_row.source = RequestLogSource::TestBench;
+        store.insert_request_log(proxy_log).await.unwrap();
+        store.insert_request_log(test_log_row).await.unwrap();
+
+        let filter = RequestLogFilter {
+            source: Some(RequestLogSource::TestBench),
+            ..Default::default()
+        };
+        let deleted = store.delete_request_logs_filtered(&filter).await.unwrap();
+
+        assert_eq!(deleted, 1);
+        assert_eq!(store.request_log_count().await.unwrap(), 1);
+        let stats = store.dashboard_stats().await.unwrap();
         assert_eq!(stats.total_requests, 1);
         assert_eq!(stats.total_usage.total_tokens, 5);
     }

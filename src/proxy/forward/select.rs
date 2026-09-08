@@ -18,8 +18,16 @@ pub(super) async fn selection_plan(
     model: Option<&str>,
     endpoint_kind: OpenAiEndpoint,
     compact: bool,
+    test_group: Option<&str>,
 ) -> anyhow::Result<SchedulerPlan> {
-    let group = state.store.current_schedule_group().await?;
+    let group = match test_group {
+        Some(group_id) => state
+            .store
+            .get_schedule_group(group_id.trim())
+            .await?
+            .with_context(|| format!("test bench schedule group not found: {group_id}"))?,
+        None => state.store.current_schedule_group().await?,
+    };
     let max_hops = state.store.scheduler_route_max_hops().await?;
     let resolved = resolve_schedule_route(state, group, model, max_hops).await?;
     let effective_model = resolved
