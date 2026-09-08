@@ -165,15 +165,15 @@ impl CodexSwitchApp {
                                 });
                                 ui.label(format_expires_at(key.expires_at));
                                 ui.horizontal(|ui| {
+                                    if ui.button("编辑").clicked() {
+                                        edit_id = Some(key.id.clone());
+                                    }
                                     if ui
                                         .button("重置")
                                         .on_hover_text("重置已用次数和 token 用量")
                                         .clicked()
                                     {
                                         reset_id = Some(key.id.clone());
-                                    }
-                                    if ui.button("编辑").clicked() {
-                                        edit_id = Some(key.id.clone());
                                     }
                                     if ui.button("删除").clicked() {
                                         delete_id = Some(key.id.clone());
