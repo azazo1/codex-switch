@@ -26,6 +26,8 @@ pub enum DetectedKind {
     ZhipuApiV1,
     /// 智谱其他路径 (`.../api/paas/v4`): OpenAI 形状.
     ZhipuPaas,
+    /// OpenCode Zen (`opencode.ai`): OpenAI 形状, 只接受 function 工具.
+    OpenCode,
     /// 未识别, 按 OpenAI 兼容形状处理.
     Unknown,
 }
@@ -37,6 +39,7 @@ impl DetectedKind {
             Self::Anthropic => "Anthropic",
             Self::ZhipuApiV1 => "智谱 /api/v1",
             Self::ZhipuPaas => "智谱 paas",
+            Self::OpenCode => "OpenCode",
             Self::Unknown => "未识别",
         }
     }
@@ -48,6 +51,7 @@ pub struct SuggestedSettings {
     pub wire_api: Option<WireApi>,
     pub api_key_auth_scheme: Option<ApiKeyAuthScheme>,
     pub supports_compact: Option<bool>,
+    pub filter_chat_server_tools: Option<bool>,
 }
 
 impl SuggestedSettings {
@@ -71,6 +75,12 @@ impl SuggestedSettings {
         {
             upstream.supports_compact = compact;
             changed.push("支持 compact");
+        }
+        if let Some(filter) = self.filter_chat_server_tools
+            && upstream.filter_chat_server_tools != filter
+        {
+            upstream.filter_chat_server_tools = filter;
+            changed.push("过滤 server_tool");
         }
         // Anthropic 上游始终不支持 compact, 这里补齐与编辑器一致的约束.
         if upstream.wire_api == WireApi::AnthropicMessages && upstream.supports_compact {
@@ -141,6 +151,7 @@ pub const DEFAULT_DETECTION: DetectedUpstream = DetectedUpstream {
         wire_api: None,
         api_key_auth_scheme: None,
         supports_compact: None,
+        filter_chat_server_tools: None,
     },
     models_container: OPENAI_CONTAINER,
     models_id_field: "id",
@@ -159,6 +170,9 @@ pub fn detect_upstream(base_url: &str) -> DetectedUpstream {
     if url.contains("open.bigmodel.cn") || url.contains("api.z.ai") {
         return zhipu_detection(&url);
     }
+    if url.contains("opencode.ai") {
+        return opencode_detection();
+    }
     if is_known_openai_compatible(&url) {
         return openai_compatible_detection();
     }
@@ -172,6 +186,7 @@ fn anthropic_detection() -> DetectedUpstream {
             wire_api: Some(WireApi::AnthropicMessages),
             api_key_auth_scheme: Some(ApiKeyAuthScheme::XApiKey),
             supports_compact: Some(false),
+            filter_chat_server_tools: None,
         },
         models_container: OPENAI_CONTAINER,
         models_id_field: "id",
@@ -186,6 +201,24 @@ fn openai_compatible_detection() -> DetectedUpstream {
             wire_api: Some(WireApi::ChatCompletions),
             api_key_auth_scheme: Some(ApiKeyAuthScheme::Bearer),
             supports_compact: None,
+            filter_chat_server_tools: None,
+        },
+        models_container: OPENAI_CONTAINER,
+        models_id_field: "id",
+        envelope_errors: false,
+    }
+}
+
+/// OpenCode Zen (`opencode.ai`): OpenAI Chat Completions 形状,
+/// 但只接受 function 工具, 需要过滤 server tool.
+fn opencode_detection() -> DetectedUpstream {
+    DetectedUpstream {
+        kind: DetectedKind::OpenCode,
+        suggestion: SuggestedSettings {
+            wire_api: Some(WireApi::ChatCompletions),
+            api_key_auth_scheme: Some(ApiKeyAuthScheme::Bearer),
+            supports_compact: None,
+            filter_chat_server_tools: Some(true),
         },
         models_container: OPENAI_CONTAINER,
         models_id_field: "id",
@@ -219,6 +252,7 @@ fn zhipu_detection(url: &str) -> DetectedUpstream {
                 wire_api: Some(WireApi::Responses),
                 api_key_auth_scheme: Some(ApiKeyAuthScheme::Bearer),
                 supports_compact: None,
+                filter_chat_server_tools: None,
             },
             models_container: ZHIPU_SLUG_CONTAINER,
             models_id_field: "slug",
@@ -231,6 +265,7 @@ fn zhipu_detection(url: &str) -> DetectedUpstream {
             wire_api: Some(WireApi::ChatCompletions),
             api_key_auth_scheme: Some(ApiKeyAuthScheme::Bearer),
             supports_compact: None,
+            filter_chat_server_tools: None,
         },
         models_container: OPENAI_CONTAINER,
         models_id_field: "id",
@@ -330,6 +365,18 @@ mod tests {
                 .base_url_hint("https://open.bigmodel.cn/api/paas/v4")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn detects_opencode() {
+        let detected = detect_upstream("https://opencode.ai/zen/go/v1");
+        assert_eq!(detected.kind, DetectedKind::OpenCode);
+        assert_eq!(detected.suggestion.wire_api, Some(WireApi::ChatCompletions));
+        assert_eq!(detected.suggestion.filter_chat_server_tools, Some(true));
+        assert_eq!(detected.models_id_field, "id");
+
+        let detected = detect_upstream("https://opencode.ai/zen/v1");
+        assert_eq!(detected.kind, DetectedKind::OpenCode);
     }
 
     #[test]

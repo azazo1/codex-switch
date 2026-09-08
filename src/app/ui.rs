@@ -522,6 +522,8 @@ pub struct CodexSwitchApp {
     /// 用户是否手动选过 Wire API 与认证方式, 选过之后不再被识别结果覆盖.
     relay_wire_api_touched: bool,
     relay_auth_touched: bool,
+    /// 用户是否手动勾过过滤 server_tool.
+    relay_filter_touched: bool,
     quota_snapshots: Vec<(String, Option<QuotaSnapshot>)>,
     balance_snapshots: Vec<(String, Option<BalanceSnapshot>)>,
     upstream_editor: Option<UpstreamEditor>,
@@ -714,6 +716,7 @@ impl CodexSwitchApp {
             relay_filter_chat_server_tools: false,
             relay_wire_api_touched: false,
             relay_auth_touched: false,
+            relay_filter_touched: false,
             quota_snapshots: Vec::new(),
             balance_snapshots: Vec::new(),
             upstream_editor: None,
@@ -1302,6 +1305,11 @@ impl CodexSwitchApp {
         {
             self.relay_api_key_auth_scheme = scheme;
         }
+        if let Some(filter) = detected.suggestion.filter_chat_server_tools
+            && !self.relay_filter_touched
+        {
+            self.relay_filter_chat_server_tools = filter;
+        }
         if self.relay_wire_api == WireApi::AnthropicMessages {
             self.relay_supports_compact = false;
         }
@@ -1353,6 +1361,7 @@ impl CodexSwitchApp {
                 self.relay_api_key.clear();
                 self.relay_wire_api_touched = false;
                 self.relay_auth_touched = false;
+                self.relay_filter_touched = false;
                 self.status = if detected == DetectedKind::Unknown {
                     "已添加 API Key 上游".to_string()
                 } else {

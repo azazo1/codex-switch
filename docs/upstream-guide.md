@@ -35,6 +35,7 @@ Codex Switch 只依据 Base URL 在本地判断上游属于哪一类, 不发起�
 | `Anthropic` | `api.anthropic.com` | Anthropic Messages, `x-api-key` |
 | `智谱 /api/v1` | Base URL 以 `/api` 或 `/api/v1` 结尾, 或只填智谱域名 | Responses, Bearer |
 | `智谱 paas` | 智谱域名下的其他路径, 例如 `/api/paas/v4` | Chat Completions, Bearer |
+| `OpenCode` | `opencode.ai` | Chat Completions, Bearer, 过滤 server_tool |
 | `未识别` | 其他地址 | 保持手填值 |
 
 识别结果同时决定模型列表的解析方式. 智谱 `/api/v1` 返回 `{"models":[{"slug": ...}]}`, 且鉴权失败也返回 HTTP 200, 只能读取响应体里的 `code` 和 `success` 判断. 其他形状按 `data` 数组加 `id` 字段解析, 并回退识别 `models` 数组, 顶层数组, `name` 和 `slug` 字段.
