@@ -1,6 +1,7 @@
 /target
 /vendors/
 /dist/
+/.tmp/
 *.patch
 .gitignore
 AGENTS.local.md
