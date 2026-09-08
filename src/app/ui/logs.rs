@@ -50,7 +50,8 @@ impl CodexSwitchApp {
                         for (index, log) in self.logs.iter().enumerate() {
                             let hover = log_hover_text(log, &self.state.model_capabilities);
                             ui.label(upstream_text(log)).on_hover_text(hover.clone());
-                            log_model_label(ui, &model_text(log)).on_hover_text(hover);
+                            log_model_label(ui, log.status >= 400, &model_text(log))
+                                .on_hover_text(hover);
                             ui.label(log.reasoning_effort.as_deref().unwrap_or("-"));
                             log_token_cell(ui, &mut token_display_mode, log);
                             log_cost_cell(
@@ -791,46 +792,66 @@ fn log_cost_cell(
     }
 }
 
-fn log_model_label(ui: &mut egui::Ui, text: &str) -> egui::Response {
+fn log_model_label(ui: &mut egui::Ui, failed: bool, text: &str) -> egui::Response {
+    let color = failed.then(|| ui.visuals().error_fg_color);
     if text.contains('\n') {
         ui.vertical(|ui| {
             for line in text.lines() {
-                truncated_log_label(ui, line);
+                truncated_log_label(ui, line, color);
             }
         })
         .response
     } else {
-        truncated_log_label(ui, text)
+        truncated_log_label(ui, text, color)
     }
 }
 
-fn truncated_log_label(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.add_sized(
-        [LOG_MODEL_WIDTH, ui.spacing().interact_size.y],
-        egui::Label::new(text)
-            .truncate()
-            .show_tooltip_when_elided(false),
-    )
+fn truncated_log_label(
+    ui: &mut egui::Ui,
+    text: &str,
+    color: Option<egui::Color32>,
+) -> egui::Response {
+    let display = elide_to_tail(ui, text, LOG_MODEL_WIDTH).unwrap_or_else(|| text.to_string());
+    let mut rich = egui::RichText::new(display);
+    if let Some(color) = color {
+        rich = rich.color(color);
+    }
+    ui.add(egui::Label::new(rich))
+}
+
+/// 过长时保留末尾并补前导省略号, 不需要截断时返回 None.
+fn elide_to_tail(ui: &egui::Ui, text: &str, max_width: f32) -> Option<String> {
+    let font_id = egui::TextStyle::Body.resolve(ui.style());
+    let measure = |value: &str| -> f32 {
+        ui.painter()
+            .layout_no_wrap(value.to_owned(), font_id.clone(), egui::Color32::WHITE)
+            .size()
+            .x
+    };
+    if measure(text) <= max_width {
+        return None;
+    }
+    const ELLIPSIS: &str = "…";
+    let budget = max_width - measure(ELLIPSIS);
+    let mut keep_from = text.len();
+    for (ch_idx, _) in text.char_indices() {
+        if measure(&text[ch_idx..]) <= budget {
+            keep_from = ch_idx;
+            break;
+        }
+    }
+    Some(format!("{ELLIPSIS}{}", &text[keep_from..]))
 }
 
 fn model_text(log: &RequestLog) -> String {
-    let mut text = match (log.model.as_deref(), log.target_model.as_deref()) {
+    match (log.model.as_deref(), log.target_model.as_deref()) {
         (Some(request), Some(target)) if request != target => {
-            let first = if log.status >= 400 {
-                format!("{request} / 错误")
-            } else {
-                request.to_string()
-            };
-            format!("{first}\n→ {target}")
+            format!("{request}\n→ {target}")
         }
         (Some(request), _) => request.to_string(),
         (None, Some(target)) => format!("-\n→ {target}"),
         (None, None) => "-".to_string(),
-    };
-    if log.status >= 400 && !text.contains('\n') {
-        text.push_str(" / 错误");
     }
-    text
 }
 
 fn upstream_text(log: &RequestLog) -> String {
