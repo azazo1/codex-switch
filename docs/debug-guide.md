@@ -16,7 +16,7 @@ just debug
 
 该实例使用 `target/codex-switch-debug/codex-switch.sqlite`. 首次运行时需要在界面中单独添加待检查上游, 设置一个未占用的监听端口, 然后从客户端发送复现请求.
 
-日志写入 `target/codex-switch-debug/codex-switch.log`, 包括完整入站 body, 转换后的上游 body, 上游响应和流式块. 每次执行 `just debug` 都会覆盖上一次日志. Authorization 和保存的 API Key 不会输出.
+日志写入 `target/codex-switch-debug/codex-switch.log`, 模型调用日志写入 `target/codex-switch-debug/codex-switch-proxy.log`, 包括完整入站 body, 转换后的上游 body, 上游响应和流式块. 每次执行 `just debug` 都会覆盖上一次日志. Authorization 和保存的 API Key 不会输出.
 
 完整 body 可能包含 prompt, tool arguments 和模型输出. 调试完成后应停止该实例, 不要公开日志文件. `target` 目录已被 Git 忽略.
 
@@ -27,7 +27,7 @@ just debug
 | 变量 | 作用 |
 | --- | --- |
 | `CODEX_SWITCH_DATA_DIR` | 覆盖 SQLite 和应用数据目录 |
-| `CODEX_SWITCH_LOG_FILE` | 将 tracing 日志合并写入指定文件, 每次启动覆盖旧文件, 不再拆分模型调用日志 |
+| `CODEX_SWITCH_LOG_FILE` | 主日志写入指定文件, 模型调用日志写入同目录 `<名称>-proxy.log`, 每次启动覆盖旧文件 |
 | `CODEX_SWITCH_LOG_BODIES` | 设置为 `1`, `true`, `yes` 或 `on` 时输出完整代理 body |
 | `RUST_LOG` | 控制 tracing target 和级别 |
 

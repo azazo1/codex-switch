@@ -80,4 +80,4 @@ Token 范围支持 `K`, `M`, `B` 和小数, 例如 `1.5M`. 最小值大于最大
 
 仪表盘的 `调试日志` 区域可以开启完整调试日志, 也可以调整轮转大小和轮转文件数. 非 Windows 仍会保留标准错误输出.
 
-可以在启动进程前设置 `RUST_LOG` 调整日志级别, 也可以设置 `CODEX_SWITCH_LOG_FILE` 和 `CODEX_SWITCH_LOG_BODIES` 覆盖 GUI 设置. 指定 `CODEX_SWITCH_LOG_FILE` 时所有日志合并写入该单文件, 不再拆分. 数据目录位置见[存储与备份指南](storage-guide.md).
+可以在启动进程前设置 `RUST_LOG` 调整日志级别, 也可以设置 `CODEX_SWITCH_LOG_FILE` 和 `CODEX_SWITCH_LOG_BODIES` 覆盖 GUI 设置. 指定 `CODEX_SWITCH_LOG_FILE` 时主日志写入该文件, 模型调用日志写入同目录的 `<名称>-proxy.log` 并按同样方式覆盖, `RUST_LOG` 作用于主日志. 数据目录位置见[存储与备份指南](storage-guide.md).

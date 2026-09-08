@@ -187,6 +187,8 @@ impl RollingLogWriter {
             .as_mut()
             .ok_or_else(|| io::Error::other("rolling log writer is missing"))?;
         writer.write_all(buf)?;
+        // fmt 层写完事件不会 flush, 这里必须立即刷盘, 否则 GUI 进程不退出时日志会滞留在 BufWriter 中.
+        writer.flush()?;
         self.current_size = self.current_size.saturating_add(buf.len() as u64);
         Ok(buf.len())
     }
@@ -227,7 +229,8 @@ pub(crate) fn init_tracing(config: LogRotationConfig) -> anyhow::Result<()> {
 
     if let Some(log_path) = std::env::var_os(LOG_FILE_ENV).filter(|path| !path.is_empty()) {
         set_body_logging_enabled(body_logging_env_enabled());
-        return init_file_tracing(Path::new(&log_path), env_filter, false);
+        let proxy_log_path = proxy_log_file_path()?;
+        return init_file_tracing(Path::new(&log_path), &proxy_log_path, env_filter, false);
     }
 
     if env_override_active() {
@@ -235,7 +238,8 @@ pub(crate) fn init_tracing(config: LogRotationConfig) -> anyhow::Result<()> {
         #[cfg(target_os = "windows")]
         {
             let log_path = main_log_file_path()?;
-            return init_file_tracing(&log_path, env_filter, true);
+            let proxy_log_path = proxy_log_file_path()?;
+            return init_file_tracing(&log_path, &proxy_log_path, env_filter, true);
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -355,6 +359,18 @@ pub(crate) fn main_log_file_path() -> anyhow::Result<PathBuf> {
 }
 
 pub(crate) fn proxy_log_file_path() -> anyhow::Result<PathBuf> {
+    if let Some(main_path) = std::env::var_os(LOG_FILE_ENV).filter(|path| !path.is_empty()) {
+        let main_path = PathBuf::from(main_path);
+        let proxy_name = main_path
+            .file_stem()
+            .map(|stem| {
+                let mut name = stem.to_os_string();
+                name.push("-proxy.log");
+                name
+            })
+            .unwrap_or_else(|| PROXY_LOG_FILE_NAME.into());
+        return Ok(main_path.with_file_name(proxy_name));
+    }
     Ok(crate::app::data_dir()?.join(PROXY_LOG_FILE_NAME))
 }
 
@@ -468,15 +484,31 @@ fn open_log_file(path: &Path, options: &OpenOptions) -> io::Result<std::fs::File
     }
 }
 
-fn init_file_tracing(log_path: &Path, env_filter: EnvFilter, append: bool) -> anyhow::Result<()> {
+fn init_file_tracing(
+    log_path: &Path,
+    proxy_log_path: &Path,
+    env_filter: EnvFilter,
+    append: bool,
+) -> anyhow::Result<()> {
     let log_writer = RollingLogWriter::new_append_only(log_path, !append)
         .with_context(|| format!("failed to open log file: {}", log_path.display()))?;
+    let proxy_writer = RollingLogWriter::new_append_only(proxy_log_path, !append).with_context(
+        || format!("failed to open proxy log file: {}", proxy_log_path.display()),
+    )?;
+    let proxy_filter =
+        EnvFilter::try_new(PROXY_FILTER_DEBUG).context("failed to create proxy env log filter")?;
     tracing_subscriber::registry()
-        .with(env_filter)
         .with(
             fmt::layer()
                 .with_ansi(false)
-                .with_writer(Mutex::new(log_writer)),
+                .with_writer(Mutex::new(log_writer))
+                .with_filter(env_filter),
+        )
+        .with(
+            fmt::layer()
+                .with_ansi(false)
+                .with_writer(Mutex::new(proxy_writer))
+                .with_filter(proxy_filter),
         )
         .try_init()
         .context("failed to install tracing subscriber")?;
@@ -486,8 +518,11 @@ fn init_file_tracing(log_path: &Path, env_filter: EnvFilter, append: bool) -> an
 #[cfg(not(target_os = "windows"))]
 fn init_stderr_tracing(env_filter: EnvFilter) -> anyhow::Result<()> {
     tracing_subscriber::registry()
-        .with(env_filter)
-        .with(fmt::layer().with_writer(std::io::stderr))
+        .with(
+            fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_filter(env_filter),
+        )
         .try_init()
         .context("failed to install tracing subscriber")?;
     Ok(())
@@ -638,5 +673,26 @@ mod tests {
         ] {
             EnvFilter::try_new(filter).unwrap();
         }
+    }
+
+    #[test]
+    fn env_override_file_tracing_writes_events() {
+        let log_path = temp_log_path();
+        let proxy_log_path = temp_log_path();
+        let filter = EnvFilter::try_new("codex_switch=trace").unwrap();
+        init_file_tracing(&log_path, &proxy_log_path, filter, false).unwrap();
+        tracing::info!("env override repro event");
+        tracing::trace!(target: "codex_switch::proxy::body", "proxy repro event");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let content = fs::read_to_string(&log_path).unwrap();
+        assert!(
+            content.contains("env override repro event"),
+            "log file is empty or missing the event: {content:?}"
+        );
+        let proxy_content = fs::read_to_string(&proxy_log_path).unwrap();
+        assert!(
+            proxy_content.contains("proxy repro event"),
+            "proxy log file is empty or missing the event: {proxy_content:?}"
+        );
     }
 }
