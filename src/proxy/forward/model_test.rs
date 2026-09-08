@@ -313,7 +313,7 @@ async fn run_scheduler_test_inner(
             );
         }
     };
-    let request_body = serde_json::to_string_pretty(&value).unwrap_or_default();
+    let request_body = String::from_utf8_lossy(&body).into_owned();
     let mut request = state
         .http
         .post(&url)
@@ -396,7 +396,7 @@ async fn send_direct(
             );
         }
     };
-    let request_body = serde_json::to_string_pretty(&value).unwrap_or_default();
+    let request_body = String::from_utf8_lossy(&body).into_owned();
     let url = target_url_for(upstream, wire_api);
     let (response, trace) = match send_request(
         state,
@@ -602,27 +602,34 @@ impl TestResponse {
 
 #[derive(Default)]
 struct RawBodyCapture {
-    buffer: Vec<u8>,
-    text: String,
+    /// 完整原始响应报文, 只追加不消费, 供导出 HAR.
+    raw: Vec<u8>,
+    /// SSE 解析工作缓冲, 已解析的事件块会从中移除.
+    parse_buffer: Vec<u8>,
     truncated: bool,
 }
 
 impl RawBodyCapture {
     fn extend(&mut self, bytes: &[u8]) {
+        self.parse_buffer.extend_from_slice(bytes);
         if self.truncated {
             return;
         }
-        let remaining = RESPONSE_CAPTURE_LIMIT.saturating_sub(self.buffer.len());
+        let remaining = RESPONSE_CAPTURE_LIMIT.saturating_sub(self.raw.len());
         if bytes.len() > remaining {
-            self.buffer.extend_from_slice(&bytes[..remaining]);
+            self.raw.extend_from_slice(&bytes[..remaining]);
             self.truncated = true;
         } else {
-            self.buffer.extend_from_slice(bytes);
+            self.raw.extend_from_slice(bytes);
         }
-        if self.buffer.len() >= RESPONSE_CAPTURE_LIMIT {
+        if self.raw.len() >= RESPONSE_CAPTURE_LIMIT {
             self.truncated = true;
         }
-        self.text = String::from_utf8_lossy(&self.buffer).into_owned();
+    }
+
+    /// 导出用的完整报文文本.
+    fn into_text(self) -> String {
+        String::from_utf8_lossy(&self.raw).into_owned()
     }
 }
 
@@ -717,9 +724,10 @@ async fn consume_response(
             first_token_ms = Some(elapsed_ms(started));
         }
         captured.extend(&chunk);
-        while let Some((index, separator_len)) = super::find_sse_block_separator(&captured.buffer)
+        while let Some((index, separator_len)) =
+            super::find_sse_block_separator(&captured.parse_buffer)
         {
-            let block = String::from_utf8_lossy(&captured.buffer[..index]).into_owned();
+            let block = String::from_utf8_lossy(&captured.parse_buffer[..index]).into_owned();
             usage.merge_max(&usage::extract_usage_from_sse(&block));
             if usage::has_anthropic_usage_event(&block) {
                 usage.total_tokens = usage.input_tokens + usage.output_tokens;
@@ -750,7 +758,7 @@ async fn consume_response(
                     }
                 }
             }
-            captured.buffer.drain(..index + separator_len);
+            captured.parse_buffer.drain(..index + separator_len);
         }
     }
     usage.finish();
@@ -792,8 +800,8 @@ fn finish_outcome(
         response_status: status,
         response_content_type: content_type,
         response_headers,
-        response_body: captured.text,
         response_truncated: captured.truncated,
+        response_body: captured.into_text(),
     });
     ModelTestOutcome {
         status,
