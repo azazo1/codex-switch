@@ -105,13 +105,18 @@ impl CodexSwitchApp {
                     if ui.button("取消").clicked() {
                         action = EditorAction::Cancel;
                     }
-                    if ui
-                        .button("导出")
+                    let export_response = ui
+                        .add_enabled(
+                            editor.upstream.kind != UpstreamKind::PeerNode,
+                            egui::Button::new("导出"),
+                        )
                         .on_hover_text(
                             "导出已保存的上游配置 (含凭据) 为 JSON 并复制到剪贴板, 当前未保存的修改不会被导出",
                         )
-                        .clicked()
-                    {
+                        .on_disabled_hover_text(
+                            "peer 节点上游与节点配对关系绑定, 无法通过导出迁移, 请在目标设备上重新配对",
+                        );
+                    if export_response.clicked() {
                         action = EditorAction::Export;
                     }
                 });
@@ -149,7 +154,7 @@ impl CodexSwitchApp {
                 }
                 Err(err) => self.status = format!("导出上游失败: {err}"),
             },
-            Ok(None) => self.status = "导出失败: 上游不存在".to_string(),
+            Ok(None) => self.status = "导出失败: 上游不存在或不可导出".to_string(),
             Err(err) => self.status = format!("导出上游失败: {err}"),
         }
     }

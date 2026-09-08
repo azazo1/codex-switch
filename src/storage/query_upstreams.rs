@@ -17,6 +17,18 @@ pub(crate) struct SavedOAuthAccount {
     pub refreshable: bool,
 }
 
+/// 批量导出结果, skipped_peer_nodes 为因依赖本机配对而被跳过的 peer 节点上游数量.
+pub struct UpstreamBatchExport {
+    pub export: UpstreamExport,
+    pub skipped_peer_nodes: usize,
+}
+
+/// 批量导入结果, skipped_peer_nodes 为因依赖本机配对而被跳过的 peer 节点上游数量.
+pub struct UpstreamImportResult {
+    pub imported: Vec<Upstream>,
+    pub skipped_peer_nodes: usize,
+}
+
 impl Store {
     pub async fn list_upstreams(&self) -> anyhow::Result<Vec<Upstream>> {
         let rows = sqlx::query("SELECT * FROM upstreams ORDER BY priority DESC, created_at ASC")
@@ -289,28 +301,48 @@ impl Store {
         Ok(row.map(|r| r.get::<String, _>("value")))
     }
 
-    /// 导出单个上游及其全部凭据, 上游不存在时返回 None.
+    /// 导出单个上游及其全部凭据, 上游不存在或为 peer 节点上游时返回 None.
     pub async fn export_upstream(&self, id: &str) -> anyhow::Result<Option<UpstreamExport>> {
         let Some(upstream) = self.get_upstream(id).await? else {
             return Ok(None);
         };
+        if upstream.kind == UpstreamKind::PeerNode {
+            return Ok(None);
+        }
         tracing::info!(upstream_id = %id, "upstream exported");
         Ok(Some(self.upstream_export(vec![upstream]).await?))
     }
 
     /// 批量导出上游及其全部凭据, only_enabled 为 true 时仅导出已启用的上游.
-    pub async fn export_upstreams(&self, only_enabled: bool) -> anyhow::Result<UpstreamExport> {
+    /// peer 节点上游与本机配对关系绑定, 迁移后无法使用, 会被跳过.
+    pub async fn export_upstreams(
+        &self,
+        only_enabled: bool,
+    ) -> anyhow::Result<UpstreamBatchExport> {
         let upstreams = if only_enabled {
             self.enabled_upstreams().await?
         } else {
             self.list_upstreams().await?
         };
+        let skipped_peer_nodes = upstreams
+            .iter()
+            .filter(|upstream| upstream.kind == UpstreamKind::PeerNode)
+            .count();
+        let upstreams: Vec<Upstream> = upstreams
+            .into_iter()
+            .filter(|upstream| upstream.kind != UpstreamKind::PeerNode)
+            .collect();
         tracing::info!(
             count = upstreams.len(),
+            skipped_peer_nodes,
             only_enabled,
             "upstreams batch exported"
         );
-        self.upstream_export(upstreams).await
+        let export = self.upstream_export(upstreams).await?;
+        Ok(UpstreamBatchExport {
+            export,
+            skipped_peer_nodes,
+        })
     }
 
     async fn upstream_export(&self, upstreams: Vec<Upstream>) -> anyhow::Result<UpstreamExport> {
@@ -340,10 +372,11 @@ impl Store {
     }
 
     /// 批量导入上游, 单个事务完成, 任一条失败则整体回滚.
+    /// peer 节点上游依赖本机配对关系, 无法通过导入创建, 会被跳过并记录 warn 日志.
     pub async fn import_upstreams(
         &self,
         payload: &UpstreamExport,
-    ) -> anyhow::Result<Vec<Upstream>> {
+    ) -> anyhow::Result<UpstreamImportResult> {
         if payload.version > UPSTREAM_EXPORT_VERSION {
             anyhow::bail!(
                 "导出格式版本过高: v{}, 当前支持 v{UPSTREAM_EXPORT_VERSION}",
@@ -352,7 +385,16 @@ impl Store {
         }
         let mut tx = self.pool().begin().await?;
         let mut imported = Vec::with_capacity(payload.upstreams.len());
+        let mut skipped_peer_nodes = 0usize;
         for item in &payload.upstreams {
+            if item.upstream.kind == UpstreamKind::PeerNode {
+                skipped_peer_nodes += 1;
+                tracing::warn!(
+                    name = %item.upstream.name,
+                    "skipped peer node upstream on import: peer upstreams depend on local pairing"
+                );
+                continue;
+            }
             let mut upstream = item.upstream.clone();
             upstream.id = uuid::Uuid::new_v4().to_string();
             let now = Utc::now();
@@ -371,7 +413,10 @@ impl Store {
             imported.push(upstream);
         }
         tx.commit().await?;
-        Ok(imported)
+        Ok(UpstreamImportResult {
+            imported,
+            skipped_peer_nodes,
+        })
     }
 }
 
@@ -652,7 +697,7 @@ mod tests {
         );
 
         let mut imported = store.import_upstreams(&parsed).await.unwrap();
-        let imported = imported.pop().unwrap();
+        let imported = imported.imported.pop().unwrap();
         assert_ne!(imported.id, upstream.id, "导入时应生成新 id");
         assert_eq!(imported.name, upstream.name);
         assert_eq!(imported.base_url, upstream.base_url);
@@ -699,10 +744,19 @@ mod tests {
         );
         disabled.enabled = false;
         store.save_upstream(&disabled).await.unwrap();
+        // peer 节点上游依赖本机配对, 导出时应被跳过, 导入时应被拒绝.
+        store
+            .save_upstream(&Upstream::new_peer_node(
+                "peer-1".to_string(),
+                "https://peer-1.example.com".to_string(),
+            ))
+            .await
+            .unwrap();
 
         let batch = store.export_upstreams(false).await.unwrap();
-        assert_eq!(batch.upstreams.len(), 3);
-        let json = batch.to_json().unwrap();
+        assert_eq!(batch.export.upstreams.len(), 3);
+        assert_eq!(batch.skipped_peer_nodes, 1);
+        let json = batch.export.to_json().unwrap();
 
         let target = Store::open(
             std::env::temp_dir().join(format!(
@@ -714,18 +768,42 @@ mod tests {
         .unwrap();
         let payloads = UpstreamExport::from_json(&json).unwrap();
         assert_eq!(payloads.upstreams.len(), 3);
-        let imported = target.import_upstreams(&payloads).await.unwrap();
-        assert_eq!(imported.len(), 3);
+        let result = target.import_upstreams(&payloads).await.unwrap();
+        assert_eq!(result.imported.len(), 3);
+        assert_eq!(result.skipped_peer_nodes, 0);
         assert_eq!(
             target
-                .get_credential(&imported[0].id, "api_key")
+                .get_credential(&result.imported[0].id, "api_key")
                 .await
                 .unwrap()
                 .as_deref(),
             Some("sk-relay-a")
         );
 
+        // 导入包含 peer 节点上游的载荷时应跳过该条并计入 skipped.
+        let peer_upstream = Upstream::new_peer_node(
+            "peer-2".to_string(),
+            "https://peer-2.example.com".to_string(),
+        );
+        let mut with_peer = payloads.clone();
+        with_peer
+            .upstreams
+            .push(crate::core::upstream_transfer::UpstreamExportItem {
+                upstream: peer_upstream,
+                credentials: Default::default(),
+            });
+        let before = target.list_upstreams().await.unwrap().len();
+        let mixed = target.import_upstreams(&with_peer).await.unwrap();
+        assert_eq!(mixed.imported.len(), 3);
+        assert_eq!(mixed.skipped_peer_nodes, 1);
+        // 被跳过的 peer 上游不应写入数据库.
+        assert_eq!(
+            target.list_upstreams().await.unwrap().len(),
+            before + mixed.imported.len()
+        );
+
         let enabled = store.export_upstreams(true).await.unwrap();
-        assert_eq!(enabled.upstreams.len(), 2);
+        assert_eq!(enabled.export.upstreams.len(), 2);
+        assert_eq!(enabled.skipped_peer_nodes, 1);
     }
 }

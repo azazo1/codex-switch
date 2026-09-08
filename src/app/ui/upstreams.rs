@@ -268,10 +268,17 @@ impl CodexSwitchApp {
             .runtime
             .block_on(self.state.store.import_upstreams(&payload))
         {
-            Ok(imported) => {
+            Ok(result) => {
                 self.upstream_import_text.clear();
                 self.upstream_import_open = false;
-                self.status = format!("已导入 {} 个上游", imported.len());
+                let mut message = format!("已导入 {} 个上游", result.imported.len());
+                if result.skipped_peer_nodes > 0 {
+                    message.push_str(&format!(
+                        ", 已跳过 {} 个 peer 节点上游 (依赖节点配对, 无法导入)",
+                        result.skipped_peer_nodes
+                    ));
+                }
+                self.status = message;
                 self.refresh_all();
             }
             Err(err) => self.status = format!("导入失败: {err}"),
@@ -283,20 +290,27 @@ impl CodexSwitchApp {
             .runtime
             .block_on(self.state.store.export_upstreams(only_enabled));
         match result {
-            Ok(export) if export.upstreams.is_empty() => {
+            Ok(result) if result.export.upstreams.is_empty() => {
                 self.status = if only_enabled {
                     "没有已启用的上游可导出".to_string()
                 } else {
                     "没有上游可导出".to_string()
                 };
             }
-            Ok(export) => match export.to_json() {
+            Ok(result) => match result.export.to_json() {
                 Ok(json) => {
                     ctx.copy_text(json);
-                    self.status = format!(
+                    let mut message = format!(
                         "已导出 {} 个上游到剪贴板, JSON 包含 API Key 等凭据, 请注意保管",
-                        export.upstreams.len()
+                        result.export.upstreams.len()
                     );
+                    if result.skipped_peer_nodes > 0 {
+                        message.push_str(&format!(
+                            ", 已跳过 {} 个 peer 节点上游 (依赖节点配对, 无法迁移)",
+                            result.skipped_peer_nodes
+                        ));
+                    }
+                    self.status = message;
                 }
                 Err(err) => self.status = format!("导出上游失败: {err}"),
             },
