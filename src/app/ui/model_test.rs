@@ -631,7 +631,7 @@ impl CodexSwitchApp {
                     .clicked();
                 let input_response = ui.add(
                     egui::TextEdit::singleline(&mut self.model_test_ui.chat_input)
-                        .desired_width(f32::INFINITY)
+                        .desired_width(380.0)
                         .hint_text("输入消息, Enter 发送"),
                 );
                 enter_pressed = input_response.lost_focus()
