@@ -359,7 +359,7 @@ async fn query_upstream_models(
     }
 }
 
-async fn query_relay_models(
+pub(super) async fn query_relay_models(
     state: &AppState,
     headers: &HeaderMap,
     upstream: &Upstream,

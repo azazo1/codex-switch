@@ -1,5 +1,5 @@
 use crate::app::AppState;
-use crate::core::models::{RequestLog, TokenUsage, Upstream};
+use crate::core::models::{RequestLog, RequestLogSource, TokenUsage, Upstream};
 use axum::http::StatusCode;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -31,6 +31,7 @@ pub(super) struct AttemptLog<'a> {
     pub(super) started: Instant,
     pub(super) upstream: Option<&'a Upstream>,
     pub(super) endpoint: String,
+    pub(super) source: RequestLogSource,
     pub(super) model: Option<String>,
     pub(super) target_model: Option<String>,
     pub(super) reasoning_effort: Option<String>,
@@ -48,6 +49,7 @@ pub(super) async fn record_attempt_log(log: AttemptLog<'_>) {
             ts: None,
             upstream_id: log.upstream.map(|upstream| upstream.id.clone()),
             upstream_name: log.upstream.map(|upstream| upstream.name.clone()),
+            source: log.source,
             endpoint: log.endpoint,
             model: log.model,
             target_model: log.target_model,
@@ -70,6 +72,7 @@ pub(super) struct StreamLogDraft {
     upstream_id: String,
     upstream_name: String,
     endpoint: String,
+    source: RequestLogSource,
     model: Option<String>,
     target_model: Option<String>,
     reasoning_effort: Option<String>,
@@ -102,6 +105,7 @@ impl StreamLogDraft {
             upstream_id: upstream.id.clone(),
             upstream_name: upstream.name.clone(),
             endpoint,
+            source: RequestLogSource::Proxy,
             model,
             target_model: None,
             reasoning_effort,
@@ -110,6 +114,10 @@ impl StreamLogDraft {
             temporary_key_id: None,
             inner: Arc::new(Mutex::new(StreamLogState::default())),
         }
+    }
+
+    pub(super) fn set_source(&mut self, source: RequestLogSource) {
+        self.source = source;
     }
 
     pub(super) fn set_temporary_key_id(&mut self, temporary_key_id: Option<String>) {
@@ -177,6 +185,7 @@ impl StreamLogDraft {
             ts: None,
             upstream_id: Some(self.upstream_id.clone()),
             upstream_name: Some(self.upstream_name.clone()),
+            source: self.source,
             endpoint: self.endpoint.clone(),
             model: self.model.clone(),
             target_model: self.target_model.clone(),

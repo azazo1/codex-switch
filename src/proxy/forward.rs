@@ -1,7 +1,8 @@
 use crate::app::AppState;
 use crate::cache_keepalive::CacheKeepaliveRegistration;
 use crate::core::models::{
-    ErrorRetryPolicy, TokenUsage, UnknownModalityPolicy, Upstream, UpstreamKind, WireApi,
+    ErrorRetryPolicy, RequestLogSource, TokenUsage, UnknownModalityPolicy, Upstream, UpstreamKind,
+    WireApi,
 };
 use crate::live::LiveRequestMeta;
 use crate::proxy::compat::{
@@ -37,9 +38,13 @@ pub(crate) mod auth;
 mod error_policy;
 mod headers;
 mod logging;
+pub(crate) mod model_test;
 mod models;
 mod response;
 mod select;
+
+/// 测试台请求经本地代理转发时携带的来源标记头.
+pub(crate) const TEST_SOURCE_HEADER: &str = "x-cs-source";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpenAiEndpoint {
@@ -154,6 +159,12 @@ pub async fn handle_openai(
     };
     let started = Instant::now();
     let endpoint = endpoint_kind.endpoint(&uri, subpath);
+    let source = headers
+        .get(TEST_SOURCE_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| *value == model_test::TEST_SOURCE_HEADER_VALUE)
+        .map(|_| RequestLogSource::TestBench)
+        .unwrap_or(RequestLogSource::Proxy);
     let model = usage::extract_model(&body);
     let reasoning_effort = usage::extract_reasoning_effort(&body);
     let compact = endpoint.starts_with("/responses/compact");
@@ -167,6 +178,7 @@ pub async fn handle_openai(
         headers,
         body,
         endpoint: endpoint.clone(),
+        source,
         started,
         request_id,
         model: model.clone(),
@@ -185,6 +197,7 @@ pub async fn handle_openai(
                     started,
                     upstream: Some(&result.upstream),
                     endpoint,
+                    source,
                     model,
                     target_model: result.target_model.clone(),
                     reasoning_effort,
@@ -206,6 +219,7 @@ pub async fn handle_openai(
                     started,
                     upstream: None,
                     endpoint,
+                    source,
                     model,
                     target_model: None,
                     reasoning_effort,
@@ -286,6 +300,7 @@ struct ForwardRequest<'a> {
     headers: HeaderMap,
     body: Bytes,
     endpoint: String,
+    source: RequestLogSource,
     started: Instant,
     request_id: String,
     model: Option<String>,
@@ -361,6 +376,7 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
                             started: request.started,
                             upstream: Some(&upstream),
                             endpoint: request.endpoint.clone(),
+                            source: request.source,
                             model: request.model.clone(),
                             target_model: attempt_target_model.clone(),
                             reasoning_effort: request.reasoning_effort.clone(),
@@ -416,6 +432,7 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
                         started: request.started,
                         upstream: Some(&upstream),
                         endpoint: request.endpoint.clone(),
+                        source: request.source,
                         model: request.model.clone(),
                         target_model: attempt_target_model.clone(),
                         reasoning_effort: request.reasoning_effort.clone(),
@@ -443,6 +460,7 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
                     started: request.started,
                     upstream: Some(&upstream),
                     endpoint: request.endpoint.clone(),
+                    source: request.source,
                     model: request.model.clone(),
                     target_model: attempt_target_model.clone(),
                     reasoning_effort: request.reasoning_effort.clone(),
@@ -970,6 +988,7 @@ fn build_live_response_stream(
         status,
         started,
     );
+    log_draft.set_source(request.source);
     log_draft.set_temporary_key_id(temporary_key_id);
     log_draft.set_target_model(target_model);
     let live_guard = LiveRequestGuard::from_active(active_guard, log_draft.clone());

@@ -1,4 +1,6 @@
-use crate::core::models::{DashboardStats, ModelUsageStats, ProviderStats, RequestLog, TokenUsage};
+use crate::core::models::{
+    DashboardStats, ModelUsageStats, ProviderStats, RequestLog, RequestLogSource, TokenUsage,
+};
 use crate::pricing;
 use crate::storage::Store;
 use chrono::{DateTime, Utc};
@@ -38,6 +40,7 @@ pub struct RequestLogFilter {
     pub total_tokens_max: Option<i64>,
     pub estimated_cost_usd_min: Option<f64>,
     pub estimated_cost_usd_max: Option<f64>,
+    pub source: Option<RequestLogSource>,
     pub started_at: Option<DateTime<Utc>>,
     pub ended_at: Option<DateTime<Utc>>,
 }
@@ -71,8 +74,8 @@ impl Store {
             "INSERT INTO request_logs (
                 ts, upstream_id, upstream_name, endpoint, model, target_model, reasoning_effort,
                 status, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                total_tokens, estimated_cost_usd, duration_ms, first_token_ms, error
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                total_tokens, estimated_cost_usd, duration_ms, first_token_ms, error, source
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         )
         .bind(now.to_rfc3339())
         .bind(&log.upstream_id)
@@ -91,6 +94,7 @@ impl Store {
         .bind(log.duration_ms)
         .bind(log.first_token_ms)
         .bind(&log.error)
+        .bind(log.source.as_str())
         .execute(self.pool())
         .await?;
 
@@ -451,6 +455,11 @@ fn append_request_log_filters(builder: &mut QueryBuilder<Sqlite>, filter: &Reque
         "estimated_cost_usd",
         filter.estimated_cost_usd_max,
     );
+    if let Some(source) = filter.source {
+        begin_static_clause(builder, &mut has_where);
+        builder.push("source = ");
+        builder.push_bind(source.as_str());
+    }
     if let Some(value) = filter.started_at {
         begin_static_clause(builder, &mut has_where);
         builder.push("ts >= ");
@@ -601,6 +610,7 @@ fn request_log_from_row(row: sqlx::sqlite::SqliteRow) -> RequestLog {
             .map(|value| value.with_timezone(&Utc)),
         upstream_id: row.get("upstream_id"),
         upstream_name: row.get("upstream_name"),
+        source: RequestLogSource::from_str(&row.get::<String, _>("source")),
         endpoint: row.get("endpoint"),
         model: row.get("model"),
         target_model: row.get("target_model"),
@@ -946,6 +956,7 @@ mod tests {
             ts: Some(ts),
             upstream_id: upstream_id.map(str::to_string),
             upstream_name: upstream_name.map(str::to_string),
+            source: RequestLogSource::Proxy,
             endpoint: "/responses".to_string(),
             model: Some("gpt-test".to_string()),
             target_model: None,

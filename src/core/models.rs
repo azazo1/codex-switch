@@ -584,11 +584,34 @@ impl TokenUsage {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RequestLogSource {
+    Proxy,
+    TestBench,
+}
+
+impl RequestLogSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Proxy => "proxy",
+            Self::TestBench => "test_bench",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "test_bench" => Self::TestBench,
+            _ => Self::Proxy,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RequestLog {
     pub ts: Option<DateTime<Utc>>,
     pub upstream_id: Option<String>,
     pub upstream_name: Option<String>,
+    pub source: RequestLogSource,
     pub endpoint: String,
     pub model: Option<String>,
     pub target_model: Option<String>,

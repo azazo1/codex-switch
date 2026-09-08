@@ -1,6 +1,6 @@
 use super::{
     CodexSwitchApp, F64RangeFilter, I64RangeFilter, LogDateTimeFilter, LogRetentionChoice,
-    LogStatusFilter, tokens,
+    LogSourceFilter, LogStatusFilter, tokens,
 };
 use crate::core::model_capabilities::ModelCapabilityCache;
 use crate::core::models::{RequestLog, Upstream};
@@ -169,6 +169,7 @@ impl CodexSwitchApp {
                             &mut self.log_filter_editor.status,
                             &mut self.log_filter_editor.status_custom,
                         );
+                        source_filter_row(ui, &mut self.log_filter_editor.source);
                         date_time_filter_row(
                             ui,
                             "开始时间",
@@ -516,6 +517,26 @@ fn status_filter_row(
     } else {
         ui.label("");
     }
+    ui.end_row();
+}
+
+fn source_filter_row(ui: &mut egui::Ui, value: &mut LogSourceFilter) {
+    ui.label("来源");
+    egui::ComboBox::from_id_salt("log_filter_source")
+        .selected_text(value.label())
+        .width(160.0)
+        .show_ui(ui, |ui| {
+            for option in [
+                LogSourceFilter::All,
+                LogSourceFilter::Proxy,
+                LogSourceFilter::TestBench,
+            ] {
+                ui.selectable_value(value, option, option.label());
+            }
+        })
+        .response
+        .on_hover_text("测试台发起的测试请求会标记为测试台来源");
+    ui.label("");
     ui.end_row();
 }
 

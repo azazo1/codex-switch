@@ -54,6 +54,7 @@ mod cache_keepalive;
 mod dashboard;
 mod data;
 mod logs;
+mod model_test;
 mod oauth;
 mod peers;
 mod quota;
@@ -73,6 +74,7 @@ enum Tab {
     CacheKeepalive,
     ActiveConnections,
     TempKeys,
+    ModelTest,
     Logs,
 }
 
@@ -118,6 +120,7 @@ struct LogFilterState {
     reasoning_effort: Option<String>,
     endpoint: Option<String>,
     status: LogStatusFilter,
+    source: LogSourceFilter,
     status_custom: I64RangeFilter,
     price_usd: F64RangeFilter,
     started_at: LogDateTimeFilter,
@@ -129,6 +132,24 @@ struct LogFilterState {
     cache_read_tokens: I64RangeFilter,
     cache_creation_tokens: I64RangeFilter,
     total_tokens: I64RangeFilter,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum LogSourceFilter {
+    #[default]
+    All,
+    Proxy,
+    TestBench,
+}
+
+impl LogSourceFilter {
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "全部来源",
+            Self::Proxy => "仅代理",
+            Self::TestBench => "仅测试台",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -206,6 +227,7 @@ impl LogFilterState {
             self.reasoning_effort.is_some(),
             self.endpoint.is_some(),
             self.status != LogStatusFilter::All,
+            self.source != LogSourceFilter::All,
             self.price_usd.is_active(),
             self.started_at.enabled,
             self.ended_at.enabled,
@@ -237,6 +259,13 @@ impl LogFilterState {
         validate_token_range("总 tokens", &self.total_tokens)?;
         validate_f64_range("费用", &self.price_usd)?;
         let (status_min, status_max) = self.status_range()?;
+        let source = match self.source {
+            LogSourceFilter::All => None,
+            LogSourceFilter::Proxy => Some(crate::core::models::RequestLogSource::Proxy),
+            LogSourceFilter::TestBench => {
+                Some(crate::core::models::RequestLogSource::TestBench)
+            }
+        };
         let started_at = self.started_at.to_utc("开始时间")?;
         let ended_at = self.ended_at.to_utc("结束时间")?;
         if let (Some(started_at), Some(ended_at)) = (started_at, ended_at)
@@ -273,6 +302,7 @@ impl LogFilterState {
             total_tokens_max: self.total_tokens.max_token_value("总 tokens")?,
             estimated_cost_usd_min: self.price_usd.min_value("费用")?,
             estimated_cost_usd_max: self.price_usd.max_value("费用")?,
+            source,
             started_at,
             ended_at,
         })
@@ -382,6 +412,14 @@ enum UiTaskEvent {
         fx: anyhow::Result<Option<pricing::fx::UsdCnyRate>>,
     },
     PeerPaired(anyhow::Result<String>),
+    ModelTestModelsFetched {
+        upstream_id: String,
+        result: anyhow::Result<Vec<String>>,
+    },
+    ModelTestFinished {
+        kind: model_test::ModelTestKind,
+        result: crate::proxy::forward::model_test::ModelTestOutcome,
+    },
     Tray(TrayCommand),
 }
 
@@ -499,6 +537,7 @@ pub struct CodexSwitchApp {
     discovered_peers: Vec<DiscoveredPeer>,
     temporary_access_keys: Vec<TemporaryAccessKey>,
     temp_keys_ui: temp_keys::TempKeysUiState,
+    model_test_ui: model_test::ModelTestUiState,
 }
 
 impl CodexSwitchApp {
@@ -682,6 +721,7 @@ impl CodexSwitchApp {
             discovered_peers: Vec::new(),
             temporary_access_keys: Vec::new(),
             temp_keys_ui: temp_keys::TempKeysUiState::default(),
+            model_test_ui: model_test::ModelTestUiState::default(),
         };
         let _ = crate::logging::set_debug_log_enabled(app.debug_log_enabled);
         app.refresh_all();
@@ -997,6 +1037,12 @@ impl CodexSwitchApp {
                             );
                         }
                     }
+                }
+                UiTaskEvent::ModelTestModelsFetched { upstream_id, result } => {
+                    self.handle_model_test_models_fetched(upstream_id, result);
+                }
+                UiTaskEvent::ModelTestFinished { kind, result } => {
+                    self.handle_model_test_finished(kind, result);
                 }
                 UiTaskEvent::Tray(command) => self.handle_tray_command(ctx, command),
             }
@@ -1395,6 +1441,7 @@ impl eframe::App for CodexSwitchApp {
                         &self.live_connections,
                     )),
                 );
+                tab_button(ui, &mut self.tab, Tab::ModelTest, "测试台");
                 tab_button(ui, &mut self.tab, Tab::Logs, "日志");
                 if ui.button("刷新").clicked() {
                     self.refresh_from_button();
@@ -1424,6 +1471,7 @@ impl eframe::App for CodexSwitchApp {
             Tab::CacheKeepalive => self.cache_keepalive_ui(ui),
             Tab::ActiveConnections => self.active_connections_ui(ui),
             Tab::TempKeys => self.temp_keys_ui(ui),
+            Tab::ModelTest => self.model_test_ui(ui),
             Tab::Logs => self.logs_ui(ui),
         });
         self.delete_confirmation_window(&ctx);

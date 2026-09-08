@@ -11,8 +11,8 @@ use super::{
 use crate::app::{AppEvents, http};
 use crate::balance::API_KEY_CREDENTIAL;
 use crate::core::models::{
-    CacheKeepaliveMode, RequestLog, TokenUsage, UpstreamCacheKeepaliveSettings, UpstreamKind,
-    WireApi,
+    CacheKeepaliveMode, RequestLog, RequestLogSource, TokenUsage, UpstreamCacheKeepaliveSettings,
+    UpstreamKind, WireApi,
 };
 use crate::pricing;
 use crate::storage::{Store, credentials::CredentialStore};
@@ -535,6 +535,7 @@ impl CacheKeepaliveRuntime {
             ts: None,
             upstream_id: Some(session.upstream.id.clone()),
             upstream_name: Some(session.upstream.name.clone()),
+            source: RequestLogSource::Proxy,
             endpoint: INTERNAL_ENDPOINT.to_string(),
             model: Some(session.model.clone()),
             target_model: None,

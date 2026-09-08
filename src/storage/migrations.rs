@@ -527,6 +527,13 @@ fn migrations() -> &'static [Migration] {
                 "ALTER TABLE upstreams ADD COLUMN price_multiplier REAL NOT NULL DEFAULT 1.0",
             ],
         },
+        Migration {
+            version: 23,
+            name: "request_log_source",
+            statements: &[
+                "ALTER TABLE request_logs ADD COLUMN source TEXT NOT NULL DEFAULT 'proxy'",
+            ],
+        },
     ]
 }
 
@@ -547,7 +554,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 22);
+        assert_eq!(rows.len(), 23);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -626,6 +633,13 @@ mod tests {
             rows[20].get::<String, _>("name"),
             "upstream_balance_refresh_alert_enabled"
         );
+        assert_eq!(rows[21].get::<i64, _>("version"), 22);
+        assert_eq!(
+            rows[21].get::<String, _>("name"),
+            "upstream_price_multiplier"
+        );
+        assert_eq!(rows[22].get::<i64, _>("version"), 23);
+        assert_eq!(rows[22].get::<String, _>("name"), "request_log_source");
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
             Some("127.0.0.1:15721")
@@ -654,6 +668,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 22);
+        assert_eq!(count, 23);
     }
 }
