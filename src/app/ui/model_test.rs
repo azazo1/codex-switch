@@ -35,7 +35,7 @@ impl TargetMode {
     fn label(self) -> &'static str {
         match self {
             Self::Direct => "直连上游",
-            Self::Scheduler => "经调度器",
+            Self::Scheduler => "经调度组",
         }
     }
 
@@ -256,7 +256,7 @@ impl CodexSwitchApp {
                     }
                 })
                 .response
-                .on_hover_text("直连上游绕过调度器精确测试单个上游, 经调度器走本地代理完整链路");
+                .on_hover_text("直连上游绕过调度组精确测试单个上游, 经调度组走本地代理完整链路");
             if self.model_test_ui.target_mode == TargetMode::Direct {
                 ui.separator();
                 ui.label("上游");
@@ -309,7 +309,7 @@ impl CodexSwitchApp {
             && upstream.kind == UpstreamKind::CodexOauth
         {
             ui.label(
-                egui::RichText::new("OAuth 上游无法拉取模型列表, 且直连请求可能缺少必要的 Codex 请求字段, 建议使用\"经调度器\"方式测试")
+                egui::RichText::new("OAuth 上游无法拉取模型列表, 且直连请求可能缺少必要的 Codex 请求字段, 建议使用\"经调度组\"方式测试")
                     .weak(),
             );
         }

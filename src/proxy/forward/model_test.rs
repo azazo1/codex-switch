@@ -1,4 +1,4 @@
-//! 模型测试台执行器: 绕过调度器直连上游, 或经本地代理端口走完整链路,
+//! 模型测试台执行器: 绕过调度组直连上游, 或经本地代理端口走完整链路,
 //! 发送小体积测试请求并统计耗时, 首 token 延迟, tokens 与估算费用.
 
 use crate::app::AppState;
@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 /// 测试台请求经本地代理转发时携带的来源标记值.
 pub(crate) const TEST_SOURCE_HEADER_VALUE: &str = "test-bench";
 
-/// 经调度器模式固定使用的本地代理端点, 协议转换由代理内部完成.
+/// 经调度组模式固定使用的本地代理端点, 协议转换由代理内部完成.
 const LOCAL_TEST_ENDPOINT: &str = "/v1/responses";
 
 const INTERNAL_ERROR_STATUS: i64 = 502;
