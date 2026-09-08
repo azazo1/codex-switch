@@ -40,9 +40,9 @@ Codex Switch 只依据 Base URL 在本地判断上游属于哪一类, 不发起�
 
 识别结果同时决定模型列表的解析方式. 智谱 `/api/v1` 返回 `{"models":[{"slug": ...}]}`, 且鉴权失败也返回 HTTP 200, 只能读取响应体里的 `code` 和 `success` 判断. 其他形状按 `data` 数组加 `id` 字段解析, 并回退识别 `models` 数组, 顶层数组, `name` 和 `slug` 字段.
 
-智谱裸域名下的 `/v1/models` 会被 nginx 直接 404, 因此只填裸域名时表单会额外提示建议地址, 例如 `https://open.bigmodel.cn/api/v1`.
+智谱和 OpenCode 的裸域名下没有模型列表端点, 因此只填域名时新增表单会显示 `补全为 <地址>` 按钮, 点一下把 Base URL 补成完整路径, 例如 `https://open.bigmodel.cn/api/v1`.
 
-识别结果只是默认值, 任何维度都可以手动覆盖. 手动改过 Wire API 或认证方式后, 新增表单不再自动改写这两项; 编辑页只有在点击 `应用识别结果` 时才改写.
+识别结果只是默认值, 任何维度都可以手动覆盖. 手动改过 Wire API 或认证方式后, 新增表单不再自动改写这两项. 编辑页点击 `应用识别结果` 会一并改写 Base URL, Wire API, 认证方式, 支持 compact 和过滤 server_tool, 保存后生效.
 
 ## 选择 Wire API
 

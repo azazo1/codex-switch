@@ -54,45 +54,6 @@ pub struct SuggestedSettings {
     pub filter_chat_server_tools: Option<bool>,
 }
 
-impl SuggestedSettings {
-    /// 把建议写入上游记录, 返回被改写的维度名称.
-    pub fn apply_to(self, upstream: &mut Upstream) -> Vec<&'static str> {
-        let mut changed = Vec::new();
-        if let Some(wire_api) = self.wire_api
-            && upstream.wire_api != wire_api
-        {
-            upstream.wire_api = wire_api;
-            changed.push("Wire API");
-        }
-        if let Some(scheme) = self.api_key_auth_scheme
-            && upstream.api_key_auth_scheme != scheme
-        {
-            upstream.api_key_auth_scheme = scheme;
-            changed.push("API Key 认证");
-        }
-        if let Some(compact) = self.supports_compact
-            && upstream.supports_compact != compact
-        {
-            upstream.supports_compact = compact;
-            changed.push("支持 compact");
-        }
-        if let Some(filter) = self.filter_chat_server_tools
-            && upstream.filter_chat_server_tools != filter
-        {
-            upstream.filter_chat_server_tools = filter;
-            changed.push("过滤 server_tool");
-        }
-        // Anthropic 上游始终不支持 compact, 这里补齐与编辑器一致的约束.
-        if upstream.wire_api == WireApi::AnthropicMessages && upstream.supports_compact {
-            upstream.supports_compact = false;
-            if !changed.contains(&"支持 compact") {
-                changed.push("支持 compact");
-            }
-        }
-        changed
-    }
-}
-
 /// 上游识别结果.
 #[derive(Debug, Clone, Copy)]
 pub struct DetectedUpstream {
@@ -107,6 +68,49 @@ pub struct DetectedUpstream {
 }
 
 impl DetectedUpstream {
+    /// 把识别结果写入上游记录, 返回被改写的维度名称.
+    /// Base URL 需要补全路径时一并改写, 例如只填智谱域名会补成 `/api/v1`.
+    pub fn apply_to(self, upstream: &mut Upstream) -> Vec<&'static str> {
+        let mut changed = Vec::new();
+        if let Some(hint) = self.base_url_hint(&upstream.base_url) {
+            upstream.base_url = hint.to_string();
+            changed.push("Base URL");
+        }
+        let suggestion = self.suggestion;
+        if let Some(wire_api) = suggestion.wire_api
+            && upstream.wire_api != wire_api
+        {
+            upstream.wire_api = wire_api;
+            changed.push("Wire API");
+        }
+        if let Some(scheme) = suggestion.api_key_auth_scheme
+            && upstream.api_key_auth_scheme != scheme
+        {
+            upstream.api_key_auth_scheme = scheme;
+            changed.push("API Key 认证");
+        }
+        if let Some(compact) = suggestion.supports_compact
+            && upstream.supports_compact != compact
+        {
+            upstream.supports_compact = compact;
+            changed.push("支持 compact");
+        }
+        if let Some(filter) = suggestion.filter_chat_server_tools
+            && upstream.filter_chat_server_tools != filter
+        {
+            upstream.filter_chat_server_tools = filter;
+            changed.push("过滤 server_tool");
+        }
+        // Anthropic 上游始终不支持 compact, 这里补齐与编辑器一致的约束.
+        if upstream.wire_api == WireApi::AnthropicMessages && upstream.supports_compact {
+            upstream.supports_compact = false;
+            if !changed.contains(&"支持 compact") {
+                changed.push("支持 compact");
+            }
+        }
+        changed
+    }
+
     /// 判断一次模型列表查询是否失败, 返回可读错误.
     /// 智谱 `/api/v1` 鉴权失败也返回 200, 只能看信封里的 code 和 success.
     pub fn models_error(self, status_success: bool, value: &Value) -> Option<String> {
@@ -122,11 +126,12 @@ impl DetectedUpstream {
     }
 
     /// 当前 Base URL 拼不出可用的模型列表地址时, 返回建议地址.
-    /// 智谱裸域名下的 `/v1/models` 由 nginx 直接 404, 必须补上路径段.
+    /// 智谱裸域名下的 `/v1/models` 由 nginx 直接 404, OpenCode 裸域名同理,
+    /// 都必须补上路径段.
     pub fn base_url_hint(self, base_url: &str) -> Option<&'static str> {
         if !matches!(
             self.kind,
-            DetectedKind::ZhipuApiV1 | DetectedKind::ZhipuPaas
+            DetectedKind::ZhipuApiV1 | DetectedKind::ZhipuPaas | DetectedKind::OpenCode
         ) {
             return None;
         }
@@ -138,6 +143,8 @@ impl DetectedUpstream {
             Some("https://open.bigmodel.cn/api/v1")
         } else if url.contains("z.ai") {
             Some("https://api.z.ai/api/v1")
+        } else if url.contains("opencode.ai") {
+            Some("https://opencode.ai/zen/go/v1")
         } else {
             None
         }
@@ -307,6 +314,7 @@ fn error_text(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::models::BalanceProvider;
     use serde_json::json;
 
     #[test]
@@ -365,6 +373,33 @@ mod tests {
                 .base_url_hint("https://open.bigmodel.cn/api/paas/v4")
                 .is_none()
         );
+        // OpenCode 裸域名同样补全.
+        assert_eq!(
+            detect_upstream("https://opencode.ai")
+                .base_url_hint("https://opencode.ai"),
+            Some("https://opencode.ai/zen/go/v1")
+        );
+    }
+
+    #[test]
+    fn apply_to_fills_base_url_and_settings() {
+        let detected = detect_upstream("https://open.bigmodel.cn");
+        let mut upstream = Upstream::new_relay(
+            "zhipu".to_string(),
+            "https://open.bigmodel.cn".to_string(),
+            WireApi::ChatCompletions,
+            true,
+            BalanceProvider::Zhipu,
+        );
+        let changed = detected.apply_to(&mut upstream);
+
+        assert!(changed.contains(&"Base URL"));
+        assert_eq!(upstream.base_url, "https://open.bigmodel.cn/api/v1");
+        assert_eq!(upstream.wire_api, WireApi::Responses);
+
+        // 已经补全后再次应用不再改写地址.
+        let again = detect_upstream(&upstream.base_url).apply_to(&mut upstream);
+        assert!(!again.contains(&"Base URL"));
     }
 
     #[test]

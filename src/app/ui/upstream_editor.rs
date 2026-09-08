@@ -408,10 +408,12 @@ impl UpstreamEditor {
                     );
                 if ui
                     .button("应用识别结果")
-                    .on_hover_text("按识别结果改写 Wire API 和认证方式, 保存后生效.")
+                    .on_hover_text(
+                        "按识别结果改写 Base URL, Wire API, 认证方式和过滤开关, 保存后生效.",
+                    )
                     .clicked()
                 {
-                    let changed = detected.suggestion.apply_to(&mut self.upstream);
+                    let changed = detected.apply_to(&mut self.upstream);
                     self.apply_status = if changed.is_empty() {
                         "当前设置与识别结果一致".to_string()
                     } else {

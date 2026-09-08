@@ -27,9 +27,14 @@ impl CodexSwitchApp {
                         "依据 Base URL 在本地判断, 不发起任何请求; 结果只作为默认值, 可以随时手改.",
                     );
             }
-            if let Some(hint) = detected.base_url_hint(&self.relay_base_url) {
-                ui.label(format!("建议改为 {hint}"))
-                    .on_hover_text("当前地址下没有模型列表端点, 使用该地址才能查询模型.");
+            if let Some(hint) = detected.base_url_hint(&self.relay_base_url)
+                && ui
+                    .button(format!("补全为 {hint}"))
+                    .on_hover_text("当前地址下没有模型列表端点, 点一下补全路径.")
+                    .clicked()
+            {
+                self.relay_base_url = hint.to_string();
+                self.apply_relay_detection_hint();
             }
         });
         ui.horizontal(|ui| {
