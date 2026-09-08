@@ -296,6 +296,28 @@ fn redact_header(name: &str) -> bool {
     )
 }
 
+const REDACTED_TEXT: &str = "[REDACTED]";
+
+/// OAuth 认证服务器的请求体和响应体包含 refresh_token, code, access_token
+/// 等凭据, 这些域名的 body 整体脱敏.
+fn is_sensitive_url(url: &str) -> bool {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|host| host == "auth.openai.com")
+}
+
+/// 计算落盘的 body 文本, 敏感域名整体替换为占位符.
+fn final_body_text(sensitive: bool, bytes: &[u8]) -> Option<String> {
+    (!bytes.is_empty()).then(|| {
+        if sensitive {
+            REDACTED_TEXT.to_string()
+        } else {
+            String::from_utf8_lossy(bytes).into_owned()
+        }
+    })
+}
+
 fn har_headers(headers: &reqwest::header::HeaderMap) -> Vec<HarHeader> {
     headers
         .iter()
@@ -589,8 +611,8 @@ fn write_locked(state: &mut PendingHarState) {
     let body_size = i64::try_from(state.response_body.len()).unwrap_or(-1);
     response.body_size = body_size;
     response.content.size = body_size;
-    response.content.text = (!state.response_body.is_empty())
-        .then(|| String::from_utf8_lossy(&state.response_body).into_owned());
+    response.content.text =
+        final_body_text(is_sensitive_url(&state.request.url), &state.response_body);
     let entry = HarEntry {
         started_date_time: state.started_at.clone(),
         time,
@@ -601,7 +623,18 @@ fn write_locked(state: &mut PendingHarState) {
             headers: state.request.headers.clone(),
             headers_size: state.request.headers_size,
             body_size: state.request.body_size,
-            post_data: state.request.post_data.clone(),
+            post_data: state
+                .request
+                .post_data
+                .clone()
+                .map(|data| HarPostData {
+                    mime_type: data.mime_type,
+                    text: if is_sensitive_url(&state.request.url) {
+                        REDACTED_TEXT.to_string()
+                    } else {
+                        data.text
+                    },
+                }),
         },
         response,
         cache: serde_json::json!({}),
@@ -620,6 +653,23 @@ fn write_locked(state: &mut PendingHarState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oauth_bodies_are_redacted() {
+        assert!(is_sensitive_url("https://auth.openai.com/oauth/token"));
+        assert!(is_sensitive_url("https://auth.openai.com/api/accounts/deviceauth/usercode"));
+        assert!(!is_sensitive_url("https://api.deepseek.com/user/balance"));
+        assert!(!is_sensitive_url("https://chatgpt.com/backend-api/codex/responses"));
+        assert_eq!(
+            final_body_text(true, b"grant_type=refresh_token&refresh_token=secret"),
+            Some(REDACTED_TEXT.to_string())
+        );
+        assert_eq!(
+            final_body_text(false, b"{\"ok\":true}"),
+            Some("{\"ok\":true}".to_string())
+        );
+        assert_eq!(final_body_text(true, b""), None);
+    }
 
     fn test_writer(path: PathBuf, max_files: usize) -> HarFileWriter {
         HarFileWriter::new(

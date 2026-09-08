@@ -84,7 +84,7 @@ Token 范围支持 `K`, `M`, `B` 和小数, 例如 `1.5M`. 最小值大于最大
 
 开启完整调试日志后, 所有出站 HTTP 请求会完整记录到数据目录的 `codex-switch-network.har` (HAR 1.2 格式), 可直接用 Chrome DevTools 或其他 HAR 查看工具打开. 覆盖范围包括代理转发 (流式和非流式), `/v1/models` 查询, 余额查询, 配额查询, 缓存保活, 价格和汇率获取, OAuth 以及节点间请求.
 
-每个 entry 记录请求方法, URL, 请求头, 请求体, 响应状态, 响应头, 响应体和耗时. 单个请求或响应体超过 10 MB 会截断并标记 `_truncated`, 请求失败时标记 `_error`. Authorization, API Key 和 Cookie 类请求头会脱敏为 `[REDACTED]`, 其余内容包含完整 prompt 和模型输出, 不要公开 HAR 文件.
+每个 entry 记录请求方法, URL, 请求头, 请求体, 响应状态, 响应头, 响应体和耗时. 单个请求或响应体超过 10 MB 会截断并标记 `_truncated`, 请求失败时标记 `_error`. Authorization, API Key 和 Cookie 类请求头会脱敏为 `[REDACTED]`, OAuth 认证域名 (`auth.openai.com`) 的请求体和响应体也整体脱敏为 `[REDACTED]`, 其余内容包含完整 prompt 和模型输出, 不要公开 HAR 文件.
 
 HAR 文件与主日志共享轮转大小和轮转文件数配置, 轮转分段的文件名形如 `codex-switch-network.1.har`. 文件采用流式追加写入, 进程在任意时刻退出后文件仍是合法的 HAR; 仅当上次写入中途崩溃时, 残留文件会原样轮转保留.
 
