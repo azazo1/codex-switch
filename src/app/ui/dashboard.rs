@@ -286,7 +286,7 @@ impl CodexSwitchApp {
             let path = self.network_har_path.clone();
             self.log_path_row(ui, &path);
         });
-        ui.label("开启调试日志后会记录完整入站 body, 转换后的上游 body, 上游响应和流式块, 可能包含 prompt 和模型输出, 不要公开日志文件. 网络请求 HAR 文件记录所有出站请求和响应的头与体, Authorization 和 API Key 会脱敏.");
+        ui.label("开启调试日志后会记录完整入站 body, 转换后的上游 body, 上游响应和流式块, 可能包含 prompt 和模型输出, 不要公开日志文件.\n网络请求 HAR 文件记录所有出站请求和响应的头与体, Authorization 和 API Key 会脱敏.");
     }
 
     fn log_path_row(&mut self, ui: &mut egui::Ui, path: &str) {
