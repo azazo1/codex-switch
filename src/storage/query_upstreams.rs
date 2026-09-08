@@ -2,7 +2,9 @@ use crate::core::models::{
     ApiKeyAuthScheme, BalanceProvider, ErrorRetryPolicy, UnknownModalityPolicy, Upstream,
     UpstreamKind, WireApi,
 };
-use crate::core::upstream_transfer::{UpstreamExport, UPSTREAM_EXPORT_VERSION};
+use crate::core::upstream_transfer::{
+    UpstreamExport, UpstreamExportItem, UPSTREAM_EXPORT_VERSION,
+};
 use crate::storage::Store;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
@@ -292,56 +294,91 @@ impl Store {
         let Some(upstream) = self.get_upstream(id).await? else {
             return Ok(None);
         };
-        let rows =
-            sqlx::query("SELECT name, value FROM credentials WHERE upstream_id = ?1 ORDER BY name")
-                .bind(id)
-                .fetch_all(self.pool())
-                .await?;
-        let credentials: BTreeMap<String, String> = rows
-            .into_iter()
-            .map(|row| {
-                (
-                    row.get::<String, _>("name"),
-                    row.get::<String, _>("value"),
-                )
-            })
-            .collect();
-        tracing::info!(
-            upstream_id = %id,
-            credential_count = credentials.len(),
-            "upstream exported"
-        );
-        Ok(Some(UpstreamExport::new(upstream, credentials)))
+        tracing::info!(upstream_id = %id, "upstream exported");
+        Ok(Some(self.upstream_export(vec![upstream]).await?))
     }
 
-    /// 导入上游: 目标 id 已被占用时生成新 id, 凭据随上游一并写入.
-    pub async fn import_upstream(&self, payload: &UpstreamExport) -> anyhow::Result<Upstream> {
+    /// 批量导出上游及其全部凭据, only_enabled 为 true 时仅导出已启用的上游.
+    pub async fn export_upstreams(&self, only_enabled: bool) -> anyhow::Result<UpstreamExport> {
+        let upstreams = if only_enabled {
+            self.enabled_upstreams().await?
+        } else {
+            self.list_upstreams().await?
+        };
+        tracing::info!(
+            count = upstreams.len(),
+            only_enabled,
+            "upstreams batch exported"
+        );
+        self.upstream_export(upstreams).await
+    }
+
+    async fn upstream_export(&self, upstreams: Vec<Upstream>) -> anyhow::Result<UpstreamExport> {
+        let mut items = Vec::with_capacity(upstreams.len());
+        for upstream in upstreams {
+            let rows = sqlx::query(
+                "SELECT name, value FROM credentials WHERE upstream_id = ?1 ORDER BY name",
+            )
+            .bind(&upstream.id)
+            .fetch_all(self.pool())
+            .await?;
+            let credentials: BTreeMap<String, String> = rows
+                .into_iter()
+                .map(|row| {
+                    (
+                        row.get::<String, _>("name"),
+                        row.get::<String, _>("value"),
+                    )
+                })
+                .collect();
+            items.push(UpstreamExportItem {
+                upstream,
+                credentials,
+            });
+        }
+        Ok(UpstreamExport::new(items))
+    }
+
+    /// 批量导入上游, 单个事务完成, 任一条失败则整体回滚.
+    pub async fn import_upstreams(
+        &self,
+        payload: &UpstreamExport,
+    ) -> anyhow::Result<Vec<Upstream>> {
         if payload.version > UPSTREAM_EXPORT_VERSION {
             anyhow::bail!(
                 "导出格式版本过高: v{}, 当前支持 v{UPSTREAM_EXPORT_VERSION}",
                 payload.version
             );
         }
-        let mut upstream = payload.upstream.clone();
-        if self.get_upstream(&upstream.id).await?.is_some() {
-            upstream.id = uuid::Uuid::new_v4().to_string();
-        }
-        let now = Utc::now();
-        upstream.created_at = now;
-        upstream.updated_at = now;
         let mut tx = self.pool().begin().await?;
-        insert_upstream(&mut tx, &upstream).await?;
-        for (name, value) in &payload.credentials {
-            save_credential_in_tx(&mut tx, &upstream.id, name, value).await?;
+        let mut imported = Vec::with_capacity(payload.upstreams.len());
+        for item in &payload.upstreams {
+            let mut upstream = item.upstream.clone();
+            let exists = sqlx::query("SELECT id FROM upstreams WHERE id = ?1")
+                .bind(&upstream.id)
+                .fetch_optional(&mut *tx)
+                .await?
+                .is_some();
+            if exists {
+                upstream.id = uuid::Uuid::new_v4().to_string();
+            }
+            let now = Utc::now();
+            upstream.created_at = now;
+            upstream.updated_at = now;
+            insert_upstream(&mut tx, &upstream).await?;
+            for (name, value) in &item.credentials {
+                save_credential_in_tx(&mut tx, &upstream.id, name, value).await?;
+            }
+            tracing::info!(
+                upstream_id = %upstream.id,
+                name = %upstream.name,
+                credential_count = item.credentials.len(),
+                "upstream imported"
+            );
+            imported.push(upstream);
         }
         tx.commit().await?;
-        tracing::info!(
-            upstream_id = %upstream.id,
-            name = %upstream.name,
-            credential_count = payload.credentials.len(),
-            "upstream imported"
-        );
-        Ok(upstream)
+        Ok(imported)
     }
 }
 
@@ -607,10 +644,19 @@ mod tests {
             .expect("upstream exists");
         let json = export.to_json().unwrap();
         let parsed = UpstreamExport::from_json(&json).unwrap();
-        assert_eq!(parsed.upstream.id, upstream.id);
-        assert_eq!(parsed.credentials.get("api_key").map(String::as_str), Some("sk-test"));
+        assert_eq!(parsed.upstreams.len(), 1);
+        let item = &parsed.upstreams[0];
+        assert_eq!(item.upstream.id, upstream.id);
+        assert_eq!(
+            item.credentials.get("api_key").map(String::as_str),
+            Some("sk-test")
+        );
 
-        let imported = store.import_upstream(&parsed).await.unwrap();
+        let mut imported = store
+            .import_upstreams(&parsed)
+            .await
+            .unwrap();
+        let imported = imported.pop().unwrap();
         assert_ne!(imported.id, upstream.id, "同 id 冲突时应生成新 id");
         assert_eq!(imported.name, upstream.name);
         assert_eq!(imported.base_url, upstream.base_url);
@@ -624,5 +670,66 @@ mod tests {
         );
 
         assert!(store.export_upstream("missing-id").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn exports_and_imports_upstream_batches() {
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-upstream-batch-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let store = Store::open(path).await.unwrap();
+        for name in ["relay-a", "relay-b"] {
+            let upstream = Upstream::new_relay(
+                name.to_string(),
+                format!("https://{name}.example.com/v1"),
+                WireApi::Responses,
+                false,
+                BalanceProvider::Unsupported,
+            );
+            store.save_upstream(&upstream).await.unwrap();
+            store
+                .save_credential(&upstream.id, "api_key", &format!("sk-{name}"))
+                .await
+                .unwrap();
+        }
+        // 再添加一个禁用的上游, 验证 only_enabled 过滤.
+        let mut disabled = Upstream::new_relay(
+            "relay-off".to_string(),
+            "https://off.example.com/v1".to_string(),
+            WireApi::Responses,
+            false,
+            BalanceProvider::Unsupported,
+        );
+        disabled.enabled = false;
+        store.save_upstream(&disabled).await.unwrap();
+
+        let batch = store.export_upstreams(false).await.unwrap();
+        assert_eq!(batch.upstreams.len(), 3);
+        let json = batch.to_json().unwrap();
+
+        let target = Store::open(
+            std::env::temp_dir().join(format!(
+                "codex-switch-upstream-batch-target-{}.sqlite",
+                uuid::Uuid::new_v4()
+            )),
+        )
+        .await
+        .unwrap();
+        let payloads = UpstreamExport::from_json(&json).unwrap();
+        assert_eq!(payloads.upstreams.len(), 3);
+        let imported = target.import_upstreams(&payloads).await.unwrap();
+        assert_eq!(imported.len(), 3);
+        assert_eq!(
+            target
+                .get_credential(&imported[0].id, "api_key")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("sk-relay-a")
+        );
+
+        let enabled = store.export_upstreams(true).await.unwrap();
+        assert_eq!(enabled.upstreams.len(), 2);
     }
 }

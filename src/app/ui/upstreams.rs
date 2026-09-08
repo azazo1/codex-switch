@@ -88,14 +88,34 @@ impl CodexSwitchApp {
         ui.separator();
         self.oauth_accounts_ui(ui);
         ui.separator();
+        let mut export_all = false;
+        let mut export_enabled = false;
         ui.horizontal(|ui| {
             ui.heading("上游列表");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("导入上游").clicked() {
-                    self.upstream_import_open = true;
-                }
-            });
+            if ui.button("导入上游").clicked() {
+                self.upstream_import_open = true;
+            }
+            if ui
+                .button("导出所有上游")
+                .on_hover_text("把全部上游导出为 JSON 并复制到剪贴板")
+                .clicked()
+            {
+                export_all = true;
+            }
+            if ui
+                .button("导出已启用上游")
+                .on_hover_text("把已启用的上游导出为 JSON 并复制到剪贴板")
+                .clicked()
+            {
+                export_enabled = true;
+            }
         });
+        if export_all {
+            self.export_upstreams_to_clipboard(ui.ctx(), false);
+        }
+        if export_enabled {
+            self.export_upstreams_to_clipboard(ui.ctx(), true);
+        }
         let upstreams = self.upstreams.clone();
         let balance_snapshots = self.balance_snapshots.clone();
         let cache_settings = self.cache_keepalive_settings.clone();
@@ -209,7 +229,7 @@ impl CodexSwitchApp {
             .resizable(true)
             .default_width(520.0)
             .show(ctx, |ui| {
-                ui.label("粘贴导出的上游 JSON, 导入后会生成新的上游记录.");
+                ui.label("粘贴导出的上游 JSON, 单条和批量导出的格式相同, 导入后会生成新的上游记录.");
                 egui::ScrollArea::vertical()
                     .id_salt("upstream_import_text_scroll")
                     .max_height(280.0)
@@ -218,7 +238,7 @@ impl CodexSwitchApp {
                             egui::TextEdit::multiline(text)
                                 .code_editor()
                                 .desired_width(f32::INFINITY)
-                                .hint_text(r#"{"version": 1, "upstream": {...}, ...}"#),
+                                .hint_text(r#"{"version": 1, "upstreams": [...]}"#),
                         );
                     });
                 ui.horizontal(|ui| {
@@ -244,14 +264,43 @@ impl CodexSwitchApp {
                 return;
             }
         };
-        match self.runtime.block_on(self.state.store.import_upstream(&payload)) {
-            Ok(upstream) => {
+        match self
+            .runtime
+            .block_on(self.state.store.import_upstreams(&payload))
+        {
+            Ok(imported) => {
                 self.upstream_import_text.clear();
                 self.upstream_import_open = false;
-                self.status = format!("已导入上游 \"{}\"", upstream.name);
+                self.status = format!("已导入 {} 个上游", imported.len());
                 self.refresh_all();
             }
             Err(err) => self.status = format!("导入失败: {err}"),
+        }
+    }
+
+    fn export_upstreams_to_clipboard(&mut self, ctx: &egui::Context, only_enabled: bool) {
+        let result = self
+            .runtime
+            .block_on(self.state.store.export_upstreams(only_enabled));
+        match result {
+            Ok(export) if export.upstreams.is_empty() => {
+                self.status = if only_enabled {
+                    "没有已启用的上游可导出".to_string()
+                } else {
+                    "没有上游可导出".to_string()
+                };
+            }
+            Ok(export) => match export.to_json() {
+                Ok(json) => {
+                    ctx.copy_text(json);
+                    self.status = format!(
+                        "已导出 {} 个上游到剪贴板, JSON 包含 API Key 等凭据, 请注意保管",
+                        export.upstreams.len()
+                    );
+                }
+                Err(err) => self.status = format!("导出上游失败: {err}"),
+            },
+            Err(err) => self.status = format!("导出上游失败: {err}"),
         }
     }
 
