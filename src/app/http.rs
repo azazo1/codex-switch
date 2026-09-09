@@ -1,10 +1,12 @@
 use crate::logging::network::HttpClient;
 use anyhow::Context;
 
-const USER_AGENT: &str = "codex-switch/0.1.0";
+fn user_agent() -> String {
+    format!("codex-switch/{}", super::build_info::display_version())
+}
 
 pub fn build_client(proxy_url: Option<&str>) -> anyhow::Result<HttpClient> {
-    let mut builder = reqwest::Client::builder().user_agent(USER_AGENT);
+    let mut builder = reqwest::Client::builder().user_agent(user_agent());
     if let Some(proxy_url) = proxy_url.map(str::trim).filter(|value| !value.is_empty()) {
         builder = builder.proxy(proxy_from_url(proxy_url)?);
     }
@@ -22,4 +24,17 @@ pub fn validate_proxy_url(proxy_url: &str) -> anyhow::Result<()> {
 fn proxy_from_url(proxy_url: &str) -> anyhow::Result<reqwest::Proxy> {
     reqwest::Proxy::all(proxy_url)
         .with_context(|| format!("invalid upstream proxy URL: {proxy_url}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_agent_follows_build_version() {
+        assert_eq!(
+            user_agent(),
+            format!("codex-switch/{}", super::super::build_info::display_version())
+        );
+    }
 }

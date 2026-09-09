@@ -92,8 +92,8 @@ async fn persist_rate(state: &AppState, record: &UsdCnyRate) -> anyhow::Result<(
 }
 
 async fn fetch_from_er_api(state: &AppState) -> anyhow::Result<f64> {
-    let value = state
-        .http
+    let http = state.http()?;
+    let value = http
         .get(ER_API_URL)
         .timeout(Duration::from_secs(10))
         .send()
@@ -108,8 +108,8 @@ async fn fetch_from_er_api(state: &AppState) -> anyhow::Result<f64> {
 }
 
 async fn fetch_from_frankfurter(state: &AppState) -> anyhow::Result<f64> {
-    let value = state
-        .http
+    let http = state.http()?;
+    let value = http
         .get(FRANKFURTER_API_URL)
         .timeout(Duration::from_secs(10))
         .send()

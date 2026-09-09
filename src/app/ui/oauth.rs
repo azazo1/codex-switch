@@ -360,10 +360,13 @@ impl CodexSwitchApp {
     }
 
     fn spawn_oauth_start(&self, task_id: String) {
-        let http = self.state.http.clone();
+        let http = self.state.http();
         let tx = self.task_tx.clone();
         self.runtime.spawn(async move {
-            let result = oauth_api::start_device_flow(&http).await;
+            let result = match http {
+                Ok(http) => oauth_api::start_device_flow(&http).await,
+                Err(err) => Err(err),
+            };
             let _ = tx.send(UiTaskEvent::OAuthStarted { task_id, result });
         });
     }
@@ -386,27 +389,30 @@ impl CodexSwitchApp {
         };
         task.state = OAuthLoginTaskState::Polling;
         task.next_poll_at = None;
-        let http = self.state.http.clone();
+        let http = self.state.http();
         let accounts = self.state.oauth_accounts.clone();
         let tx = self.task_tx.clone();
         let task_id = task_id.to_string();
         self.runtime.spawn(async move {
-            let result = match oauth_api::poll_device_flow(&http, &flow).await {
-                Ok(oauth_api::DevicePollOutcome::Pending) => Ok(OAuthPollTaskResult::Pending),
-                Ok(oauth_api::DevicePollOutcome::RetryableError(message)) => {
-                    Ok(OAuthPollTaskResult::RetryableError(message))
-                }
-                Ok(oauth_api::DevicePollOutcome::Expired) => Ok(OAuthPollTaskResult::Expired),
-                Ok(oauth_api::DevicePollOutcome::Authorized(tokens)) => {
-                    match oauth_api::OAuthAccountInput::from_token_response(tokens) {
-                        Ok(input) => accounts
-                            .store_tokens(input)
-                            .await
-                            .map(|saved| OAuthPollTaskResult::Stored(Box::new(saved))),
-                        Err(err) => Err(err),
-                    }
-                }
+            let result = match http {
                 Err(err) => Err(err),
+                Ok(http) => match oauth_api::poll_device_flow(&http, &flow).await {
+                    Ok(oauth_api::DevicePollOutcome::Pending) => Ok(OAuthPollTaskResult::Pending),
+                    Ok(oauth_api::DevicePollOutcome::RetryableError(message)) => {
+                        Ok(OAuthPollTaskResult::RetryableError(message))
+                    }
+                    Ok(oauth_api::DevicePollOutcome::Expired) => Ok(OAuthPollTaskResult::Expired),
+                    Ok(oauth_api::DevicePollOutcome::Authorized(tokens)) => {
+                        match oauth_api::OAuthAccountInput::from_token_response(tokens) {
+                            Ok(input) => accounts
+                                .store_tokens(input)
+                                .await
+                                .map(|saved| OAuthPollTaskResult::Stored(Box::new(saved))),
+                            Err(err) => Err(err),
+                        }
+                    }
+                    Err(err) => Err(err),
+                },
             };
             let _ = tx.send(UiTaskEvent::OAuthPolled { task_id, result });
         });

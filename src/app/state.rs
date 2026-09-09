@@ -26,7 +26,6 @@ pub struct AppState {
     pub model_capabilities: ModelCapabilityCache,
     pub credentials: CredentialStore,
     pub oauth_accounts: OAuthAccountService,
-    pub http: HttpClient,
     pub events: AppEvents,
     pub scheduler: SchedulerRuntime,
     pub live_requests: LiveRequestStore,
@@ -130,23 +129,16 @@ impl AppState {
         model_capabilities.extend_global(store.model_multimodal_entries().await?);
         let credentials = CredentialStore::new(store.clone()).await?;
         let oauth_accounts = OAuthAccountService::new(store.clone());
-        let http = http::build_client(None)?;
         let events = AppEvents::default();
-        let cache_keepalive = CacheKeepaliveRuntime::new(
-            store.clone(),
-            credentials.clone(),
-            http.clone(),
-            events.clone(),
-        );
+        let cache_keepalive =
+            CacheKeepaliveRuntime::new(store.clone(), credentials.clone(), events.clone());
         let peers = PeerRuntime::new(&store).await?;
-        let update =
-            crate::update::UpdateRuntime::new(store.clone(), http.clone(), events.clone()).await;
+        let update = crate::update::UpdateRuntime::new(store.clone(), events.clone()).await;
         let state = Self {
             store,
             model_capabilities,
             credentials,
             oauth_accounts,
-            http,
             events,
             scheduler: SchedulerRuntime::default(),
             live_requests: LiveRequestStore::default(),
@@ -160,13 +152,18 @@ impl AppState {
         Ok(state)
     }
 
+    /// 默认出站 client; 每次现建, 系统代理等环境变化实时生效.
+    pub fn http(&self) -> anyhow::Result<HttpClient> {
+        http::build_client(None)
+    }
+
     pub fn http_for_upstream(&self, upstream: &Upstream) -> anyhow::Result<HttpClient> {
         if upstream.kind == UpstreamKind::PeerNode {
             anyhow::bail!("peer node requests must use a pinned tls client");
         }
         match upstream.proxy_url.as_deref() {
             Some(proxy_url) if !proxy_url.trim().is_empty() => http::build_client(Some(proxy_url)),
-            _ => Ok(self.http.clone()),
+            _ => self.http(),
         }
     }
 

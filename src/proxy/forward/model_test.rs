@@ -314,8 +314,17 @@ async fn run_scheduler_test_inner(
         }
     };
     let request_body = String::from_utf8_lossy(&body).into_owned();
-    let mut request = state
-        .http
+    let http = match state.http() {
+        Ok(http) => http,
+        Err(err) => {
+            return ModelTestOutcome::failed(
+                INTERNAL_ERROR_STATUS,
+                elapsed_ms(started),
+                format!("构造 http client 失败: {err}"),
+            );
+        }
+    };
+    let mut request = http
         .post(&url)
         .header("content-type", "application/json")
         .bearer_auth(local_key)
@@ -338,7 +347,7 @@ async fn run_scheduler_test_inner(
         headers: header_pairs(built.headers()),
         body: request_body,
     };
-    match state.http.execute(built).await {
+    match http.execute(built).await {
         Ok(response) => {
             consume_response(
                 TestResponse::Http(response),

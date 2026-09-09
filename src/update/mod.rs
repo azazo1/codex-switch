@@ -7,8 +7,7 @@ mod download;
 mod install;
 mod release;
 
-use crate::app::{AppEvents, AppState, data_dir};
-use crate::logging::network::HttpClient;
+use crate::app::{http, AppEvents, AppState, data_dir};
 use crate::storage::Store;
 use anyhow::Context;
 use release::ReleaseInfo;
@@ -38,7 +37,6 @@ pub(crate) enum UpdateState {
 pub(crate) struct UpdateRuntime {
     state: Arc<Mutex<UpdateState>>,
     events: AppEvents,
-    http: HttpClient,
     store: Store,
     auto_check: Arc<AtomicBool>,
     /// UI 线程没有 tokio 上下文, 后台任务必须经此 handle 派发.
@@ -46,7 +44,7 @@ pub(crate) struct UpdateRuntime {
 }
 
 impl UpdateRuntime {
-    pub(crate) async fn new(store: Store, http: HttpClient, events: AppEvents) -> Self {
+    pub(crate) async fn new(store: Store, events: AppEvents) -> Self {
         install::cleanup_stale_backup();
         let auto_check_enabled = match store.get_setting(AUTO_CHECK_SETTING).await {
             Ok(value) => value.as_deref() != Some("false"),
@@ -58,7 +56,6 @@ impl UpdateRuntime {
         Self {
             state: Arc::new(Mutex::new(UpdateState::Idle)),
             events,
-            http,
             store,
             auto_check: Arc::new(AtomicBool::new(auto_check_enabled)),
             runtime: tokio::runtime::Handle::current(),
@@ -67,11 +64,10 @@ impl UpdateRuntime {
 
     /// 仅测试使用; 生产路径统一走 async new.
     #[cfg(test)]
-    pub(crate) fn new_for_tests(store: Store, http: HttpClient, events: AppEvents) -> Self {
+    pub(crate) fn new_for_tests(store: Store, events: AppEvents) -> Self {
         Self {
             state: Arc::new(Mutex::new(UpdateState::Idle)),
             events,
-            http,
             store,
             auto_check: Arc::new(AtomicBool::new(true)),
             runtime: tokio::runtime::Handle::current(),
@@ -175,7 +171,8 @@ impl UpdateRuntime {
     /// 执行一次检查, 返回 `Some(tag)` 表示有比当前构建更新的稳定版本.
     async fn check(&self) -> anyhow::Result<Option<String>> {
         self.set_state(UpdateState::Checking);
-        let info = match release::fetch_latest(&self.http).await {
+        let client = http::build_client(None)?;
+        let info = match release::fetch_latest(&client).await {
             Ok(info) => info,
             Err(err) => {
                 self.set_state(UpdateState::Failed(format!("{err:#}")));
@@ -192,15 +189,16 @@ impl UpdateRuntime {
 
     async fn download_and_apply(&self, info: &ReleaseInfo) -> anyhow::Result<install::InstallOutcome> {
         let dest_dir = update_dir()?;
+        let client = http::build_client(None)?;
         let expected = download::fetch_checksum_for(
-            &self.http,
+            &client,
             &info.checksums,
             &info.archive.name,
         )
         .await?;
         let runtime = self.clone();
         let archive = download::download_archive(
-            &self.http,
+            &client,
             &info.archive,
             &dest_dir,
             &expected,

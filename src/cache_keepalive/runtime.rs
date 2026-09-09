@@ -31,22 +31,15 @@ pub struct CacheKeepaliveRuntime {
     pub(super) inner: Arc<Mutex<CacheKeepaliveInner>>,
     pub(super) store: Store,
     credentials: CredentialStore,
-    http: crate::logging::network::HttpClient,
     events: AppEvents,
 }
 
 impl CacheKeepaliveRuntime {
-    pub fn new(
-        store: Store,
-        credentials: CredentialStore,
-        http: crate::logging::network::HttpClient,
-        events: AppEvents,
-    ) -> Self {
+    pub fn new(store: Store, credentials: CredentialStore, events: AppEvents) -> Self {
         Self {
             inner: Arc::new(Mutex::new(CacheKeepaliveInner::default())),
             store,
             credentials,
-            http,
             events,
         }
     }
@@ -447,7 +440,7 @@ impl CacheKeepaliveRuntime {
             .ok_or_else(|| anyhow::anyhow!("missing api key"))?;
         let http = match session.upstream.proxy_url.as_deref() {
             Some(proxy_url) if !proxy_url.trim().is_empty() => http::build_client(Some(proxy_url))?,
-            _ => self.http.clone(),
+            _ => http::build_client(None)?,
         };
         let request = http
             .post(target_url)

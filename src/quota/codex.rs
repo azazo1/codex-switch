@@ -39,8 +39,8 @@ pub async fn query_and_store(state: &AppState, upstream_id: &str) -> anyhow::Res
         .chatgpt_account_id
         .as_deref()
         .ok_or_else(|| anyhow!("missing chatgpt_account_id"))?;
-    let response = state
-        .http
+    let http = state.http()?;
+    let response = http
         .get(CHATGPT_USAGE_URL)
         .bearer_auth(token)
         .header("chatgpt-account-id", account_id)

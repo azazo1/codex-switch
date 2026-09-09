@@ -37,8 +37,8 @@ impl UsageCost {
 
 pub async fn fetch_price_cache(state: &AppState) -> anyhow::Result<usize> {
     tracing::info!(url = MODELS_DEV_API_URL, "fetching model price cache");
-    let value = state
-        .http
+    let http = state.http()?;
+    let value = http
         .get(MODELS_DEV_API_URL)
         .timeout(Duration::from_secs(20))
         .send()

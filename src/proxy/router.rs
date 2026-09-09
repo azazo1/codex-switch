@@ -2123,22 +2123,16 @@ mod tests {
         let cache_keepalive = CacheKeepaliveRuntime::new(
             store.clone(),
             credentials.clone(),
-            crate::logging::network::HttpClient::new(),
             events.clone(),
         );
         let oauth_accounts = crate::oauth::OAuthAccountService::new(store.clone());
         let peers = crate::peer::PeerRuntime::new(&store).await.unwrap();
-        let update = crate::update::UpdateRuntime::new_for_tests(
-            store.clone(),
-            crate::logging::network::HttpClient::new(),
-            events.clone(),
-        );
+        let update = crate::update::UpdateRuntime::new_for_tests(store.clone(), events.clone());
         AppState {
             store,
             model_capabilities: Default::default(),
             credentials,
             oauth_accounts,
-            http: crate::logging::network::HttpClient::new(),
             events,
             scheduler: Default::default(),
             live_requests: Default::default(),

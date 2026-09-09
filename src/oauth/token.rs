@@ -92,7 +92,7 @@ pub async fn valid_access_token(state: &AppState, upstream: &Upstream) -> anyhow
         .get(&upstream.id, "refresh_token")
         .await?
         .ok_or_else(|| anyhow!("access token expired and no refresh token is available"))?;
-    let tokens = refresh_token(&state.http, &refresh).await?;
+    let tokens = refresh_token(&state.http()?, &refresh).await?;
     let expires_at = Some(now + tokens.expires_in.unwrap_or(3600));
     state
         .credentials
