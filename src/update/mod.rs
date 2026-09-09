@@ -41,6 +41,8 @@ pub(crate) struct UpdateRuntime {
     http: HttpClient,
     store: Store,
     auto_check: Arc<AtomicBool>,
+    /// UI 线程没有 tokio 上下文, 后台任务必须经此 handle 派发.
+    runtime: tokio::runtime::Handle,
 }
 
 impl UpdateRuntime {
@@ -59,6 +61,7 @@ impl UpdateRuntime {
             http,
             store,
             auto_check: Arc::new(AtomicBool::new(auto_check_enabled)),
+            runtime: tokio::runtime::Handle::current(),
         }
     }
 
@@ -71,12 +74,13 @@ impl UpdateRuntime {
             http,
             store,
             auto_check: Arc::new(AtomicBool::new(true)),
+            runtime: tokio::runtime::Handle::current(),
         }
     }
 
     /// 派发启动后的静默检查; 网络失败只记日志, 不打扰用户.
     pub(crate) fn start(self) {
-        tokio::spawn(async move {
+        self.runtime.clone().spawn(async move {
             tokio::time::sleep(AUTO_CHECK_DELAY).await;
             if !self.auto_check_value() {
                 return;
@@ -112,7 +116,7 @@ impl UpdateRuntime {
     /// 发起一次手动检查, 结果写入状态机.
     pub(crate) fn check_now(&self) {
         let this = self.clone();
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             if let Err(err) = this.check().await {
                 tracing::warn!(error = %err, "manual update check failed");
             }
@@ -125,7 +129,7 @@ impl UpdateRuntime {
             return;
         };
         let this = self.clone();
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             this.set_state(UpdateState::Downloading {
                 received: 0,
                 total: None,

@@ -227,6 +227,7 @@ static CONTROLS: OnceLock<TracingControls> = OnceLock::new();
 static BODY_LOGGING_ENABLED: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn init_tracing(config: LogRotationConfig) -> anyhow::Result<()> {
+    install_panic_hook();
     let env_filter = EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_new("info"))
         .context("failed to create tracing env filter")?;
@@ -291,6 +292,26 @@ pub(crate) fn init_tracing(config: LogRotationConfig) -> anyhow::Result<()> {
     let _ = CONTROLS.set(controls);
     set_body_logging_enabled(config.enabled);
     Ok(())
+}
+
+/// Windows GUI 子系统下 panic 输出的 stderr 不可见, 闪退不留痕迹;
+/// 这里把 panic 的位置与消息转写进主日志, 保留默认钩子维持 stderr 行为.
+fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info
+            .location()
+            .map(|location| location.to_string())
+            .unwrap_or_default();
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|message| (*message).to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        tracing::error!(target: "panic", location = %location, message = %message, "panic occurred");
+        default_hook(info);
+    }));
 }
 
 pub(crate) fn set_debug_log_enabled(enabled: bool) -> anyhow::Result<()> {
