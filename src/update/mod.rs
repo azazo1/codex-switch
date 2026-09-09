@@ -1,7 +1,8 @@
 //! 自动更新: 检查 GitHub Release, 下载校验并安装新版本.
 //!
 //! 入口 [`UpdateRuntime`] 持有共享状态机, UI 通过它发起手动检查, 下载安装与重启;
-//! 应用启动时 [`UpdateRuntime::start`] 派发一次静默后台检查, 发现新版本走系统通知.
+//! 应用启动时 [`UpdateRuntime::start`] 派发一次静默后台检查, 发现新版本走系统通知;
+//! 启动延迟窗口内用户已手动发起检查时, 自动检查让位, 不再重复触发.
 
 mod download;
 mod install;
@@ -41,6 +42,8 @@ pub(crate) struct UpdateRuntime {
     http: HttpClient,
     store: Store,
     auto_check: Arc<AtomicBool>,
+    /// 启动自动检查延迟 5 秒触发, 期间用户可能已手动发起检查, 置位后自动检查让位.
+    manual_checked: Arc<AtomicBool>,
     /// UI 线程没有 tokio 上下文, 后台任务必须经此 handle 派发.
     runtime: tokio::runtime::Handle,
 }
@@ -61,6 +64,7 @@ impl UpdateRuntime {
             http,
             store,
             auto_check: Arc::new(AtomicBool::new(auto_check_enabled)),
+            manual_checked: Arc::new(AtomicBool::new(false)),
             runtime: tokio::runtime::Handle::current(),
         }
     }
@@ -74,15 +78,21 @@ impl UpdateRuntime {
             http,
             store,
             auto_check: Arc::new(AtomicBool::new(true)),
+            manual_checked: Arc::new(AtomicBool::new(false)),
             runtime: tokio::runtime::Handle::current(),
         }
     }
 
     /// 派发启动后的静默检查; 网络失败只记日志, 不打扰用户.
+    /// 延迟窗口内用户已手动发起检查时直接跳过, 避免两路检查争抢状态机.
     pub(crate) fn start(self) {
         self.runtime.clone().spawn(async move {
             tokio::time::sleep(AUTO_CHECK_DELAY).await;
             if !self.auto_check_value() {
+                return;
+            }
+            if self.manual_checked.load(Ordering::Relaxed) {
+                tracing::debug!("skip startup update check: manual check already triggered");
                 return;
             }
             match self.check().await {
@@ -113,8 +123,9 @@ impl UpdateRuntime {
         self.auto_check.load(Ordering::Relaxed)
     }
 
-    /// 发起一次手动检查, 结果写入状态机.
+    /// 发起一次手动检查, 结果写入状态机; 同步置位标记, 使尚未触发的启动自动检查让位.
     pub(crate) fn check_now(&self) {
+        self.manual_checked.store(true, Ordering::Relaxed);
         let this = self.clone();
         self.runtime.spawn(async move {
             if let Err(err) = this.check().await {
