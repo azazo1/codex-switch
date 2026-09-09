@@ -22,6 +22,7 @@ use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIc
 
 use crate::live::LiveRequestSnapshot;
 
+const VERSION_MENU_ID: &str = "codex-switch-version";
 const OPEN_MENU_ID: &str = "codex-switch-open-window";
 const TOGGLE_SERVICE_MENU_ID: &str = "codex-switch-toggle-service";
 const CHECK_UPDATES_MENU_ID: &str = "codex-switch-check-updates";
@@ -296,6 +297,13 @@ impl TrayController {
         );
         install_handlers(egui_ctx, Arc::clone(&send_command));
 
+        let version_item = MenuItem::with_id(
+            MenuId::new(VERSION_MENU_ID),
+            format!("Codex Switch {}", crate::app::display_version()),
+            false,
+            None,
+        );
+        let version_separator = PredefinedMenuItem::separator();
         let open_item = MenuItem::with_id(MenuId::new(OPEN_MENU_ID), "打开主界面", true, None);
         let toggle_service_item = MenuItem::with_id(
             MenuId::new(TOGGLE_SERVICE_MENU_ID),
@@ -330,6 +338,8 @@ impl TrayController {
         let second_title_submenu = Submenu::with_items("标题行 2", true, &second_badge_item_refs)?;
 
         let menu = Menu::new();
+        menu.append(&version_item)?;
+        menu.append(&version_separator)?;
         menu.append(&open_item)?;
         menu.append(&first_separator)?;
         menu.append(&toggle_service_item)?;

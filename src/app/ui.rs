@@ -469,8 +469,15 @@ pub struct CodexSwitchApp {
     log_filter_open: bool,
     log_cleanup_open: bool,
     window_hidden_to_tray: bool,
+    hide_on_launch: bool,
+    start_server_on_launch: bool,
+    start_peer_on_launch: bool,
+    #[cfg(target_os = "macos")]
+    dock_icon_follows_window: bool,
     last_good_window: Option<PersistedWindowSettings>,
     background_reopen: platform::BackgroundReopenMonitor,
+    last_seen_show_window_version: u64,
+    last_seen_exit_request_version: u64,
     bind_addr: String,
     local_key: String,
     local_key_copied_at: Option<Instant>,
@@ -581,6 +588,7 @@ impl CodexSwitchApp {
         state: AppState,
         egui_ctx: egui::Context,
         storage: Option<&dyn eframe::Storage>,
+        hide_on_launch: bool,
     ) -> Self {
         let repaint_ctx = egui_ctx.clone();
         state.events.set_repaint_requester(move || {
@@ -645,6 +653,25 @@ impl CodexSwitchApp {
             .block_on(pricing::fx::load_usd_cny_rate(&state))
             .ok()
             .flatten();
+        #[cfg(target_os = "macos")]
+        let dock_icon_follows_window = runtime
+            .block_on(state.store.get_setting(super::SETTING_DOCK_ICON_FOLLOWS_WINDOW))
+            .ok()
+            .flatten()
+            .as_deref()
+            != Some("false");
+        let start_server_on_launch = runtime
+            .block_on(state.store.get_setting(super::SETTING_START_SERVER_ON_LAUNCH))
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("true");
+        let start_peer_on_launch = runtime
+            .block_on(state.store.get_setting(super::SETTING_START_PEER_ON_LAUNCH))
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("true");
         let mut app = Self {
             runtime,
             state,
@@ -664,9 +691,16 @@ impl CodexSwitchApp {
             delete_confirmation: None,
             log_filter_open: false,
             log_cleanup_open: false,
-            window_hidden_to_tray: false,
+            window_hidden_to_tray: hide_on_launch,
+            hide_on_launch,
+            start_server_on_launch,
+            start_peer_on_launch,
+            #[cfg(target_os = "macos")]
+            dock_icon_follows_window,
             last_good_window,
             background_reopen: platform::BackgroundReopenMonitor::default(),
+            last_seen_show_window_version: state.events.show_window_version(),
+            last_seen_exit_request_version: state.events.exit_request_version(),
             bind_addr,
             local_key,
             local_key_copied_at: None,
@@ -769,8 +803,29 @@ impl CodexSwitchApp {
             model_test_ui: model_test::ModelTestUiState::default(),
         };
         let _ = crate::logging::set_debug_log_enabled(app.debug_log_enabled);
+        if hide_on_launch {
+            // 启动时仅驻留托盘: 窗口以不可见状态创建, dock 图标按设置一并隐藏.
+            #[cfg(target_os = "macos")]
+            {
+                if dock_icon_follows_window {
+                    platform::hide_from_dock();
+                }
+            }
+            app.background_reopen.mark_hidden();
+            app.status = "已按设置在后台启动, 可从系统托盘打开主界面".to_string();
+            tracing::info!("app started hidden to tray (hide on launch enabled)");
+        }
         app.refresh_all();
         app.fetch_price_cache_once();
+        // 自动启动放在 refresh_all 之后, 保证监听地址等配置已完成加载.
+        if start_server_on_launch {
+            tracing::info!("auto-starting proxy server on launch");
+            app.start_server();
+        }
+        if start_peer_on_launch {
+            tracing::info!("auto-starting peer listener on launch");
+            app.start_peer_server();
+        }
         app
     }
 
@@ -872,6 +927,14 @@ impl CodexSwitchApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         self.window_hidden_to_tray = true;
         self.background_reopen.mark_hidden();
+        tracing::info!("main window hidden to tray");
+        #[cfg(target_os = "macos")]
+        {
+            if self.dock_icon_follows_window {
+                platform::hide_from_dock();
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
         platform::hide_from_dock();
         self.status = "窗口已隐藏到系统托盘".to_string();
     }
@@ -960,6 +1023,8 @@ impl CodexSwitchApp {
         self.exit_requested = true;
         self.stop_peer_server();
         self.stop_server();
+        self.state.release_single_instance();
+        tracing::info!("application exiting");
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
@@ -1513,12 +1578,33 @@ impl eframe::App for CodexSwitchApp {
 
     // Tray 命令必须在 logic 中处理, 因为隐藏窗口不会调用 ui.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.handle_app_events(ctx);
         self.ensure_tray(ctx);
         self.handle_close_request(ctx);
         self.handle_dock_reopen(ctx);
         self.maybe_auto_refresh(ctx);
         self.sync_tray_stats();
         self.drain_task_events(ctx);
+    }
+
+    /// 处理来自单实例通知与 Ctrl+C 信号的外部请求.
+    fn handle_app_events(&mut self, ctx: &egui::Context) {
+        let exit_version = self.state.events.exit_request_version();
+        if exit_version != self.last_seen_exit_request_version {
+            self.last_seen_exit_request_version = exit_version;
+            if !self.exit_requested {
+                tracing::info!("graceful exit requested by signal");
+                self.exit_app(ctx);
+            }
+            return;
+        }
+        let show_window_version = self.state.events.show_window_version();
+        if show_window_version != self.last_seen_show_window_version {
+            self.last_seen_show_window_version = show_window_version;
+            if !self.exit_requested {
+                self.show_main_window(ctx);
+            }
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -1769,13 +1855,22 @@ impl CodexSwitchApp {
                         ui.label(format!("已下载 {}", format_bytes(*received, None)));
                     }
                 }
+                if ui.button("取消更新").clicked() {
+                    self.state.update.cancel_install();
+                    self.status = "已取消更新下载".to_string();
+                }
             }
             UpdateState::ReadyToRestart => {
                 ui.label("更新已安装完成, 重启应用后生效.");
                 if ui.button("重启应用").clicked() {
+                    // 先释放单实例锁, 避免新进程在旧进程退出前抢锁失败.
+                    self.state.release_single_instance();
                     match self.state.update.restart() {
                         Ok(()) => self.exit_app(ctx),
-                        Err(err) => self.status = format!("重启失败: {err}"),
+                        Err(err) => {
+                            tracing::warn!(error = %err, "failed to restart app after update");
+                            self.status = format!("重启失败: {err}");
+                        }
                     }
                 }
             }

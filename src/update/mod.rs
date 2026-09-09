@@ -14,7 +14,7 @@ use anyhow::Context;
 use release::ReleaseInfo;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 const AUTO_CHECK_DELAY: Duration = Duration::from_secs(5);
@@ -41,6 +41,10 @@ pub(crate) struct UpdateRuntime {
     http: HttpClient,
     store: Store,
     auto_check: Arc<AtomicBool>,
+    /// 下载代次: 每次发起新下载或用户取消时 +1, 进行中的下载据此发现自己已被取代.
+    download_generation: Arc<AtomicU64>,
+    /// 正在下载的版本, 取消时用于恢复 Available 状态.
+    downloading: Arc<Mutex<Option<ReleaseInfo>>>,
     /// UI 线程没有 tokio 上下文, 后台任务必须经此 handle 派发.
     runtime: tokio::runtime::Handle,
 }
@@ -61,6 +65,8 @@ impl UpdateRuntime {
             http,
             store,
             auto_check: Arc::new(AtomicBool::new(auto_check_enabled)),
+            download_generation: Arc::new(AtomicU64::new(0)),
+            downloading: Arc::new(Mutex::new(None)),
             runtime: tokio::runtime::Handle::current(),
         }
     }
@@ -74,6 +80,8 @@ impl UpdateRuntime {
             http,
             store,
             auto_check: Arc::new(AtomicBool::new(true)),
+            download_generation: Arc::new(AtomicU64::new(0)),
+            downloading: Arc::new(Mutex::new(None)),
             runtime: tokio::runtime::Handle::current(),
         }
     }
@@ -130,16 +138,24 @@ impl UpdateRuntime {
         };
         let this = self.clone();
         self.runtime.spawn(async move {
+            let generation = this.download_generation.fetch_add(1, Ordering::Relaxed) + 1;
+            if let Ok(mut guard) = this.downloading.lock() {
+                *guard = Some(info.clone());
+            }
             this.set_state(UpdateState::Downloading {
                 received: 0,
                 total: None,
             });
-            match this.download_and_apply(&info).await {
+            match this.download_and_apply(&info, generation).await {
                 Ok(install::InstallOutcome::Replaced) => {
                     this.set_state(UpdateState::ReadyToRestart);
                 }
                 Ok(install::InstallOutcome::DmgOpened) => {
                     this.set_state(UpdateState::DmgOpened);
+                }
+                Err(err) if err.is::<download::DownloadCancelled>() => {
+                    // 用户取消, cancel_install 已把状态恢复为 Available.
+                    tracing::info!("update download task cancelled");
                 }
                 Err(err) => {
                     tracing::warn!(error = %err, "update install failed");
@@ -147,6 +163,24 @@ impl UpdateRuntime {
                 }
             }
         });
+    }
+
+    /// 取消正在进行的下载; 下载任务在下一个数据块处退出, `.part` 保留供下次续传.
+    pub(crate) fn cancel_install(&self) {
+        if !matches!(self.state(), UpdateState::Downloading { .. }) {
+            return;
+        }
+        let Some(info) = self
+            .downloading
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take())
+        else {
+            return;
+        };
+        self.download_generation.fetch_add(1, Ordering::Relaxed);
+        tracing::info!(tag = %info.tag, "update download cancelled by user");
+        self.set_state(UpdateState::Available(info));
     }
 
     /// 启动已替换的新二进制; 退出当前进程由调用方完成.
@@ -190,7 +224,11 @@ impl UpdateRuntime {
         Ok(Some(info.tag))
     }
 
-    async fn download_and_apply(&self, info: &ReleaseInfo) -> anyhow::Result<install::InstallOutcome> {
+    async fn download_and_apply(
+        &self,
+        info: &ReleaseInfo,
+        generation: u64,
+    ) -> anyhow::Result<install::InstallOutcome> {
         let dest_dir = update_dir()?;
         let expected = download::fetch_checksum_for(
             &self.http,
@@ -198,14 +236,16 @@ impl UpdateRuntime {
             &info.archive.name,
         )
         .await?;
-        let runtime = self.clone();
+        let progress_runtime = self.clone();
+        let generation_counter = Arc::clone(&self.download_generation);
         let archive = download::download_archive(
             &self.http,
             &info.archive,
             &dest_dir,
             &expected,
+            move || generation_counter.load(Ordering::Relaxed) != generation,
             move |received, total| {
-                runtime.set_state(UpdateState::Downloading { received, total });
+                progress_runtime.set_state(UpdateState::Downloading { received, total });
             },
         )
         .await?;

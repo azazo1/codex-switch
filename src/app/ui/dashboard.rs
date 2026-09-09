@@ -30,6 +30,13 @@ impl CodexSwitchApp {
             } else if ui.button("停止").clicked() {
                 self.stop_server();
             }
+            if ui
+                .checkbox(&mut self.start_server_on_launch, "启动时启用服务")
+                .on_hover_text("下次启动应用时自动启动代理服务")
+                .changed()
+            {
+                self.apply_start_server_on_launch();
+            }
         });
         ui.label(format!("Base URL: http://{}/v1", self.bind_addr));
         ui.horizontal_wrapped(|ui| {
@@ -99,6 +106,28 @@ impl CodexSwitchApp {
                         self.update_window_open = true;
                         self.status = "正在检查更新...".to_string();
                     }
+                }
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .checkbox(&mut self.hide_on_launch, "启动时隐藏主窗口")
+                .on_hover_text("开启后应用启动只出现在系统托盘")
+                .changed()
+            {
+                self.apply_hide_on_launch();
+            }
+            #[cfg(target_os = "macos")]
+            {
+                if ui
+                    .checkbox(
+                        &mut self.dock_icon_follows_window,
+                        "隐藏窗口时隐藏 Dock 图标",
+                    )
+                    .on_hover_text("窗口隐藏到托盘时同时隐藏 Dock 图标, 仅 macOS 生效")
+                    .changed()
+                {
+                    self.apply_dock_icon_follows_window();
                 }
             }
         });
@@ -320,6 +349,75 @@ impl CodexSwitchApp {
             self.log_path_row(ui, &path);
         });
         ui.label("开启调试日志后会记录完整入站 body, 转换后的上游 body, 上游响应和流式块, 可能包含 prompt 和模型输出, 不要公开日志文件.\n网络请求 HAR 文件记录所有出站请求和响应的头与体, Authorization 和 API Key 会脱敏.");
+    }
+
+    fn apply_start_server_on_launch(&mut self) {
+        let value = if self.start_server_on_launch {
+            "true"
+        } else {
+            "false"
+        };
+        if let Err(err) = self.runtime.block_on(
+            self.state
+                .store
+                .set_setting(crate::app::SETTING_START_SERVER_ON_LAUNCH, value),
+        ) {
+            self.status = format!("保存启动服务设置失败: {err}");
+            return;
+        }
+        tracing::info!(
+            enabled = self.start_server_on_launch,
+            "start server on launch setting changed"
+        );
+        self.status = if self.start_server_on_launch {
+            "已开启启动时自动启动服务".to_string()
+        } else {
+            "已关闭启动时自动启动服务".to_string()
+        };
+    }
+
+    fn apply_hide_on_launch(&mut self) {
+        let value = if self.hide_on_launch { "true" } else { "false" };
+        if let Err(err) = self.runtime.block_on(
+            self.state
+                .store
+                .set_setting(crate::app::SETTING_HIDE_ON_LAUNCH, value),
+        ) {
+            self.status = format!("保存启动隐藏设置失败: {err}");
+            return;
+        }
+        tracing::info!(enabled = self.hide_on_launch, "hide on launch setting changed");
+        self.status = if self.hide_on_launch {
+            "已开启启动时隐藏主窗口, 下次启动生效".to_string()
+        } else {
+            "已关闭启动时隐藏主窗口".to_string()
+        };
+    }
+
+    #[cfg(target_os = "macos")]
+    fn apply_dock_icon_follows_window(&mut self) {
+        let value = if self.dock_icon_follows_window {
+            "true"
+        } else {
+            "false"
+        };
+        if let Err(err) = self.runtime.block_on(
+            self.state
+                .store
+                .set_setting(crate::app::SETTING_DOCK_ICON_FOLLOWS_WINDOW, value),
+        ) {
+            self.status = format!("保存 Dock 图标设置失败: {err}");
+            return;
+        }
+        tracing::info!(
+            enabled = self.dock_icon_follows_window,
+            "dock icon follows window setting changed"
+        );
+        self.status = if self.dock_icon_follows_window {
+            "隐藏窗口时将同时隐藏 Dock 图标".to_string()
+        } else {
+            "Dock 图标将保持显示".to_string()
+        };
     }
 
     fn log_path_row(&mut self, ui: &mut egui::Ui, path: &str) {
