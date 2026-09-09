@@ -1744,7 +1744,12 @@ impl CodexSwitchApp {
                         self.update_window_open = false;
                         self.status = format!("已跳过版本 {tag}");
                     }
-                    ui.hyperlink_to("查看 Release 页", &info.html_url);
+                    if ui.button("查看 Release 页").clicked() {
+                        match platform::open_url(&info.html_url) {
+                            Ok(()) => self.status = "已在浏览器打开 Release 页".to_string(),
+                            Err(err) => self.status = format!("打开 Release 页失败: {err}"),
+                        }
+                    }
                 });
             }
             UpdateState::Downloading { received, total } => {

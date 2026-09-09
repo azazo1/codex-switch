@@ -31,3 +31,14 @@ pub fn open_file_location(path: impl AsRef<Path>) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+pub fn open_url(url: &str) -> anyhow::Result<()> {
+    let status = Command::new("xdg-open")
+        .arg(url)
+        .status()
+        .context("failed to open url")?;
+    if !status.success() {
+        bail!("xdg-open returned {status}");
+    }
+    Ok(())
+}

@@ -30,3 +30,15 @@ pub fn open_file_location(path: impl AsRef<Path>) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+pub fn open_url(url: &str) -> anyhow::Result<()> {
+    // start 是 cmd 内建命令, 第一个空参数是窗口标题占位.
+    let status = Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .status()
+        .context("failed to open url")?;
+    if !status.success() {
+        bail!("start returned {status}");
+    }
+    Ok(())
+}

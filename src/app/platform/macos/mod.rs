@@ -96,3 +96,14 @@ pub fn open_file_location(path: impl AsRef<Path>) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+pub fn open_url(url: &str) -> anyhow::Result<()> {
+    let status = Command::new("open")
+        .arg(url)
+        .status()
+        .context("failed to open url")?;
+    if !status.success() {
+        bail!("open returned {status}");
+    }
+    Ok(())
+}
