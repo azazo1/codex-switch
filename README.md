@@ -30,6 +30,8 @@ Windows 解压 ZIP 后运行 `codex-switch.exe`. Linux 解压后直接运行 `co
 
 macOS 打开 DMG 后, 将 `Codex Switch.app` 拖到 `Applications`. 当前 DMG 未进行 Developer ID 签名和 notarization, 首次启动可能需要在 Finder 中右键应用并选择"打开".
 
+应用内置自动更新. macOS 上进程存活时系统会占用已安装的 `.app`, 直接拖拽替换会被拒绝, 因此点击 `立即更新` 后应用会退出并交由替换脚本完成安装和重新启动, 详见[自动更新指南](docs/update-guide.md).
+
 ## 快速开始
 
 1. 启动 Codex Switch.
@@ -64,6 +66,7 @@ Invoke-RestMethod -Uri "http://127.0.0.1:15721/v1/models" -Headers $headers
 | 请求记录和筛选 | [日志使用指南](docs/logs-guide.md) |
 | SQLite, 凭据和备份 | [存储与备份指南](docs/storage-guide.md) |
 | 本地构建和 GitHub Release | [构建与发布指南](docs/build-release-guide.md) |
+| 自动检查, 下载和安装新版本 | [自动更新指南](docs/update-guide.md) |
 | 隔离调试和普通模式调试日志 | [隔离调试指南](docs/debug-guide.md) |
 
 ## 本地开发

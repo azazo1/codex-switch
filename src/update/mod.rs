@@ -30,6 +30,9 @@ pub(crate) enum UpdateState {
     Available(ReleaseInfo),
     Downloading { received: u64, total: Option<u64> },
     ReadyToRestart,
+    /// macOS 替换脚本已接管: 应用即将退出, 由脚本替换 bundle 并重新拉起.
+    HandedOff,
+    /// dmg 已在系统中打开, 需要用户手动拖拽安装.
     DmgOpened,
     Failed(String),
 }
@@ -46,6 +49,8 @@ pub(crate) struct UpdateRuntime {
     download_generation: Arc<AtomicU64>,
     /// 正在下载的版本, 取消时用于恢复 Available 状态.
     downloading: Arc<Mutex<Option<ReleaseInfo>>>,
+    /// 上次 macOS 交接的失败原因: 保留到用户重新发起检查, 避免被静默检查覆盖.
+    handoff_failure: Arc<Mutex<Option<String>>>,
     /// UI 线程没有 tokio 上下文, 后台任务必须经此 handle 派发.
     runtime: tokio::runtime::Handle,
 }
@@ -53,6 +58,15 @@ pub(crate) struct UpdateRuntime {
 impl UpdateRuntime {
     pub(crate) async fn new(store: Store, events: AppEvents) -> Self {
         install::cleanup_stale_backup();
+        install::cleanup_stale_macos_artifacts();
+        // macOS 的替换在应用退出后执行, 失败原因只能落盘, 这里取出来展示.
+        let handoff_failure = install::take_handoff_result().inspect(|message| {
+            tracing::warn!(message = %message, "macos update handoff reported a failure");
+        });
+        let handoff_state = match &handoff_failure {
+            Some(message) => UpdateState::Failed(message.clone()),
+            None => UpdateState::Idle,
+        };
         let auto_check_enabled = match store.get_setting(AUTO_CHECK_SETTING).await {
             Ok(value) => value.as_deref() != Some("false"),
             Err(err) => {
@@ -61,13 +75,14 @@ impl UpdateRuntime {
             }
         };
         Self {
-            state: Arc::new(Mutex::new(UpdateState::Idle)),
+            state: Arc::new(Mutex::new(handoff_state)),
             events,
             store,
             auto_check: Arc::new(AtomicBool::new(auto_check_enabled)),
             manual_checked: Arc::new(AtomicBool::new(false)),
             download_generation: Arc::new(AtomicU64::new(0)),
             downloading: Arc::new(Mutex::new(None)),
+            handoff_failure: Arc::new(Mutex::new(handoff_failure)),
             runtime: tokio::runtime::Handle::current(),
         }
     }
@@ -83,6 +98,7 @@ impl UpdateRuntime {
             manual_checked: Arc::new(AtomicBool::new(false)),
             download_generation: Arc::new(AtomicU64::new(0)),
             downloading: Arc::new(Mutex::new(None)),
+            handoff_failure: Arc::new(Mutex::new(None)),
             runtime: tokio::runtime::Handle::current(),
         }
     }
@@ -97,6 +113,11 @@ impl UpdateRuntime {
             }
             if self.manual_checked.load(Ordering::Relaxed) {
                 tracing::debug!("skip startup update check: manual check already triggered");
+                return;
+            }
+            // 上次交接失败的原因要留给用户看, 不被静默检查覆盖.
+            if self.handoff_failure.lock().is_ok_and(|guard| guard.is_some()) {
+                tracing::debug!("skip startup update check: pending handoff failure");
                 return;
             }
             match self.check().await {
@@ -133,6 +154,10 @@ impl UpdateRuntime {
     /// 发起一次手动检查, 结果写入状态机; 同步置位标记, 使尚未触发的启动自动检查让位.
     pub(crate) fn check_now(&self) {
         self.manual_checked.store(true, Ordering::Relaxed);
+        // 用户主动重新检查即视为已看到上次的失败信息.
+        if let Ok(mut guard) = self.handoff_failure.lock() {
+            guard.take();
+        }
         let this = self.clone();
         self.runtime.spawn(async move {
             if let Err(err) = this.check().await {
@@ -159,6 +184,9 @@ impl UpdateRuntime {
             match this.download_and_apply(&info, generation).await {
                 Ok(install::InstallOutcome::Replaced) => {
                     this.set_state(UpdateState::ReadyToRestart);
+                }
+                Ok(install::InstallOutcome::HandedOff) => {
+                    this.set_state(UpdateState::HandedOff);
                 }
                 Ok(install::InstallOutcome::DmgOpened) => {
                     this.set_state(UpdateState::DmgOpened);

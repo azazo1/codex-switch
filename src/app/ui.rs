@@ -956,6 +956,18 @@ impl CodexSwitchApp {
         }
     }
 
+    /// macOS 自更新交接后必须尽快退出: 替换脚本在等本进程消失才会覆盖 bundle.
+    fn handle_update_handoff(&mut self, ctx: &egui::Context) {
+        if self.exit_requested {
+            return;
+        }
+        if !matches!(self.state.update.state(), UpdateState::HandedOff) {
+            return;
+        }
+        tracing::info!("macos update helper took over, exiting for bundle replacement");
+        self.exit_app(ctx);
+    }
+
     /// 处理来自单实例通知与 Ctrl+C 信号的外部请求.
     fn handle_app_events(&mut self, ctx: &egui::Context) {
         let exit_version = self.state.events.exit_request_version();
@@ -1611,6 +1623,7 @@ impl eframe::App for CodexSwitchApp {
         self.ensure_tray(ctx);
         self.handle_close_request(ctx);
         self.handle_dock_reopen(ctx);
+        self.handle_update_handoff(ctx);
         self.maybe_auto_refresh(ctx);
         self.sync_tray_stats();
         self.drain_task_events(ctx);
@@ -1666,7 +1679,9 @@ impl eframe::App for CodexSwitchApp {
                             self.update_window_open = true;
                         }
                     }
-                    UpdateState::ReadyToRestart | UpdateState::DmgOpened => {
+                    UpdateState::ReadyToRestart
+                    | UpdateState::HandedOff
+                    | UpdateState::DmgOpened => {
                         if ui
                             .link(egui::RichText::new("更新已就绪, 点击查看").strong())
                             .clicked()
@@ -1884,10 +1899,17 @@ impl CodexSwitchApp {
                     }
                 }
             }
+            UpdateState::HandedOff => {
+                ui.label("正在退出应用并替换 Codex Switch.app, 完成后会自动重新启动.");
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("请勿手动关闭进程.");
+                });
+            }
             UpdateState::DmgOpened => {
                 ui.label(
-                    "安装镜像已在系统中打开, 请将 Codex Switch 拖入 Applications 文件夹完成安装, \
-                     之后重新启动应用.",
+                    "安装镜像已在系统中打开, 请先退出 Codex Switch, 再将 Codex Switch \
+                     拖入 Applications 文件夹完成安装, 之后重新启动应用.",
                 );
             }
             UpdateState::Failed(message) => {

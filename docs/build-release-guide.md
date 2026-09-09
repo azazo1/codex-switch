@@ -67,6 +67,8 @@ just macos-dmg
 
 Bundle 最低系统版本为 macOS 12.0. Bundle 版本读取 `Cargo.toml` 中的 package version.
 
+DMG 与应用内的自动更新共用同一套产物命名. 已安装的应用执行更新时会把替换工作交给一个临时脚本, 由它挂载 DMG 并替换 `Applications` 中的 bundle, 详见[自动更新指南](update-guide.md).
+
 ## GitHub Actions
 
 `.github/workflows/ci.yml` 在普通 push, pull request, tag push 和 `workflow_dispatch` 上会在 Ubuntu 22.04 运行 `cargo test --locked`, 并构建以下矩阵:
