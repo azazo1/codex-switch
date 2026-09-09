@@ -4,6 +4,7 @@ use super::{
 };
 use crate::app::platform;
 use crate::core::models::UpstreamKind;
+use crate::update::UpdateState;
 use eframe::egui::{self, Color32};
 use std::time::{Duration, Instant};
 
@@ -69,6 +70,38 @@ impl CodexSwitchApp {
             }
         });
         self.local_key_refresh_window(ui.ctx());
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!("当前版本: {}", crate::app::display_version()));
+            match self.state.update.state() {
+                UpdateState::Checking => {
+                    ui.spinner();
+                    ui.label("正在检查更新...");
+                }
+                UpdateState::Available(info) => {
+                    if ui
+                        .link(egui::RichText::new(format!("新版本 {} 可用, 点击查看", info.tag)).strong())
+                        .clicked()
+                    {
+                        self.update_window_open = true;
+                    }
+                }
+                UpdateState::ReadyToRestart | UpdateState::DmgOpened => {
+                    if ui
+                        .link(egui::RichText::new("更新已就绪, 点击查看").strong())
+                        .clicked()
+                    {
+                        self.update_window_open = true;
+                    }
+                }
+                _ => {
+                    if ui.button("检查更新").clicked() {
+                        self.state.update.check_now();
+                        self.update_window_open = true;
+                        self.status = "正在检查更新...".to_string();
+                    }
+                }
+            }
+        });
         ui.separator();
         ui.horizontal_wrapped(|ui| {
             ui.label(format!("总请求: {}", self.stats.total_requests));
