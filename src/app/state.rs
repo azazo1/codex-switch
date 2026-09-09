@@ -18,6 +18,11 @@ use std::sync::{
 
 const DATA_DIR_ENV: &str = "CODEX_SWITCH_DATA_DIR";
 
+pub(crate) const SETTING_HIDE_ON_LAUNCH: &str = "hide_on_launch";
+pub(crate) const SETTING_DOCK_ICON_FOLLOWS_WINDOW: &str = "dock_icon_follows_window";
+pub(crate) const SETTING_START_SERVER_ON_LAUNCH: &str = "start_server_on_launch";
+pub(crate) const SETTING_START_PEER_ON_LAUNCH: &str = "start_peer_on_launch";
+
 type RepaintRequester = Arc<dyn Fn() + Send + Sync>;
 
 #[derive(Clone)]
@@ -32,6 +37,7 @@ pub struct AppState {
     pub cache_keepalive: CacheKeepaliveRuntime,
     pub peers: PeerRuntime,
     pub update: crate::update::UpdateRuntime,
+    pub(crate) single_instance: Option<Arc<crate::app::single_instance::InstanceListener>>,
 }
 
 #[derive(Clone, Default)]
@@ -42,6 +48,8 @@ pub struct AppEvents {
     balance_snapshot_version: Arc<AtomicU64>,
     peer_version: Arc<AtomicU64>,
     update_version: Arc<AtomicU64>,
+    show_window_version: Arc<AtomicU64>,
+    exit_request_version: Arc<AtomicU64>,
     repaint_requester: Arc<Mutex<Option<RepaintRequester>>>,
 }
 
@@ -97,6 +105,26 @@ impl AppEvents {
         self.request_repaint();
     }
 
+    /// 二次启动等外部来源请求显示主窗口.
+    pub fn request_show_window(&self) {
+        self.show_window_version.fetch_add(1, Ordering::Relaxed);
+        self.request_repaint();
+    }
+
+    pub fn show_window_version(&self) -> u64 {
+        self.show_window_version.load(Ordering::Relaxed)
+    }
+
+    /// Ctrl+C 等信号请求优雅退出, 由 UI 线程走统一退出路径.
+    pub fn request_exit(&self) {
+        self.exit_request_version.fetch_add(1, Ordering::Relaxed);
+        self.request_repaint();
+    }
+
+    pub fn exit_request_version(&self) -> u64 {
+        self.exit_request_version.load(Ordering::Relaxed)
+    }
+
     pub fn set_repaint_requester<F>(&self, repaint: F)
     where
         F: Fn() + Send + Sync + 'static,
@@ -119,7 +147,9 @@ impl AppEvents {
 }
 
 impl AppState {
-    pub async fn new() -> anyhow::Result<Self> {
+    pub(crate) async fn new(
+        single_instance: Option<Arc<crate::app::single_instance::InstanceListener>>,
+    ) -> anyhow::Result<Self> {
         let data_dir = data_dir()?;
         let db_path = data_dir.join("codex-switch.sqlite");
         tracing::info!(path = %db_path.display(), "opening sqlite database");
@@ -145,7 +175,15 @@ impl AppState {
             cache_keepalive,
             peers,
             update,
+            single_instance,
         };
+        if let Some(listener) = &state.single_instance {
+            let events = state.events.clone();
+            listener.serve(
+                tokio::runtime::Handle::current(),
+                Arc::new(move |_message| events.request_show_window()),
+            );
+        }
         state.cache_keepalive.start();
         crate::balance_alert::start(state.clone());
         crate::update::start(&state);
@@ -155,6 +193,14 @@ impl AppState {
     /// 默认出站 client; 每次现建, 系统代理等环境变化实时生效.
     pub fn http(&self) -> anyhow::Result<HttpClient> {
         http::build_client(None)
+    }
+
+    /// 释放单实例锁; 更新重启与统一退出路径都必须先调用.
+    pub(crate) fn release_single_instance(&self) {
+        if let Some(listener) = &self.single_instance {
+            listener.release();
+            tracing::info!("single instance lock released");
+        }
     }
 
     pub fn http_for_upstream(&self, upstream: &Upstream) -> anyhow::Result<HttpClient> {

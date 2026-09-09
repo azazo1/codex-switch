@@ -50,6 +50,13 @@ impl CodexSwitchApp {
             } else if ui.button("停止").clicked() {
                 self.stop_peer_server();
             }
+            if ui
+                .checkbox(&mut self.start_peer_on_launch, "启动时启用节点监听")
+                .on_hover_text("下次启动应用时自动启动节点监听")
+                .changed()
+            {
+                self.apply_start_peer_on_launch();
+            }
         });
         ui.label("节点口只接受已配对证书的 mTLS, 不要把它和本地明文代理口混用.");
         ui.separator();
@@ -246,6 +253,29 @@ impl CodexSwitchApp {
             return;
         }
         self.status = "节点显示名已保存, 重启节点监听后生效".to_string();
+    }
+
+    fn apply_start_peer_on_launch(&mut self) {
+        if let Err(err) = self.runtime.block_on(
+            self.state
+                .store
+                .set_setting(
+                    crate::app::SETTING_START_PEER_ON_LAUNCH,
+                    bool_setting(self.start_peer_on_launch),
+                ),
+        ) {
+            self.status = format!("保存启动节点监听设置失败: {err}");
+            return;
+        }
+        tracing::info!(
+            enabled = self.start_peer_on_launch,
+            "start peer listener on launch setting changed"
+        );
+        self.status = if self.start_peer_on_launch {
+            "已开启启动时自动启动节点监听".to_string()
+        } else {
+            "已关闭启动时自动启动节点监听".to_string()
+        };
     }
 
     fn save_peer_setting(&mut self, key: &str, value: String) {
