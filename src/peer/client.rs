@@ -249,6 +249,7 @@ mod tests {
             cache_keepalive,
             peers,
             update,
+            single_instance: None,
         }
     }
 

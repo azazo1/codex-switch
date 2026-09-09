@@ -261,7 +261,7 @@ impl CodexSwitchApp {
                 .store
                 .set_setting(
                     crate::app::SETTING_START_PEER_ON_LAUNCH,
-                    bool_setting(self.start_peer_on_launch),
+                    &bool_setting(self.start_peer_on_launch),
                 ),
         ) {
             self.status = format!("保存启动节点监听设置失败: {err}");

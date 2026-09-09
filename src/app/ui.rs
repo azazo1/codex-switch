@@ -672,6 +672,8 @@ impl CodexSwitchApp {
             .flatten()
             .as_deref()
             == Some("true");
+        let last_seen_show_window_version = state.events.show_window_version();
+        let last_seen_exit_request_version = state.events.exit_request_version();
         let mut app = Self {
             runtime,
             state,
@@ -699,8 +701,8 @@ impl CodexSwitchApp {
             dock_icon_follows_window,
             last_good_window,
             background_reopen: platform::BackgroundReopenMonitor::default(),
-            last_seen_show_window_version: state.events.show_window_version(),
-            last_seen_exit_request_version: state.events.exit_request_version(),
+            last_seen_show_window_version,
+            last_seen_exit_request_version,
             bind_addr,
             local_key,
             local_key_copied_at: None,
@@ -945,6 +947,26 @@ impl CodexSwitchApp {
         }
         if self.background_reopen.should_show_hidden_window() {
             self.show_main_window(ctx);
+        }
+    }
+
+    /// 处理来自单实例通知与 Ctrl+C 信号的外部请求.
+    fn handle_app_events(&mut self, ctx: &egui::Context) {
+        let exit_version = self.state.events.exit_request_version();
+        if exit_version != self.last_seen_exit_request_version {
+            self.last_seen_exit_request_version = exit_version;
+            if !self.exit_requested {
+                tracing::info!("graceful exit requested by signal");
+                self.exit_app(ctx);
+            }
+            return;
+        }
+        let show_window_version = self.state.events.show_window_version();
+        if show_window_version != self.last_seen_show_window_version {
+            self.last_seen_show_window_version = show_window_version;
+            if !self.exit_requested {
+                self.show_main_window(ctx);
+            }
         }
     }
 
@@ -1585,26 +1607,6 @@ impl eframe::App for CodexSwitchApp {
         self.maybe_auto_refresh(ctx);
         self.sync_tray_stats();
         self.drain_task_events(ctx);
-    }
-
-    /// 处理来自单实例通知与 Ctrl+C 信号的外部请求.
-    fn handle_app_events(&mut self, ctx: &egui::Context) {
-        let exit_version = self.state.events.exit_request_version();
-        if exit_version != self.last_seen_exit_request_version {
-            self.last_seen_exit_request_version = exit_version;
-            if !self.exit_requested {
-                tracing::info!("graceful exit requested by signal");
-                self.exit_app(ctx);
-            }
-            return;
-        }
-        let show_window_version = self.state.events.show_window_version();
-        if show_window_version != self.last_seen_show_window_version {
-            self.last_seen_show_window_version = show_window_version;
-            if !self.exit_requested {
-                self.show_main_window(ctx);
-            }
-        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

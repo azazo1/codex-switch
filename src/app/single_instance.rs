@@ -42,10 +42,10 @@ pub(crate) async fn acquire(data_dir: &Path) -> anyhow::Result<AcquireOutcome> {
         })?;
         tracing::info!(path = %socket_path.display(), "single instance lock acquired");
         return Ok(AcquireOutcome::Primary(InstanceListener {
-            endpoint: Mutex::new(Some(Endpoint::Unix(UnixEndpoint {
+            endpoint: Mutex::new(Some(Endpoint::Unix {
                 listener,
-                socket_path,
-            }))),
+                _socket_file: UnixSocketFile { path: socket_path },
+            })),
             shutdown_tx: Mutex::new(None),
         }));
     }
@@ -129,7 +129,10 @@ impl InstanceListener {
 
 enum Endpoint {
     #[cfg(unix)]
-    Unix(UnixEndpoint),
+    Unix {
+        listener: tokio::net::UnixListener,
+        _socket_file: UnixSocketFile,
+    },
     #[cfg(windows)]
     Windows {
         server: tokio::net::windows::named_pipe::NamedPipeServer,
@@ -138,15 +141,14 @@ enum Endpoint {
 }
 
 #[cfg(unix)]
-struct UnixEndpoint {
-    listener: tokio::net::UnixListener,
-    socket_path: PathBuf,
+struct UnixSocketFile {
+    path: PathBuf,
 }
 
 #[cfg(unix)]
-impl Drop for UnixEndpoint {
+impl Drop for UnixSocketFile {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.socket_path);
+        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -157,8 +159,10 @@ async fn accept_loop(
 ) {
     match endpoint {
         #[cfg(unix)]
-        Endpoint::Unix(unix) => {
-            let listener = unix.listener;
+        Endpoint::Unix {
+            listener,
+            _socket_file,
+        } => {
             loop {
                 tokio::select! {
                     _ = &mut shutdown_rx => break,
