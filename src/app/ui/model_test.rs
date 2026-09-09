@@ -17,6 +17,8 @@ const DEFAULT_TIMEOUT_SECS: &str = "120";
 const DEFAULT_REASONING_EFFORT: &str = "medium";
 const CHAT_HISTORY_HEIGHT: f32 = 260.0;
 const RESULT_TEXT_HEIGHT: f32 = 160.0;
+/// 单次测试与对话测试的回复内容不占满页面, 统一限制为可用宽度的比例.
+const TEST_CONTENT_WIDTH_RATIO: f32 = 0.75;
 
 /// 临时上游在测试记录中显示的名称.
 const CUSTOM_UPSTREAM_NAME: &str = "临时上游";
@@ -511,21 +513,24 @@ impl CodexSwitchApp {
                 }
             }
         });
-        if self.model_test_ui.single_result.started.is_some() {
-            // live 块与完成后的结果卡使用同一思维链 id, 展开状态跨阶段保留.
-            model_test_stream_block(
-                ui,
-                single_reasoning_base_id(),
-                &self.model_test_ui.single_result.live_reasoning,
-                &self.model_test_ui.single_result.live_text,
-                true,
-            );
-            return;
-        }
-        let Some(outcome) = self.model_test_ui.single_result.outcome.clone() else {
-            return;
-        };
-        self.model_test_outcome_card(ui, &outcome);
+        ui.scope(|ui| {
+            ui.set_max_width(test_content_width(ui));
+            if self.model_test_ui.single_result.started.is_some() {
+                // live 块与完成后的结果卡使用同一思维链 id, 展开状态跨阶段保留.
+                model_test_stream_block(
+                    ui,
+                    single_reasoning_base_id(),
+                    &self.model_test_ui.single_result.live_reasoning,
+                    &self.model_test_ui.single_result.live_text,
+                    true,
+                );
+                return;
+            }
+            let Some(outcome) = self.model_test_ui.single_result.outcome.clone() else {
+                return;
+            };
+            self.model_test_outcome_card(ui, &outcome);
+        });
     }
 
     fn model_test_chat_section(&mut self, ui: &mut egui::Ui) {
@@ -545,8 +550,8 @@ impl CodexSwitchApp {
         });
         // 循环借用 chat_messages 期间不能调用 &mut self 的导出方法, 先记录意图再执行.
         let mut har_export: Option<(Arc<ModelTestRawTrace>, i64)> = None;
-        // 对话内容不占满页面宽度, 统一限制为可用宽度的 75%.
-        let chat_width = (ui.available_width() * 0.75).round();
+        // 对话内容不占满页面宽度, 与单次测试共用同一比例.
+        let chat_width = test_content_width(ui);
         let chat_history = nested_scroll_area(
             ui,
             egui::Id::new("model_test_chat_history"),
@@ -809,7 +814,6 @@ impl CodexSwitchApp {
             );
         }
         if !outcome.output_text.is_empty() {
-            ui.label("回复");
             nested_scroll_area(
                 ui,
                 egui::Id::new("model_test_single_output"),
@@ -1325,6 +1329,11 @@ fn model_test_record_har_entry(record: &ModelTestRecord) -> serde_json::Value {
     entry
 }
 
+/// 单次测试与对话测试的回复内容宽度, 不占满页面.
+fn test_content_width(ui: &egui::Ui) -> f32 {
+    (ui.available_width() * TEST_CONTENT_WIDTH_RATIO).round()
+}
+
 /// 渲染流式/已完成的回复块: 思维链折叠区 + 正文区, live 为 true 时标注生成中.
 /// 思维链折叠头的 id 是 id_salt.with("reasoning"), 调用方在流式阶段与完成阶段
 /// 必须派生自同一基准 id, 否则折叠展开状态会重置, 输出结束时思维链看似被自动收起.
@@ -1338,12 +1347,9 @@ fn model_test_stream_block(
     if !reasoning.is_empty() {
         model_test_reasoning_block(ui, id_salt.with("reasoning"), reasoning);
     }
-    ui.horizontal(|ui| {
-        ui.label("回复");
-        if live {
-            ui.label(egui::RichText::new("生成中...").weak());
-        }
-    });
+    if live {
+        ui.label(egui::RichText::new("生成中...").weak());
+    }
     let inner_rect = nested_scroll_area(
         ui,
         id_salt.with("text"),
