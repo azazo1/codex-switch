@@ -457,9 +457,17 @@ fn format_balance_snapshot(snapshot: Option<&BalanceSnapshot>) -> (String, Optio
         .map(|value| format!("{value:.4}"))
         .unwrap_or_else(|| "未知".to_string());
     let unit = snapshot.unit.as_deref().unwrap_or("");
-    if unit.is_empty() {
-        (amount, None)
+    let mut text = if unit.is_empty() {
+        amount
     } else {
-        (format!("{amount} {unit}"), None)
+        format!("{amount} {unit}")
+    };
+    if let Some(value) = snapshot.remaining {
+        if value < 0.0 {
+            text.push_str(" (已欠费)");
+        } else if value == 0.0 {
+            text.push_str(" (已耗尽)");
+        }
     }
+    (text, snapshot.message.as_deref().map(str::to_string))
 }

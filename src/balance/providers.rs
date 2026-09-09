@@ -254,10 +254,10 @@ fn parse_balance(
                 .and_then(|v| v.as_array())
                 .and_then(|items| items.first())
                 .and_then(|item| parse_f64_field(item, "total_balance"));
-            snapshot.is_valid = body
-                .get("is_available")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
+            // is_available=false 只代表账户欠费等不可调用状态, 查询本身成功, 不应标记为失败.
+            if body.get("is_available").and_then(Value::as_bool) == Some(false) {
+                snapshot.message = Some("账户不可用 (is_available=false)".to_string());
+            }
         }
         BalanceProvider::StepFun => {
             snapshot.remaining = parse_f64_field(body, "balance");
@@ -275,11 +275,9 @@ fn parse_balance(
                 (Some(total), Some(used)) => Some(total - used),
                 _ => None,
             };
-            snapshot.is_valid = snapshot.remaining.map(|v| v > 0.0).unwrap_or(true);
         }
         BalanceProvider::Novita => {
             snapshot.remaining = parse_f64_field(body, "availableBalance").map(|v| v / 10000.0);
-            snapshot.is_valid = snapshot.remaining.map(|v| v > 0.0).unwrap_or(true);
         }
         BalanceProvider::Zhipu => {
             let data = body.get("data").unwrap_or(body);
@@ -566,7 +564,7 @@ fn parse_common_balance(
 
     let is_valid = bool_any(data, &["isValid", "is_valid", "is_active"])
         .or_else(|| bool_any(body, &["isValid", "is_valid", "is_active"]))
-        .unwrap_or(remaining > 0.0);
+        .unwrap_or(true);
     let message = string_any(data, &["message", "error", "invalid_message"])
         .or_else(|| string_any(body, &["message", "error", "invalid_message"]));
 
@@ -601,7 +599,7 @@ fn parse_quota_object_balance(
     let unit = string_any(quota_obj, &["unit", "currency"])
         .or_else(|| string_any(data, &["unit", "currency"]))
         .unwrap_or_else(|| default_common_unit(provider, data).to_string());
-    let is_valid = bool_any(data, &["isValid", "is_valid", "is_active"]).unwrap_or(remaining > 0.0);
+    let is_valid = bool_any(data, &["isValid", "is_valid", "is_active"]).unwrap_or(true);
     let message = string_any(data, &["message", "error", "invalid_message"]);
     Some(BalanceSnapshot {
         upstream_id: upstream_id.to_string(),
@@ -639,7 +637,7 @@ fn parse_newapi_quota_balance(
     let unit = string_any(data, &["unit", "currency"]).unwrap_or_else(|| "USD".to_string());
     let is_valid = bool_any(data, &["isValid", "is_valid", "is_active"])
         .or_else(|| bool_any(body, &["isValid", "is_valid", "is_active", "success"]))
-        .unwrap_or(remaining > 0.0);
+        .unwrap_or(true);
     let message = string_any(data, &["message", "error", "invalid_message"])
         .or_else(|| string_any(body, &["message", "error", "invalid_message"]));
     Some(BalanceSnapshot {
@@ -754,6 +752,23 @@ mod tests {
         );
         assert_eq!(snapshot.remaining, Some(6.5));
         assert_eq!(snapshot.total, Some(10.0));
+        assert!(snapshot.is_valid);
+    }
+
+    #[test]
+    fn parses_deepseek_negative_balance_as_valid() {
+        let snapshot = parse_balance(
+            "u1",
+            BalanceProvider::DeepSeek,
+            "CNY",
+            &json!({
+                "is_available": false,
+                "balance_infos": [{"currency": "CNY", "total_balance": "-1.50"}]
+            }),
+        );
+        assert_eq!(snapshot.remaining, Some(-1.50));
+        assert!(snapshot.is_valid);
+        assert!(snapshot.message.is_some());
     }
 
     #[test]
