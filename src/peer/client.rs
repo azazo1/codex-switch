@@ -210,7 +210,11 @@ async fn send_https_request(
         .send_request(request)
         .await
         .context("failed to send peer request")?;
-    Ok((response.status(), response.headers().clone(), response.into_body()))
+    Ok((
+        response.status(),
+        response.headers().clone(),
+        response.into_body(),
+    ))
 }
 
 #[cfg(test)]
@@ -230,11 +234,8 @@ mod tests {
         let store = Store::open(path).await.unwrap();
         let credentials = CredentialStore::new_for_tests(store.clone());
         let events: crate::app::AppEvents = Default::default();
-        let cache_keepalive = CacheKeepaliveRuntime::new(
-            store.clone(),
-            credentials.clone(),
-            events.clone(),
-        );
+        let cache_keepalive =
+            CacheKeepaliveRuntime::new(store.clone(), credentials.clone(), events.clone());
         let oauth_accounts = crate::oauth::OAuthAccountService::new(store.clone());
         let peers = crate::peer::PeerRuntime::new(&store).await.unwrap();
         let update = crate::update::UpdateRuntime::new_for_tests(store.clone(), events.clone());

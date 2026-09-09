@@ -247,7 +247,9 @@ impl CodexSwitchApp {
             .cloned()
             .collect();
         if let Some(selected) = self.model_test_ui.selected_upstream_id.clone()
-            && !enabled_upstreams.iter().any(|upstream| upstream.id == selected)
+            && !enabled_upstreams
+                .iter()
+                .any(|upstream| upstream.id == selected)
         {
             self.model_test_ui.selected_upstream_id = None;
         }
@@ -458,10 +460,7 @@ impl CodexSwitchApp {
             let reasoning_supported = self.model_test_reasoning_supported();
             ui.add_enabled(
                 reasoning_supported,
-                egui::Checkbox::new(
-                    &mut self.model_test_ui.reasoning_enabled,
-                    "推理力度",
-                ),
+                egui::Checkbox::new(&mut self.model_test_ui.reasoning_enabled, "推理力度"),
             )
             .on_disabled_hover_text("Anthropic 协议的直连测试不支持推理力度");
             if self.model_test_ui.reasoning_enabled && reasoning_supported {
@@ -503,13 +502,19 @@ impl CodexSwitchApp {
                     .hint_text("单次测试使用的提示词"),
             );
             let running = self.model_test_ui.single_result.started.is_some();
-            if ui.add_enabled(!running, egui::Button::new("发送")).clicked() {
+            if ui
+                .add_enabled(!running, egui::Button::new("发送"))
+                .clicked()
+            {
                 self.send_model_test(ModelTestKind::Single);
             }
             if running {
                 ui.spinner();
                 if let Some(started) = self.model_test_ui.single_result.started {
-                    ui.label(format!("进行中, 已等待 {:.1}s", started.elapsed().as_secs_f32()));
+                    ui.label(format!(
+                        "进行中, 已等待 {:.1}s",
+                        started.elapsed().as_secs_f32()
+                    ));
                 }
             }
         });
@@ -536,10 +541,14 @@ impl CodexSwitchApp {
     fn model_test_chat_section(&mut self, ui: &mut egui::Ui) {
         ui.heading("对话测试");
         ui.horizontal(|ui| {
-            ui.label(format!("消息数: {}", self.model_test_ui.chat_messages.len()));
+            ui.label(format!(
+                "消息数: {}",
+                self.model_test_ui.chat_messages.len()
+            ));
             if ui
                 .add_enabled(
-                    !self.model_test_ui.chat_messages.is_empty() && !self.model_test_ui.chat_running,
+                    !self.model_test_ui.chat_messages.is_empty()
+                        && !self.model_test_ui.chat_running,
                     egui::Button::new("清空对话"),
                 )
                 .clicked()
@@ -562,9 +571,7 @@ impl CodexSwitchApp {
                 if self.model_test_ui.chat_messages.is_empty() {
                     ui.label("暂无消息, 在下方输入内容开始对话");
                 }
-                for (message_index, entry) in
-                    self.model_test_ui.chat_messages.iter().enumerate()
-                {
+                for (message_index, entry) in self.model_test_ui.chat_messages.iter().enumerate() {
                     let (role_label, color) = match entry.role {
                         ChatRole::User => ("[用户]", egui::Color32::from_rgb(96, 165, 250)),
                         ChatRole::Assistant => ("[模型]", egui::Color32::from_rgb(34, 197, 94)),
@@ -583,10 +590,7 @@ impl CodexSwitchApp {
                         ui.visuals().text_color()
                     };
                     ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(&entry.text).color(text_color),
-                        )
-                        .wrap(),
+                        egui::Label::new(egui::RichText::new(&entry.text).color(text_color)).wrap(),
                     );
                     if let Some(record) = &entry.record {
                         ui.horizontal(|ui| {
@@ -749,11 +753,7 @@ impl CodexSwitchApp {
                         None if record.stream => "未返回".to_string(),
                         None => "非流式".to_string(),
                     });
-                    tokens::token_number(
-                        ui,
-                        &mut token_display_mode,
-                        record.total_tokens,
-                    );
+                    tokens::token_number(ui, &mut token_display_mode, record.total_tokens);
                     match record.estimated_cost_usd {
                         Some(cost) => {
                             tokens::cost_value(ui, &mut currency_display_mode, rate, cost);
@@ -884,12 +884,11 @@ impl CodexSwitchApp {
             messages,
             stream: self.model_test_ui.stream,
             max_tokens,
-            reasoning_effort: self.model_test_ui.reasoning_enabled.then(|| {
-                self.model_test_ui
-                    .reasoning_effort_input
-                    .trim()
-                    .to_string()
-            }).filter(|value| !value.is_empty()),
+            reasoning_effort: self
+                .model_test_ui
+                .reasoning_enabled
+                .then(|| self.model_test_ui.reasoning_effort_input.trim().to_string())
+                .filter(|value| !value.is_empty()),
             timeout: Duration::from_secs(timeout),
         })
     }
@@ -991,13 +990,14 @@ impl CodexSwitchApp {
             self.status = "请填写测试 prompt".to_string();
             return;
         }
-        let params = match self.build_model_test_params(vec![test_bench::ModelTestMessage::user(prompt)]) {
-            Ok(params) => params,
-            Err(message) => {
-                self.status = message;
-                return;
-            }
-        };
+        let params =
+            match self.build_model_test_params(vec![test_bench::ModelTestMessage::user(prompt)]) {
+                Ok(params) => params,
+                Err(message) => {
+                    self.status = message;
+                    return;
+                }
+            };
         if self.dispatch_model_test(kind, params) {
             self.model_test_ui.single_result = SingleResult::running();
             self.status = "测试请求已发送".to_string();
@@ -1067,7 +1067,10 @@ impl CodexSwitchApp {
         let upstream_id = upstream.id.clone();
         self.runtime.spawn(async move {
             let result = test_bench::fetch_upstream_model_ids(&state, &upstream).await;
-            let _ = tx.send(UiTaskEvent::ModelTestModelsFetched { upstream_id, result });
+            let _ = tx.send(UiTaskEvent::ModelTestModelsFetched {
+                upstream_id,
+                result,
+            });
         });
     }
 
@@ -1168,10 +1171,7 @@ impl CodexSwitchApp {
                     .unwrap_or_else(|| "未返回".to_string())
             );
         } else {
-            self.status = format!(
-                "测试失败: {}",
-                error_text.as_deref().unwrap_or("未知错误")
-            );
+            self.status = format!("测试失败: {}", error_text.as_deref().unwrap_or("未知错误"));
         }
     }
 
@@ -1179,7 +1179,10 @@ impl CodexSwitchApp {
     fn make_model_test_delta_sink(&self, kind: ModelTestKind) -> test_bench::ModelTestDeltaSink {
         let tx = self.task_tx.clone();
         Box::new(move |part| {
-            let _ = tx.send(UiTaskEvent::ModelTestDelta { kind: kind.clone(), part });
+            let _ = tx.send(UiTaskEvent::ModelTestDelta {
+                kind: kind.clone(),
+                part,
+            });
         })
     }
 
@@ -1269,12 +1272,11 @@ fn model_test_record_har_entry(record: &ModelTestRecord) -> serde_json::Value {
     let mut entry = match &record.raw {
         Some(raw) => raw.to_har_entry(record.duration_ms, None),
         None => {
-            let status_text = reqwest::StatusCode::from_u16(
-                record.status.clamp(0, u16::MAX as i64) as u16,
-            )
-            .ok()
-            .and_then(|status| status.canonical_reason())
-            .unwrap_or_default();
+            let status_text =
+                reqwest::StatusCode::from_u16(record.status.clamp(0, u16::MAX as i64) as u16)
+                    .ok()
+                    .and_then(|status| status.canonical_reason())
+                    .unwrap_or_default();
             serde_json::json!({
                 "startedDateTime": record.finished_at.to_rfc3339(),
                 "time": record.duration_ms,
@@ -1405,8 +1407,7 @@ fn nested_scroll_area<R>(
     stick_to_bottom: bool,
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::scroll_area::ScrollAreaOutput<R> {
-    let rect =
-        egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, max_height));
+    let rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, max_height));
     ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
         egui::ScrollArea::vertical()
             .id_salt(id_salt)

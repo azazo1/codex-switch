@@ -90,9 +90,13 @@ pub(super) async fn load_view_data(
         estimate_model_usage_cost(state, &total_model_usage, &price_multipliers).await?;
     let today_estimated_cost_usd =
         estimate_model_usage_cost(state, &today_model_usage, &price_multipliers).await?;
-    let provider_estimated_cost_usd =
-        estimate_provider_costs(state, &total_model_usage, &provider_stats, &price_multipliers)
-            .await?;
+    let provider_estimated_cost_usd = estimate_provider_costs(
+        state,
+        &total_model_usage,
+        &provider_stats,
+        &price_multipliers,
+    )
+    .await?;
     let price_cache_count = state.store.model_price_count().await?;
     let price_cache_age_seconds = state.store.model_price_cache_age_seconds().await?;
     let database_info = state.store.database_info().await?;

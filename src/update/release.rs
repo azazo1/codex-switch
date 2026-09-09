@@ -129,7 +129,10 @@ fn archive_ext(platform: &str) -> &'static str {
 }
 
 fn archive_name_for(tag: &str, platform: &str, arch: &str) -> String {
-    format!("codex-switch-{tag}-{platform}-{arch}.{}", archive_ext(platform))
+    format!(
+        "codex-switch-{tag}-{platform}-{arch}.{}",
+        archive_ext(platform)
+    )
 }
 
 fn select_asset<'a>(
@@ -208,8 +211,6 @@ mod tests {
                 .browser_download_url,
             "https://example.com/sums"
         );
-        assert!(
-            select_asset(&assets, "codex-switch-v0.14.0-linux-x86_64.tar.gz").is_err()
-        );
+        assert!(select_asset(&assets, "codex-switch-v0.14.0-linux-x86_64.tar.gz").is_err());
     }
 }

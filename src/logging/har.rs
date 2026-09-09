@@ -45,13 +45,10 @@ fn write_entry(entry: &HarEntry) {
         }
     };
     let state = HAR_STATE.get_or_init(|| {
-        let rotation = ROTATION
-            .get()
-            .copied()
-            .unwrap_or(HarRotation {
-                max_size_bytes: 20 * 1024 * 1024,
-                max_files: 10,
-            });
+        let rotation = ROTATION.get().copied().unwrap_or(HarRotation {
+            max_size_bytes: 20 * 1024 * 1024,
+            max_files: 10,
+        });
         Mutex::new(HarFileWriter::new(path, rotation))
     });
     let Ok(mut writer) = state.lock() else {
@@ -432,8 +429,9 @@ impl PendingHar {
         body: Option<&[u8]>,
     ) -> Self {
         let truncated = body.is_some_and(|bytes| bytes.len() > MAX_BODY_BYTES);
-        let recorded_body =
-            body.map(|bytes| &bytes[..bytes.len().min(MAX_BODY_BYTES)]).unwrap_or_default();
+        let recorded_body = body
+            .map(|bytes| &bytes[..bytes.len().min(MAX_BODY_BYTES)])
+            .unwrap_or_default();
         let body_size = i64::try_from(body.map(<[u8]>::len).unwrap_or_default()).unwrap_or(-1);
         let post_data = (!recorded_body.is_empty()).then(|| HarPostData {
             mime_type,
@@ -478,11 +476,7 @@ impl PendingHar {
         );
     }
 
-    pub(crate) fn on_response_hyper(
-        &self,
-        status: hyper::StatusCode,
-        headers: &hyper::HeaderMap,
-    ) {
+    pub(crate) fn on_response_hyper(&self, status: hyper::StatusCode, headers: &hyper::HeaderMap) {
         self.set_response(
             status.as_u16(),
             status.canonical_reason().unwrap_or_default().to_string(),
@@ -623,18 +617,14 @@ fn write_locked(state: &mut PendingHarState) {
             headers: state.request.headers.clone(),
             headers_size: state.request.headers_size,
             body_size: state.request.body_size,
-            post_data: state
-                .request
-                .post_data
-                .clone()
-                .map(|data| HarPostData {
-                    mime_type: data.mime_type,
-                    text: if is_sensitive_url(&state.request.url) {
-                        REDACTED_TEXT.to_string()
-                    } else {
-                        data.text
-                    },
-                }),
+            post_data: state.request.post_data.clone().map(|data| HarPostData {
+                mime_type: data.mime_type,
+                text: if is_sensitive_url(&state.request.url) {
+                    REDACTED_TEXT.to_string()
+                } else {
+                    data.text
+                },
+            }),
         },
         response,
         cache: serde_json::json!({}),
@@ -644,8 +634,7 @@ fn write_locked(state: &mut PendingHarState) {
             receive: 0,
         },
         error: state.error.clone(),
-        truncated: (state.request_body_truncated || state.response_body_truncated)
-            .then_some(true),
+        truncated: (state.request_body_truncated || state.response_body_truncated).then_some(true),
     };
     write_entry(&entry);
 }
@@ -657,9 +646,13 @@ mod tests {
     #[test]
     fn oauth_bodies_are_redacted() {
         assert!(is_sensitive_url("https://auth.openai.com/oauth/token"));
-        assert!(is_sensitive_url("https://auth.openai.com/api/accounts/deviceauth/usercode"));
+        assert!(is_sensitive_url(
+            "https://auth.openai.com/api/accounts/deviceauth/usercode"
+        ));
         assert!(!is_sensitive_url("https://api.deepseek.com/user/balance"));
-        assert!(!is_sensitive_url("https://chatgpt.com/backend-api/codex/responses"));
+        assert!(!is_sensitive_url(
+            "https://chatgpt.com/backend-api/codex/responses"
+        ));
         assert_eq!(
             final_body_text(true, b"grant_type=refresh_token&refresh_token=secret"),
             Some(REDACTED_TEXT.to_string())
@@ -706,15 +699,22 @@ mod tests {
     fn appends_entries_and_stays_valid_json() {
         let path = std::env::temp_dir().join(format!("cs-har-{}.har", uuid::Uuid::new_v4()));
         let mut writer = test_writer(path.clone(), 3);
-        writer.append_entry(&sample_entry("https://a.example/models")).unwrap();
-        writer.append_entry(&sample_entry("https://b.example/user/balance")).unwrap();
+        writer
+            .append_entry(&sample_entry("https://a.example/models"))
+            .unwrap();
+        writer
+            .append_entry(&sample_entry("https://b.example/user/balance"))
+            .unwrap();
 
         let log = parse_log(&path);
         assert_eq!(log["log"]["version"], "1.2");
         let entries = log["log"]["entries"].as_array().unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0]["request"]["url"], "https://a.example/models");
-        assert_eq!(entries[1]["request"]["url"], "https://b.example/user/balance");
+        assert_eq!(
+            entries[1]["request"]["url"],
+            "https://b.example/user/balance"
+        );
         fs::remove_file(&path).ok();
     }
 
@@ -723,12 +723,19 @@ mod tests {
         let path = std::env::temp_dir().join(format!("cs-har-{}.har", uuid::Uuid::new_v4()));
         {
             let mut writer = test_writer(path.clone(), 3);
-            writer.append_entry(&sample_entry("https://a.example/first")).unwrap();
+            writer
+                .append_entry(&sample_entry("https://a.example/first"))
+                .unwrap();
         }
         let mut writer = test_writer(path.clone(), 3);
-        writer.append_entry(&sample_entry("https://a.example/second")).unwrap();
+        writer
+            .append_entry(&sample_entry("https://a.example/second"))
+            .unwrap();
 
-        let entries = parse_log(&path)["log"]["entries"].as_array().unwrap().clone();
+        let entries = parse_log(&path)["log"]["entries"]
+            .as_array()
+            .unwrap()
+            .clone();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0]["request"]["url"], "https://a.example/first");
         assert_eq!(entries[1]["request"]["url"], "https://a.example/second");
@@ -741,15 +748,24 @@ mod tests {
         // 模拟上次会话写了一半崩溃: entries 未闭合, 最后一条 json 残缺.
         fs::write(
             &path,
-            format!("{}{}broken", har_header(), sample_entry("https://a.example/old")),
+            format!(
+                "{}{}broken",
+                har_header(),
+                sample_entry("https://a.example/old")
+            ),
         )
         .unwrap();
 
         let mut writer = test_writer(path.clone(), 3);
-        writer.append_entry(&sample_entry("https://a.example/new")).unwrap();
+        writer
+            .append_entry(&sample_entry("https://a.example/new"))
+            .unwrap();
 
         // 新 entry 写入主文件.
-        let entries = parse_log(&path)["log"]["entries"].as_array().unwrap().clone();
+        let entries = parse_log(&path)["log"]["entries"]
+            .as_array()
+            .unwrap()
+            .clone();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["request"]["url"], "https://a.example/new");
         // 损坏会话原样轮转保留, 内容可人工检索.

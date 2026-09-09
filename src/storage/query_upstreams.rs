@@ -2,9 +2,7 @@ use crate::core::models::{
     ApiKeyAuthScheme, BalanceProvider, ErrorRetryPolicy, UnknownModalityPolicy, Upstream,
     UpstreamKind, WireApi,
 };
-use crate::core::upstream_transfer::{
-    UpstreamExport, UpstreamExportItem, UPSTREAM_EXPORT_VERSION,
-};
+use crate::core::upstream_transfer::{UPSTREAM_EXPORT_VERSION, UpstreamExport, UpstreamExportItem};
 use crate::storage::Store;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
@@ -356,12 +354,7 @@ impl Store {
             .await?;
             let credentials: BTreeMap<String, String> = rows
                 .into_iter()
-                .map(|row| {
-                    (
-                        row.get::<String, _>("name"),
-                        row.get::<String, _>("value"),
-                    )
-                })
+                .map(|row| (row.get::<String, _>("name"), row.get::<String, _>("value")))
                 .collect();
             items.push(UpstreamExportItem {
                 upstream,
@@ -758,12 +751,10 @@ mod tests {
         assert_eq!(batch.skipped_peer_nodes, 1);
         let json = batch.export.to_json().unwrap();
 
-        let target = Store::open(
-            std::env::temp_dir().join(format!(
-                "codex-switch-upstream-batch-target-{}.sqlite",
-                uuid::Uuid::new_v4()
-            )),
-        )
+        let target = Store::open(std::env::temp_dir().join(format!(
+            "codex-switch-upstream-batch-target-{}.sqlite",
+            uuid::Uuid::new_v4()
+        )))
         .await
         .unwrap();
         let payloads = UpstreamExport::from_json(&json).unwrap();

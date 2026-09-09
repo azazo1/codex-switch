@@ -41,9 +41,7 @@ fn main() -> eframe::Result<()> {
         let data_dir = app::data_dir()?;
         app::single_instance::acquire(&data_dir).await
     }) {
-        Ok(app::single_instance::AcquireOutcome::Primary(listener)) => {
-            Some(Arc::new(listener))
-        }
+        Ok(app::single_instance::AcquireOutcome::Primary(listener)) => Some(Arc::new(listener)),
         Ok(app::single_instance::AcquireOutcome::Duplicate) => {
             tracing::info!("another codex switch instance is running, exiting");
             return Ok(());

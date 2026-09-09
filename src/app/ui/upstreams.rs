@@ -270,7 +270,9 @@ impl CodexSwitchApp {
             .resizable(true)
             .default_width(520.0)
             .show(ctx, |ui| {
-                ui.label("粘贴导出的上游 JSON, 单条和批量导出的格式相同, 导入后会生成新的上游记录.");
+                ui.label(
+                    "粘贴导出的上游 JSON, 单条和批量导出的格式相同, 导入后会生成新的上游记录.",
+                );
                 egui::ScrollArea::vertical()
                     .id_salt("upstream_import_text_scroll")
                     .max_height(280.0)

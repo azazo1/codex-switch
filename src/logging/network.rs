@@ -136,12 +136,12 @@ impl RequestBuilder {
 
     pub(crate) fn send(self) -> SendFuture {
         match self.inner.build() {
-        Ok(request) => {
-            let pending = PendingHar::from_request(&request);
-            SendFuture {
-                inner: Box::pin(drive(self.client, request, pending)),
+            Ok(request) => {
+                let pending = PendingHar::from_request(&request);
+                SendFuture {
+                    inner: Box::pin(drive(self.client, request, pending)),
+                }
             }
-        }
             Err(err) => SendFuture {
                 inner: Box::pin(std::future::ready(Err(err))),
             },
@@ -290,7 +290,8 @@ mod tests {
             .lock()
             .unwrap_or_else(|err| err.into_inner());
         // 仅本测试会触发 HAR 全局写入, 用唯一路径隔离.
-        let har_path = std::env::temp_dir().join(format!("cs-har-e2e-{}.har", uuid::Uuid::new_v4()));
+        let har_path =
+            std::env::temp_dir().join(format!("cs-har-e2e-{}.har", uuid::Uuid::new_v4()));
         // SAFETY: 测试进程内单线程设置, 且只有本测试读取该路径写入 HAR.
         unsafe {
             std::env::set_var("CODEX_SWITCH_LOG_FILE", &har_path);

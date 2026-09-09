@@ -111,9 +111,7 @@ fn cost_hover_text(
         (CurrencyDisplayMode::Cny, Some(rate)) => {
             format!("汇率 1 USD = {:.4} CNY, 点击切换为美元显示", rate.rate)
         }
-        (CurrencyDisplayMode::Cny, None) => {
-            "尚未获取汇率, 暂时显示美元, 点击切换显示".to_string()
-        }
+        (CurrencyDisplayMode::Cny, None) => "尚未获取汇率, 暂时显示美元, 点击切换显示".to_string(),
     }
 }
 
@@ -173,9 +171,7 @@ fn human_tokens(value: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        CurrencyDisplayMode, TokenDisplayMode, format_cost, format_tokens, format_usd,
-    };
+    use super::{CurrencyDisplayMode, TokenDisplayMode, format_cost, format_tokens, format_usd};
     use crate::pricing::fx::UsdCnyRate;
 
     #[test]
@@ -194,7 +190,10 @@ mod tests {
 
     #[test]
     fn formats_cost_by_currency_mode() {
-        let rate = Some(UsdCnyRate { rate: 7.2, fetched_at: 0 });
+        let rate = Some(UsdCnyRate {
+            rate: 7.2,
+            fetched_at: 0,
+        });
         assert_eq!(format_cost(1.5, CurrencyDisplayMode::Usd, rate), "$1.50");
         assert_eq!(format_cost(1.5, CurrencyDisplayMode::Cny, rate), "¥10.80");
         assert_eq!(format_cost(1.5, CurrencyDisplayMode::Cny, None), "$1.50");

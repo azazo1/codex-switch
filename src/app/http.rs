@@ -34,7 +34,10 @@ mod tests {
     fn user_agent_follows_build_version() {
         assert_eq!(
             user_agent(),
-            format!("codex-switch/{}", super::super::build_info::display_version())
+            format!(
+                "codex-switch/{}",
+                super::super::build_info::display_version()
+            )
         );
     }
 }

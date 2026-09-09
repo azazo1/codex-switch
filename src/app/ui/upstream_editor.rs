@@ -509,7 +509,9 @@ impl UpstreamEditor {
             .balance_provider
         {
             ui.label(format!("识别为: {}", provider.as_str()))
-                .on_hover_text("依据 Base URL 判断的余额 provider, 可手动选择覆盖或点上方按钮写入.");
+                .on_hover_text(
+                    "依据 Base URL 判断的余额 provider, 可手动选择覆盖或点上方按钮写入.",
+                );
         }
         balance_alert_form(ui, &mut self.balance_alert);
         ui.separator();

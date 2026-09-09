@@ -114,10 +114,8 @@ fn move_file(from: &Path, to: &Path) -> anyhow::Result<()> {
     if std::fs::rename(from, to).is_ok() {
         return Ok(());
     }
-    std::fs::copy(from, to)
-        .with_context(|| format!("failed to copy {}", from.display()))?;
-    std::fs::remove_file(from)
-        .with_context(|| format!("failed to remove {}", from.display()))?;
+    std::fs::copy(from, to).with_context(|| format!("failed to copy {}", from.display()))?;
+    std::fs::remove_file(from).with_context(|| format!("failed to remove {}", from.display()))?;
     Ok(())
 }
 

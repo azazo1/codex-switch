@@ -460,8 +460,16 @@ mod tests {
             opencode.base_url_hint("https://opencode.ai/a"),
             Some("https://opencode.ai/zen/go/v1")
         );
-        assert!(opencode.base_url_hint("https://opencode.ai/zen/go/v1").is_none());
-        assert!(opencode.base_url_hint("https://opencode.ai/zen/v1").is_none());
+        assert!(
+            opencode
+                .base_url_hint("https://opencode.ai/zen/go/v1")
+                .is_none()
+        );
+        assert!(
+            opencode
+                .base_url_hint("https://opencode.ai/zen/v1")
+                .is_none()
+        );
     }
 
     #[test]
@@ -489,11 +497,15 @@ mod tests {
 
         // 识别结果携带余额 provider, 供表单预填.
         assert_eq!(
-            detect_upstream("https://api.deepseek.com").suggestion.balance_provider,
+            detect_upstream("https://api.deepseek.com")
+                .suggestion
+                .balance_provider,
             Some(BalanceProvider::DeepSeek)
         );
         assert_eq!(
-            detect_upstream("https://open.bigmodel.cn").suggestion.balance_provider,
+            detect_upstream("https://open.bigmodel.cn")
+                .suggestion
+                .balance_provider,
             Some(BalanceProvider::Zhipu)
         );
         // 中转站没有协议建议, 但能识别余额 provider.

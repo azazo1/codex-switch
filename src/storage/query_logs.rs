@@ -61,12 +61,9 @@ impl Store {
             .upstream_price_multiplier(log.upstream_id.as_deref())
             .await?;
         let estimated_cost_usd = match log.model.as_deref() {
-            Some(model) => self
-                .find_model_price(model)
-                .await?
-                .map(|price| {
-                    pricing::estimate_usage_cost(&log.usage, &price).total_usd() * price_multiplier
-                }),
+            Some(model) => self.find_model_price(model).await?.map(|price| {
+                pricing::estimate_usage_cost(&log.usage, &price).total_usd() * price_multiplier
+            }),
             None => None,
         };
 

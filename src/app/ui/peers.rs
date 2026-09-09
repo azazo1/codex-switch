@@ -256,14 +256,10 @@ impl CodexSwitchApp {
     }
 
     fn apply_start_peer_on_launch(&mut self) {
-        if let Err(err) = self.runtime.block_on(
-            self.state
-                .store
-                .set_setting(
-                    crate::app::SETTING_START_PEER_ON_LAUNCH,
-                    &bool_setting(self.start_peer_on_launch),
-                ),
-        ) {
+        if let Err(err) = self.runtime.block_on(self.state.store.set_setting(
+            crate::app::SETTING_START_PEER_ON_LAUNCH,
+            &bool_setting(self.start_peer_on_launch),
+        )) {
             self.status = format!("保存启动节点监听设置失败: {err}");
             return;
         }

@@ -256,11 +256,16 @@ pub(crate) fn init_tracing(config: LogRotationConfig) -> anyhow::Result<()> {
     let proxy_log_path = proxy_log_file_path()?;
     let main_state = build_writer_state(&log_path, config.size_mb, config.max_files)?;
     let proxy_state = build_writer_state(&proxy_log_path, config.size_mb, config.max_files)?;
-    let main_layer = build_file_layer(main_state.non_blocking.clone(), main_log_filter(config.enabled))
-        .context("failed to create main log filter")?;
-    let proxy_layer =
-        build_file_layer(proxy_state.non_blocking.clone(), proxy_log_filter(config.enabled))
-            .context("failed to create proxy log filter")?;
+    let main_layer = build_file_layer(
+        main_state.non_blocking.clone(),
+        main_log_filter(config.enabled),
+    )
+    .context("failed to create main log filter")?;
+    let proxy_layer = build_file_layer(
+        proxy_state.non_blocking.clone(),
+        proxy_log_filter(config.enabled),
+    )
+    .context("failed to create proxy log filter")?;
     let (main_layer, main_handle): (
         reload::Layer<FileLayer, Registry>,
         reload::Handle<FileLayer, Registry>,
@@ -270,8 +275,7 @@ pub(crate) fn init_tracing(config: LogRotationConfig) -> anyhow::Result<()> {
         reload::Handle<FileLayer, Registry>,
     ) = reload::Layer::new(proxy_layer);
 
-    let subscriber =
-        tracing_subscriber::registry().with(main_layer.and_then(proxy_layer));
+    let subscriber = tracing_subscriber::registry().with(main_layer.and_then(proxy_layer));
     #[cfg(not(target_os = "windows"))]
     let subscriber = {
         let stderr = fmt::layer()
@@ -459,7 +463,10 @@ fn build_writer_state(
 ) -> anyhow::Result<FileWriterState> {
     let writer = build_rolling_writer(log_path, size_mb, max_files)?;
     let (non_blocking, guard) = tracing_appender::non_blocking(writer);
-    Ok(FileWriterState { non_blocking, guard })
+    Ok(FileWriterState {
+        non_blocking,
+        guard,
+    })
 }
 
 fn replace_writer_state(
@@ -529,9 +536,13 @@ fn init_file_tracing(
 ) -> anyhow::Result<()> {
     let log_writer = RollingLogWriter::new_append_only(log_path, !append)
         .with_context(|| format!("failed to open log file: {}", log_path.display()))?;
-    let proxy_writer = RollingLogWriter::new_append_only(proxy_log_path, !append).with_context(
-        || format!("failed to open proxy log file: {}", proxy_log_path.display()),
-    )?;
+    let proxy_writer =
+        RollingLogWriter::new_append_only(proxy_log_path, !append).with_context(|| {
+            format!(
+                "failed to open proxy log file: {}",
+                proxy_log_path.display()
+            )
+        })?;
     let proxy_filter =
         EnvFilter::try_new(PROXY_FILTER_DEBUG).context("failed to create proxy env log filter")?;
     let main_filter = env_filter
@@ -709,7 +720,9 @@ mod tests {
 
     #[test]
     fn body_logging_flag_can_be_toggled() {
-        let _guard = BODY_FLAG_TEST_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let _guard = BODY_FLAG_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         set_body_logging_enabled(true);
         assert!(body_logging_enabled());
         set_body_logging_enabled(false);

@@ -8,13 +8,13 @@ mod download;
 mod install;
 mod release;
 
-use crate::app::{http, AppEvents, AppState, data_dir};
+use crate::app::{AppEvents, AppState, data_dir, http};
 use crate::storage::Store;
 use anyhow::Context;
 use release::ReleaseInfo;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const AUTO_CHECK_DELAY: Duration = Duration::from_secs(5);
@@ -120,7 +120,10 @@ impl UpdateRuntime {
     }
 
     pub(crate) fn state(&self) -> UpdateState {
-        self.state.lock().map(|state| state.clone()).unwrap_or(UpdateState::Idle)
+        self.state
+            .lock()
+            .map(|state| state.clone())
+            .unwrap_or(UpdateState::Idle)
     }
 
     pub(crate) fn auto_check_value(&self) -> bool {
@@ -210,7 +213,11 @@ impl UpdateRuntime {
     }
 
     async fn skipped_version(&self) -> Option<String> {
-        self.store.get_setting(SKIPPED_VERSION_SETTING).await.ok().flatten()
+        self.store
+            .get_setting(SKIPPED_VERSION_SETTING)
+            .await
+            .ok()
+            .flatten()
     }
 
     /// 执行一次检查, 返回 `Some(tag)` 表示有比当前构建更新的稳定版本.
@@ -239,12 +246,8 @@ impl UpdateRuntime {
     ) -> anyhow::Result<install::InstallOutcome> {
         let dest_dir = update_dir()?;
         let client = http::build_client(None)?;
-        let expected = download::fetch_checksum_for(
-            &client,
-            &info.checksums,
-            &info.archive.name,
-        )
-        .await?;
+        let expected =
+            download::fetch_checksum_for(&client, &info.checksums, &info.archive.name).await?;
         let progress_runtime = self.clone();
         let generation_counter = Arc::clone(&self.download_generation);
         let archive = download::download_archive(

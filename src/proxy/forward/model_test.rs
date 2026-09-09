@@ -76,12 +76,11 @@ impl ModelTestRawTrace {
                     .collect(),
             )
         };
-        let status_text = reqwest::StatusCode::from_u16(
-            self.response_status.clamp(0, u16::MAX as i64) as u16,
-        )
-        .ok()
-        .and_then(|status| status.canonical_reason())
-        .unwrap_or_default();
+        let status_text =
+            reqwest::StatusCode::from_u16(self.response_status.clamp(0, u16::MAX as i64) as u16)
+                .ok()
+                .and_then(|status| status.canonical_reason())
+                .unwrap_or_default();
         let mut entry = json!({
             "startedDateTime": self.started_at.with_timezone(&chrono::Local).to_rfc3339(),
             "time": duration_ms,
@@ -241,8 +240,10 @@ pub async fn run_direct_test(
 ) -> ModelTestOutcome {
     let started = Instant::now();
     let started_at = Utc::now();
-    let mut outcome = send_direct(state, upstream, api_key, &params, started, started_at, &on_delta)
-        .await;
+    let mut outcome = send_direct(
+        state, upstream, api_key, &params, started, started_at, &on_delta,
+    )
+    .await;
     outcome.estimated_cost_usd =
         estimate_outcome_cost(state, &params.model, &outcome.usage, Some(upstream)).await;
     outcome.model = params.model.clone();
@@ -581,12 +582,16 @@ impl TestResponse {
 
     fn response_headers(&self) -> Vec<(String, String)> {
         match self {
-            Self::Http(response) => response.headers().iter().map(
-                |(name, value)| (name.to_string(), value.to_str().unwrap_or("").to_string()),
-            ).collect(),
-            Self::Peer(response) => response.headers.iter().map(
-                |(name, value)| (name.to_string(), value.to_str().unwrap_or("").to_string()),
-            ).collect(),
+            Self::Http(response) => response
+                .headers()
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_str().unwrap_or("").to_string()))
+                .collect(),
+            Self::Peer(response) => response
+                .headers
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_str().unwrap_or("").to_string()))
+                .collect(),
         }
     }
 
@@ -1140,8 +1145,10 @@ mod tests {
 
     #[test]
     fn builds_anthropic_body_without_reasoning() {
-        let body =
-            build_request_body(WireApi::AnthropicMessages, &params(WireApi::AnthropicMessages));
+        let body = build_request_body(
+            WireApi::AnthropicMessages,
+            &params(WireApi::AnthropicMessages),
+        );
         assert_eq!(body["max_tokens"], 64);
         assert_eq!(body["messages"][0]["content"], "ping");
         assert!(body.get("reasoning_effort").is_none());
@@ -1179,8 +1186,7 @@ mod tests {
             vec![(false, "yo".to_string())]
         );
 
-        let anthropic_thinking =
-            json!({"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"..."}});
+        let anthropic_thinking = json!({"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"..."}});
         assert_eq!(
             sse_event_parts(&anthropic_thinking),
             vec![(true, "...".to_string())]
@@ -1210,7 +1216,10 @@ mod tests {
             {"type":"thinking","thinking":"deep"},
             {"type":"text","text":"c"}
         ]});
-        assert_eq!(json_parts(&anthropic), ("c".to_string(), "deep".to_string()));
+        assert_eq!(
+            json_parts(&anthropic),
+            ("c".to_string(), "deep".to_string())
+        );
     }
 
     #[test]

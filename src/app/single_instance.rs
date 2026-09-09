@@ -162,55 +162,52 @@ async fn accept_loop(
         Endpoint::Unix {
             listener,
             _socket_file,
-        } => {
-            loop {
-                tokio::select! {
-                    _ = &mut shutdown_rx => break,
-                    accepted = listener.accept() => match accepted {
-                        Ok((mut stream, _)) => {
-                            handle_connection(&mut stream, &on_message).await;
-                        }
-                        Err(err) => {
-                            tracing::debug!(error = %err, "single instance listener closed");
-                            break;
-                        }
-                    },
-                }
+        } => loop {
+            tokio::select! {
+                _ = &mut shutdown_rx => break,
+                accepted = listener.accept() => match accepted {
+                    Ok((mut stream, _)) => {
+                        handle_connection(&mut stream, &on_message).await;
+                    }
+                    Err(err) => {
+                        tracing::debug!(error = %err, "single instance listener closed");
+                        break;
+                    }
+                },
             }
-        }
+        },
         #[cfg(windows)]
-        Endpoint::Windows { mut server, pipe_name } => {
-            loop {
-                tokio::select! {
-                    _ = &mut shutdown_rx => break,
-                    connected = server.connect() => {
-                        if let Err(err) = connected {
-                            tracing::debug!(error = %err, "single instance pipe closed");
+        Endpoint::Windows {
+            mut server,
+            pipe_name,
+        } => loop {
+            tokio::select! {
+                _ = &mut shutdown_rx => break,
+                connected = server.connect() => {
+                    if let Err(err) = connected {
+                        tracing::debug!(error = %err, "single instance pipe closed");
+                        break;
+                    }
+                    let mut client = server;
+                    server = match tokio::net::windows::named_pipe::ServerOptions::new()
+                        .create(&pipe_name)
+                    {
+                        Ok(server) => server,
+                        Err(err) => {
+                            tracing::warn!(error = %err, "failed to recreate single instance pipe");
                             break;
                         }
-                        let mut client = server;
-                        server = match tokio::net::windows::named_pipe::ServerOptions::new()
-                            .create(&pipe_name)
-                        {
-                            Ok(server) => server,
-                            Err(err) => {
-                                tracing::warn!(error = %err, "failed to recreate single instance pipe");
-                                break;
-                            }
-                        };
-                        handle_connection(&mut client, &on_message).await;
-                    },
-                }
+                    };
+                    handle_connection(&mut client, &on_message).await;
+                },
             }
-        }
+        },
     }
     tracing::info!("single instance listener stopped");
 }
 
-async fn handle_connection<S>(
-    stream: &mut S,
-    on_message: &Arc<dyn Fn(String) + Send + Sync>,
-) where
+async fn handle_connection<S>(stream: &mut S, on_message: &Arc<dyn Fn(String) + Send + Sync>)
+where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     match tokio::time::timeout(CONNECT_TIMEOUT, read_message(stream)).await {
@@ -278,10 +275,7 @@ async fn notify_existing_windows(pipe_name: &str) -> bool {
 
 /// 二次启动转发的启动参数, 当前仅用于日志与审计.
 fn launch_arguments() -> String {
-    let mut line = std::env::args()
-        .skip(1)
-        .collect::<Vec<_>>()
-        .join(" ");
+    let mut line = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
     line.push('\n');
     line
 }

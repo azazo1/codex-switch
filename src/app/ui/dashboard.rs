@@ -86,7 +86,10 @@ impl CodexSwitchApp {
                 }
                 UpdateState::Available(info) => {
                     if ui
-                        .link(egui::RichText::new(format!("新版本 {} 可用, 点击查看", info.tag)).strong())
+                        .link(
+                            egui::RichText::new(format!("新版本 {} 可用, 点击查看", info.tag))
+                                .strong(),
+                        )
                         .clicked()
                     {
                         self.update_window_open = true;
@@ -175,8 +178,7 @@ impl CodexSwitchApp {
                     "获取于 {} 前",
                     format_age_text(rate.age_seconds(chrono::Utc::now().timestamp()))
                 )),
-                None => response
-                    .on_hover_text("尚未获取汇率, 点击\"获取模型信息\"按钮获取"),
+                None => response.on_hover_text("尚未获取汇率, 点击\"获取模型信息\"按钮获取"),
             }
         });
         ui.separator();
@@ -386,7 +388,10 @@ impl CodexSwitchApp {
             self.status = format!("保存启动隐藏设置失败: {err}");
             return;
         }
-        tracing::info!(enabled = self.hide_on_launch, "hide on launch setting changed");
+        tracing::info!(
+            enabled = self.hide_on_launch,
+            "hide on launch setting changed"
+        );
         self.status = if self.hide_on_launch {
             "已开启启动时隐藏主窗口, 下次启动生效".to_string()
         } else {

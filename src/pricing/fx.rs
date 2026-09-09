@@ -45,7 +45,11 @@ pub async fn fetch_usd_cny_rate(state: &AppState) -> anyhow::Result<UsdCnyRate> 
         fetched_at: chrono::Utc::now().timestamp(),
     };
     persist_rate(state, &record).await?;
-    tracing::info!(rate, elapsed_ms = started.elapsed().as_millis() as u64, "USD/CNY exchange rate fetched");
+    tracing::info!(
+        rate,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "USD/CNY exchange rate fetched"
+    );
     Ok(record)
 }
 
@@ -57,7 +61,11 @@ pub async fn load_usd_cny_rate(state: &AppState) -> anyhow::Result<Option<UsdCny
     let Some(fetched_at) = state.store.get_setting(RATE_FETCHED_AT_SETTING_KEY).await? else {
         return Ok(None);
     };
-    let rate = rate.trim().parse::<f64>().ok().filter(|rate| is_valid_rate(*rate));
+    let rate = rate
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|rate| is_valid_rate(*rate));
     let fetched_at = fetched_at.trim().parse::<i64>().ok();
     match (rate, fetched_at) {
         (Some(rate), Some(fetched_at)) => Ok(Some(UsdCnyRate { rate, fetched_at })),
@@ -169,7 +177,10 @@ mod tests {
 
     #[test]
     fn detects_stale_cache() {
-        let record = UsdCnyRate { rate: 7.2, fetched_at: 1_000 };
+        let record = UsdCnyRate {
+            rate: 7.2,
+            fetched_at: 1_000,
+        };
         assert!(!record.is_stale(1_000 + 86_399, 86_400));
         assert!(record.is_stale(1_000 + 86_400, 86_400));
     }

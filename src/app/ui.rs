@@ -284,9 +284,7 @@ impl LogFilterState {
         let source = match self.source {
             LogSourceFilter::All => None,
             LogSourceFilter::Proxy => Some(crate::core::models::RequestLogSource::Proxy),
-            LogSourceFilter::TestBench => {
-                Some(crate::core::models::RequestLogSource::TestBench)
-            }
+            LogSourceFilter::TestBench => Some(crate::core::models::RequestLogSource::TestBench),
         };
         let started_at = self.started_at.to_utc("开始时间")?;
         let ended_at = self.ended_at.to_utc("结束时间")?;
@@ -655,13 +653,21 @@ impl CodexSwitchApp {
             .flatten();
         #[cfg(target_os = "macos")]
         let dock_icon_follows_window = runtime
-            .block_on(state.store.get_setting(super::SETTING_DOCK_ICON_FOLLOWS_WINDOW))
+            .block_on(
+                state
+                    .store
+                    .get_setting(super::SETTING_DOCK_ICON_FOLLOWS_WINDOW),
+            )
             .ok()
             .flatten()
             .as_deref()
             != Some("false");
         let start_server_on_launch = runtime
-            .block_on(state.store.get_setting(super::SETTING_START_SERVER_ON_LAUNCH))
+            .block_on(
+                state
+                    .store
+                    .get_setting(super::SETTING_START_SERVER_ON_LAUNCH),
+            )
             .ok()
             .flatten()
             .as_deref()
@@ -1184,13 +1190,15 @@ impl CodexSwitchApp {
                             }
                         }
                         Err(err) => {
-                            self.status = format!(
-                                "模型信息获取失败, 将使用已有缓存: {err}{fx_suffix}"
-                            );
+                            self.status =
+                                format!("模型信息获取失败, 将使用已有缓存: {err}{fx_suffix}");
                         }
                     }
                 }
-                UiTaskEvent::ModelTestModelsFetched { upstream_id, result } => {
+                UiTaskEvent::ModelTestModelsFetched {
+                    upstream_id,
+                    result,
+                } => {
                     self.handle_model_test_models_fetched(upstream_id, result);
                 }
                 UiTaskEvent::ModelTestDelta { kind, part } => {
@@ -1550,10 +1558,9 @@ impl CodexSwitchApp {
         let state = self.state.clone();
         let tx = self.task_tx.clone();
         self.runtime.spawn(async move {
-            let (price, fx) = tokio::join!(
-                pricing::fetch_price_cache(&state),
-                async { pricing::fx::fetch_usd_cny_rate(&state).await.map(Some) }
-            );
+            let (price, fx) = tokio::join!(pricing::fetch_price_cache(&state), async {
+                pricing::fx::fetch_usd_cny_rate(&state).await.map(Some)
+            });
             let _ = tx.send(UiTaskEvent::PriceCacheFetched { price, fx });
         });
     }
@@ -1815,10 +1822,12 @@ impl CodexSwitchApp {
             UpdateState::Available(info) => {
                 ui.label(format!("最新版本: {}", info.tag));
                 ui.separator();
-                egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
-                    ui.set_min_width(360.0);
-                    ui.label(&info.body);
-                });
+                egui::ScrollArea::vertical()
+                    .max_height(240.0)
+                    .show(ui, |ui| {
+                        ui.set_min_width(360.0);
+                        ui.label(&info.body);
+                    });
                 ui.separator();
                 ui.horizontal(|ui| {
                     if ui.button("立即更新").clicked() {
@@ -1827,8 +1836,7 @@ impl CodexSwitchApp {
                     }
                     if ui.button("跳过此版本").clicked() {
                         let tag = info.tag.clone();
-                        self.runtime
-                            .block_on(self.state.update.skip_version(&tag));
+                        self.runtime.block_on(self.state.update.skip_version(&tag));
                         self.update_window_open = false;
                         self.status = format!("已跳过版本 {tag}");
                     }
@@ -1892,10 +1900,7 @@ impl CodexSwitchApp {
         }
         ui.separator();
         let mut auto_check = self.state.update.auto_check_value();
-        if ui
-            .checkbox(&mut auto_check, "启动时自动检查更新")
-            .changed()
-        {
+        if ui.checkbox(&mut auto_check, "启动时自动检查更新").changed() {
             self.runtime
                 .block_on(self.state.update.set_auto_check(auto_check));
             if let Some(tray) = &self.tray {
