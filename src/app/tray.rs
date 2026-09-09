@@ -14,8 +14,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 #[cfg(target_os = "windows")]
 use std::time::Duration;
+use tray_icon::menu::CheckMenuItem;
 #[cfg(not(target_os = "windows"))]
-use tray_icon::menu::{CheckMenuItem, IsMenuItem, Submenu};
+use tray_icon::menu::{IsMenuItem, Submenu};
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
