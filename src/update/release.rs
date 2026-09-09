@@ -56,9 +56,11 @@ pub(crate) async fn fetch_latest(client: &HttpClient) -> anyhow::Result<ReleaseI
         .await
         .context("failed to decode latest release response")?;
 
+    // 发布资产名使用剥离 v 前缀的版本号 (见 build-version.sh 的 artifact 输出).
+    let tag_version = release.tag_name.trim_start_matches('v');
     let platform = platform_id()?;
     let arch = arch_id()?;
-    let archive_name = archive_name_for(&release.tag_name, platform, arch);
+    let archive_name = archive_name_for(tag_version, platform, arch);
     let archive = select_asset(&release.assets, &archive_name)?;
     let checksums = select_asset(&release.assets, "SHA256SUMS")?;
 
@@ -173,17 +175,18 @@ mod tests {
 
     #[test]
     fn archive_names_follow_ci_layout() {
+        // CI 产物名不带 v 前缀, 例如 codex-switch-0.14.0-macos-aarch64.dmg.
         assert_eq!(
-            archive_name_for("v0.14.0", "linux", "x86_64"),
-            "codex-switch-v0.14.0-linux-x86_64.tar.gz"
+            archive_name_for("0.14.0", "linux", "x86_64"),
+            "codex-switch-0.14.0-linux-x86_64.tar.gz"
         );
         assert_eq!(
-            archive_name_for("v0.14.0", "windows", "aarch64"),
-            "codex-switch-v0.14.0-windows-aarch64.zip"
+            archive_name_for("0.14.0", "windows", "aarch64"),
+            "codex-switch-0.14.0-windows-aarch64.zip"
         );
         assert_eq!(
-            archive_name_for("v0.14.0", "macos", "aarch64"),
-            "codex-switch-v0.14.0-macos-aarch64.dmg"
+            archive_name_for("0.14.0", "macos", "aarch64"),
+            "codex-switch-0.14.0-macos-aarch64.dmg"
         );
     }
 
