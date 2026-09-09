@@ -32,6 +32,7 @@ pub struct AppState {
     pub live_requests: LiveRequestStore,
     pub cache_keepalive: CacheKeepaliveRuntime,
     pub peers: PeerRuntime,
+    pub update: crate::update::UpdateRuntime,
 }
 
 #[derive(Clone, Default)]
@@ -41,6 +42,7 @@ pub struct AppEvents {
     cache_keepalive_version: Arc<AtomicU64>,
     balance_snapshot_version: Arc<AtomicU64>,
     peer_version: Arc<AtomicU64>,
+    update_version: Arc<AtomicU64>,
     repaint_requester: Arc<Mutex<Option<RepaintRequester>>>,
 }
 
@@ -91,6 +93,11 @@ impl AppEvents {
         self.peer_version.load(Ordering::Relaxed)
     }
 
+    pub fn bump_update(&self) {
+        self.update_version.fetch_add(1, Ordering::Relaxed);
+        self.request_repaint();
+    }
+
     pub fn set_repaint_requester<F>(&self, repaint: F)
     where
         F: Fn() + Send + Sync + 'static,
@@ -132,6 +139,8 @@ impl AppState {
             events.clone(),
         );
         let peers = PeerRuntime::new(&store).await?;
+        let update =
+            crate::update::UpdateRuntime::new(store.clone(), http.clone(), events.clone()).await;
         let state = Self {
             store,
             model_capabilities,
@@ -143,9 +152,11 @@ impl AppState {
             live_requests: LiveRequestStore::default(),
             cache_keepalive,
             peers,
+            update,
         };
         state.cache_keepalive.start();
         crate::balance_alert::start(state.clone());
+        crate::update::start(&state);
         Ok(state)
     }
 

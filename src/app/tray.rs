@@ -23,6 +23,8 @@ use crate::live::LiveRequestSnapshot;
 
 const OPEN_MENU_ID: &str = "codex-switch-open-window";
 const TOGGLE_SERVICE_MENU_ID: &str = "codex-switch-toggle-service";
+const CHECK_UPDATES_MENU_ID: &str = "codex-switch-check-updates";
+const AUTO_CHECK_MENU_ID: &str = "codex-switch-auto-check";
 const QUIT_MENU_ID: &str = "codex-switch-quit";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -241,6 +243,8 @@ impl TrayStats {
 pub enum TrayCommand {
     ShowWindow,
     ToggleService,
+    CheckUpdates,
+    ToggleAutoCheck,
     Quit,
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     ThemeChanged(bool),
@@ -253,6 +257,7 @@ pub enum TrayCommand {
 pub struct TrayController {
     tray_icon: TrayIcon,
     toggle_service_item: MenuItem,
+    auto_check_item: CheckMenuItem,
     #[cfg(not(target_os = "windows"))]
     first_badge_items: Vec<(TrayBadgeMetric, CheckMenuItem)>,
     #[cfg(not(target_os = "windows"))]
@@ -271,6 +276,7 @@ pub struct TrayController {
 impl TrayController {
     pub fn new<F>(
         server_running: bool,
+        auto_check_updates: bool,
         badge_metric: TrayBadgeMetric,
         secondary_badge_metric: TrayBadgeMetric,
         egui_ctx: egui::Context,
@@ -280,6 +286,13 @@ impl TrayController {
         F: Fn(TrayCommand) + Send + Sync + 'static,
     {
         let send_command: Arc<dyn Fn(TrayCommand) + Send + Sync> = Arc::new(send_command);
+        let auto_check_item = CheckMenuItem::with_id(
+            MenuId::new(AUTO_CHECK_MENU_ID),
+            "启动时自动检查更新",
+            true,
+            auto_check_updates,
+            None,
+        );
         install_handlers(egui_ctx, Arc::clone(&send_command));
 
         let open_item = MenuItem::with_id(MenuId::new(OPEN_MENU_ID), "打开主界面", true, None);
@@ -289,6 +302,8 @@ impl TrayController {
             true,
             None,
         );
+        let check_updates_item =
+            MenuItem::with_id(MenuId::new(CHECK_UPDATES_MENU_ID), "检查更新", true, None);
         let quit_item = MenuItem::with_id(MenuId::new(QUIT_MENU_ID), "退出", true, None);
         let first_separator = PredefinedMenuItem::separator();
         let second_separator = PredefinedMenuItem::separator();
@@ -318,6 +333,8 @@ impl TrayController {
         menu.append(&first_separator)?;
         menu.append(&toggle_service_item)?;
         menu.append(&second_separator)?;
+        menu.append(&check_updates_item)?;
+        menu.append(&auto_check_item)?;
         #[cfg(not(target_os = "windows"))]
         menu.append(&first_title_submenu)?;
         #[cfg(not(target_os = "windows"))]
@@ -354,6 +371,7 @@ impl TrayController {
         Ok(Self {
             tray_icon,
             toggle_service_item,
+            auto_check_item,
             #[cfg(not(target_os = "windows"))]
             first_badge_items,
             #[cfg(not(target_os = "windows"))]
@@ -373,6 +391,11 @@ impl TrayController {
     pub fn set_server_running(&self, running: bool) {
         self.toggle_service_item
             .set_text(service_menu_text(running));
+    }
+
+    /// 同步托盘中 "启动时自动检查更新" 的勾选态.
+    pub fn set_auto_check_checked(&self, checked: bool) {
+        self.auto_check_item.set_checked(checked);
     }
 
     pub fn set_theme(&mut self, dark: bool) -> anyhow::Result<()> {
@@ -515,6 +538,8 @@ fn install_handlers(egui_ctx: egui::Context, send_command: Arc<dyn Fn(TrayComman
         let command = match event.id.as_ref() {
             OPEN_MENU_ID => Some(TrayCommand::ShowWindow),
             TOGGLE_SERVICE_MENU_ID => Some(TrayCommand::ToggleService),
+            CHECK_UPDATES_MENU_ID => Some(TrayCommand::CheckUpdates),
+            AUTO_CHECK_MENU_ID => Some(TrayCommand::ToggleAutoCheck),
             QUIT_MENU_ID => Some(TrayCommand::Quit),
             #[cfg(not(target_os = "windows"))]
             id => metric_from_menu_id(id).map(|(metric, secondary)| {

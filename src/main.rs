@@ -19,6 +19,7 @@ mod proxy;
 mod quota;
 mod scheduler;
 mod storage;
+mod update;
 mod usage;
 
 use std::sync::Arc;

@@ -2128,6 +2128,11 @@ mod tests {
         );
         let oauth_accounts = crate::oauth::OAuthAccountService::new(store.clone());
         let peers = crate::peer::PeerRuntime::new(&store).await.unwrap();
+        let update = crate::update::UpdateRuntime::new_for_tests(
+            store.clone(),
+            crate::logging::network::HttpClient::new(),
+            events.clone(),
+        );
         AppState {
             store,
             model_capabilities: Default::default(),
@@ -2139,6 +2144,7 @@ mod tests {
             live_requests: Default::default(),
             cache_keepalive,
             peers,
+            update,
         }
     }
 

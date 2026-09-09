@@ -17,6 +17,7 @@ use crate::pricing;
 use crate::proxy::{self, ServerHandle};
 use crate::quota as quota_api;
 use crate::storage::RequestLogFilter;
+use crate::update::UpdateState;
 use chrono::{Datelike, Local, TimeZone, Timelike, Utc};
 use data::load_view_data;
 use eframe::egui;
@@ -34,6 +35,26 @@ const REQUEST_LOG_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const HIDDEN_REPAINT_INTERVAL: Duration = Duration::from_secs(5);
 const CACHE_KEEPALIVE_VISIBLE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const TRAY_STATS_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+
+/// 字节数的人类可读展示, total 存在时输出 "x / y" 形式.
+fn format_bytes(received: u64, total: Option<u64>) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = 1024.0 * KB;
+    let pretty = |value: u64| {
+        let value = value as f64;
+        if value >= MB {
+            format!("{:.1} MB", value / MB)
+        } else if value >= KB {
+            format!("{:.1} KB", value / KB)
+        } else {
+            format!("{value} B")
+        }
+    };
+    match total {
+        Some(total) => format!("{} / {}", pretty(received), pretty(total)),
+        None => pretty(received),
+    }
+}
 
 fn model_modality_label(
     cache: &ModelCapabilityCache,
@@ -443,6 +464,7 @@ pub struct CodexSwitchApp {
     last_tray_stats_refresh_at: Instant,
     exit_requested: bool,
     exit_confirm_open: bool,
+    update_window_open: bool,
     delete_confirmation: Option<DeleteConfirmation>,
     log_filter_open: bool,
     log_cleanup_open: bool,
@@ -638,6 +660,7 @@ impl CodexSwitchApp {
             last_tray_stats_refresh_at: Instant::now(),
             exit_requested: false,
             exit_confirm_open: false,
+            update_window_open: false,
             delete_confirmation: None,
             log_filter_open: false,
             log_cleanup_open: false,
@@ -813,8 +836,10 @@ impl CodexSwitchApp {
             return;
         }
         let tx = self.task_tx.clone();
+        let auto_check_updates = self.state.update.auto_check_value();
         let tray = TrayController::new(
             self.server.is_some(),
+            auto_check_updates,
             self.tray_badge_metric,
             self.tray_badge_metric_secondary,
             ctx.clone(),
@@ -872,6 +897,24 @@ impl CodexSwitchApp {
             }
             TrayCommand::Quit => {
                 self.exit_app(ctx);
+            }
+            TrayCommand::CheckUpdates => {
+                self.state.update.check_now();
+                self.update_window_open = true;
+                self.status = "正在检查更新...".to_string();
+            }
+            TrayCommand::ToggleAutoCheck => {
+                let enabled = !self.state.update.auto_check_value();
+                self.runtime
+                    .block_on(self.state.update.set_auto_check(enabled));
+                if let Some(tray) = &self.tray {
+                    tray.set_auto_check_checked(enabled);
+                }
+                self.status = if enabled {
+                    "已开启启动时自动检查更新".to_string()
+                } else {
+                    "已关闭启动时自动检查更新".to_string()
+                };
             }
             TrayCommand::ThemeChanged(dark) => {
                 if let Some(tray) = &mut self.tray
@@ -1519,7 +1562,27 @@ impl eframe::App for CodexSwitchApp {
             ui.horizontal_wrapped(|ui| {
                 ui.label(&self.status);
                 ui.separator();
-                ui.weak(crate::app::display_version());
+                match self.state.update.state() {
+                    UpdateState::Available(info) => {
+                        if ui
+                            .link(egui::RichText::new(format!("新版本 {} 可用", info.tag)).strong())
+                            .clicked()
+                        {
+                            self.update_window_open = true;
+                        }
+                    }
+                    UpdateState::ReadyToRestart | UpdateState::DmgOpened => {
+                        if ui
+                            .link(egui::RichText::new("更新已就绪, 点击查看").strong())
+                            .clicked()
+                        {
+                            self.update_window_open = true;
+                        }
+                    }
+                    _ => {
+                        ui.weak(crate::app::display_version());
+                    }
+                }
             });
         });
 
@@ -1535,6 +1598,7 @@ impl eframe::App for CodexSwitchApp {
             Tab::Logs => self.logs_ui(ui),
         });
         self.delete_confirmation_window(&ctx);
+        self.update_window(&ctx);
     }
 }
 
@@ -1625,6 +1689,117 @@ impl CodexSwitchApp {
                 });
             });
         self.exit_confirm_open = open && self.exit_confirm_open;
+    }
+
+    fn update_window(&mut self, ctx: &egui::Context) {
+        if !self.update_window_open {
+            return;
+        }
+        let update_state = self.state.update.state();
+        let mut open = self.update_window_open;
+        egui::Window::new("软件更新")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .open(&mut open)
+            .show(ctx, |ui| {
+                self.update_window_body(ctx, ui, &update_state);
+            });
+        self.update_window_open = open;
+    }
+
+    fn update_window_body(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, state: &UpdateState) {
+        ui.label(format!("当前版本: {}", crate::app::display_version()));
+        match state {
+            UpdateState::Idle | UpdateState::UpToDate => {
+                ui.label("已是最新版本.");
+                if ui.button("重新检查").clicked() {
+                    self.state.update.check_now();
+                    self.status = "正在检查更新...".to_string();
+                }
+            }
+            UpdateState::Checking => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("正在检查更新...");
+                });
+            }
+            UpdateState::Available(info) => {
+                ui.label(format!("最新版本: {}", info.tag));
+                ui.separator();
+                egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
+                    ui.set_min_width(360.0);
+                    ui.label(&info.body);
+                });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("立即更新").clicked() {
+                        self.state.update.install_now();
+                        self.status = "正在下载更新...".to_string();
+                    }
+                    if ui.button("跳过此版本").clicked() {
+                        let tag = info.tag.clone();
+                        self.runtime
+                            .block_on(self.state.update.skip_version(&tag));
+                        self.update_window_open = false;
+                        self.status = format!("已跳过版本 {tag}");
+                    }
+                    ui.hyperlink_to("查看 Release 页", &info.html_url);
+                });
+            }
+            UpdateState::Downloading { received, total } => {
+                ui.label("正在下载更新...");
+                match total {
+                    Some(total) if *total > 0 => {
+                        let progress = *received as f32 / *total as f32;
+                        ui.add(
+                            egui::ProgressBar::new(progress)
+                                .show_percentage()
+                                .desired_width(360.0),
+                        );
+                        ui.label(format_bytes(*received, Some(*total)));
+                    }
+                    _ => {
+                        ui.spinner();
+                        ui.label(format!("已下载 {}", format_bytes(*received, None)));
+                    }
+                }
+            }
+            UpdateState::ReadyToRestart => {
+                ui.label("更新已安装完成, 重启应用后生效.");
+                if ui.button("重启应用").clicked() {
+                    match self.state.update.restart() {
+                        Ok(()) => self.exit_app(ctx),
+                        Err(err) => self.status = format!("重启失败: {err}"),
+                    }
+                }
+            }
+            UpdateState::DmgOpened => {
+                ui.label(
+                    "安装镜像已在系统中打开, 请将 Codex Switch 拖入 Applications 文件夹完成安装, \
+                     之后重新启动应用.",
+                );
+            }
+            UpdateState::Failed(message) => {
+                ui.colored_label(egui::Color32::RED, format!("更新失败: {message}"));
+                if ui.button("重新检查").clicked() {
+                    self.state.update.check_now();
+                    self.status = "正在检查更新...".to_string();
+                }
+            }
+        }
+        ui.separator();
+        let mut auto_check = self.state.update.auto_check_value();
+        if ui
+            .checkbox(&mut auto_check, "启动时自动检查更新")
+            .changed()
+        {
+            self.runtime
+                .block_on(self.state.update.set_auto_check(auto_check));
+            if let Some(tray) = &self.tray {
+                tray.set_auto_check_checked(auto_check);
+            }
+        }
     }
 }
 
