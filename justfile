@@ -45,3 +45,9 @@ macos-app:
 macos-dmg:
     cargo build --release --bins
     bash scripts/package-macos.sh target/release "target/macos-app/codex-switch-macos-$(uname -m).dmg"
+
+# 以 v0.0.0 固定版本号走与 dist 完全相同的打包流程, 产物安装后用于反复测试自动更新.
+# 测试运行时建议设置 CODEX_SWITCH_DATA_DIR 指向隔离数据目录, 避免读写全局数据.
+# 使用示例: just fake-dist
+fake-dist:
+    CODEX_SWITCH_FAKE_VERSION=0.0.0 just dist

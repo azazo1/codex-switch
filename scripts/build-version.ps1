@@ -1,6 +1,12 @@
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $false
 
+# fake-dist 用固定版本号覆盖 git 推导的版本, 其余行为与正常发布一致.
+if ($env:CODEX_SWITCH_FAKE_VERSION) {
+    Write-Output $env:CODEX_SWITCH_FAKE_VERSION
+    exit 0
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 Push-Location -LiteralPath $root
 try {

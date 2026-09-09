@@ -2,6 +2,12 @@
 
 set -euo pipefail
 
+# fake-dist 用固定版本号覆盖 git 推导的版本, 其余行为与正常发布一致.
+if [[ -n "${CODEX_SWITCH_FAKE_VERSION:-}" ]]; then
+  printf '%s\n' "$CODEX_SWITCH_FAKE_VERSION"
+  exit 0
+fi
+
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
