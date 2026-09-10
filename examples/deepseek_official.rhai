@@ -1,6 +1,6 @@
-
-// DeepSeek 官方价, 按 [官方文档](https://api-docs.deepseek.com/zh-cn/quick_start/pricing)
-// 的 CNY / 百万 tokens 计算, 再除以汇率得到 USD. 非 DeepSeek 模型回退内置公式并乘倍率.
+// DeepSeek 上游计价脚本, 按 [官方文档](https://api-docs.deepseek.com/zh-cn/quick_start/pricing)
+// 的 CNY / 百万 tokens 计算, 再除以汇率得到 USD.
+// 挂到 DeepSeek 上游上使用, 该上游上的请求一律按官方价估算.
 
 // 高峰为 UTC 周一至周五 `01:00-04:00` 与 `06:00-10:00` (北京时间 `9:00-12:00`, `14:00-18:00`).
 // 旧名 `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` 按 Flash 计费.
@@ -9,13 +9,6 @@
 
 fn estimate(ctx) {
     let model = if ctx.target_model != () { ctx.target_model } else { ctx.model };
-    if !is_deepseek(ctx, model) {
-        if ctx.builtin != () {
-            return ctx.builtin * ctx.multiplier;
-        }
-        return ();
-    }
-
     let peak = is_peak(ctx.utc);
     let pro = is_v4_pro(model) && !v4_pro_retired(ctx.utc);
     let hit = cny_hit(pro, peak);
@@ -27,16 +20,6 @@ fn estimate(ctx) {
         + usd_for_tokens(ctx.usage.cache_read_tokens, hit)
         + usd_for_tokens(ctx.usage.output_tokens, out);
     cny / fx * ctx.multiplier
-}
-
-fn is_deepseek(ctx, model) {
-    if model.to_lower().contains("deepseek") {
-        return true;
-    }
-    if ctx.upstream != () && ctx.upstream.base_url.contains("api.deepseek.com") {
-        return true;
-    }
-    false
 }
 
 fn is_v4_pro(model) {
