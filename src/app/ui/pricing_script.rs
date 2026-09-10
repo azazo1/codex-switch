@@ -64,10 +64,18 @@ impl CodexSwitchApp {
         self.load_pricing_editor_from_state();
     }
 
-    pub(super) fn open_upstream_pricing_script_window(&mut self, id: String, name: String) {
+    pub(super) fn open_upstream_pricing_script_window(
+        &mut self,
+        id: String,
+        name: String,
+        base_url: String,
+    ) {
         self.pricing_ui.preview_upstream_id = Some(id.clone());
         self.pricing_ui.target = PricingScriptTarget::Upstream { id, name };
-        self.pricing_ui.selected_preset = pricing::PRESET_DEEPSEEK_OFFICIAL.to_string();
+        self.pricing_ui.selected_preset = pricing::preferred_preset_for_base_url(&base_url)
+            .map(|preset| preset.id)
+            .unwrap_or(pricing::PRESET_DEFAULT)
+            .to_string();
         self.load_pricing_editor_from_state();
     }
 

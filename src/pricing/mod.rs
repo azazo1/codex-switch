@@ -4,7 +4,7 @@ mod presets;
 mod script;
 
 pub use engine::{PricingEngine, attach_estimated_cost, estimate_request_cost};
-pub use presets::{PRESET_DEEPSEEK_OFFICIAL, PRESET_DEFAULT, PRESETS, preset};
+pub use presets::{PRESET_DEFAULT, PRESETS, preferred_preset_for_base_url, preset};
 pub use script::{
     CostEstimateEnv, CostEstimateInput, CostUpstream, DEFAULT_SCRIPT, PricingScript,
     SETTING_PRICING_SCRIPT, SETTING_PRICING_SCRIPT_ENABLED, compile_check, load_cost_estimate_env,

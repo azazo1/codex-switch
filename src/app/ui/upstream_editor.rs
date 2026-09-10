@@ -140,7 +140,8 @@ impl CodexSwitchApp {
         if open_pricing && let Some(editor) = &self.upstream_editor {
             let id = editor.upstream.id.clone();
             let name = editor.upstream.name.clone();
-            self.open_upstream_pricing_script_window(id, name);
+            let base_url = editor.upstream.base_url.clone();
+            self.open_upstream_pricing_script_window(id, name, base_url);
         }
         match action {
             EditorAction::None => {}

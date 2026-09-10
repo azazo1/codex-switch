@@ -1,3 +1,6 @@
+// @label DeepSeek 官方价
+// @prefer https://api.deepseek.ai/v1
+
 // DeepSeek 上游计价脚本, 按 [官方文档](https://api-docs.deepseek.com/zh-cn/quick_start/pricing)
 // 的 CNY / 百万 tokens 计算, 再除以汇率得到 USD.
 // 挂到 DeepSeek 上游上使用, 该上游上的请求一律按官方价估算.
