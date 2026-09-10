@@ -108,7 +108,7 @@ impl CodexSwitchApp {
         let mut template_requested = false;
         let mut preview_requested = false;
         let mut docs_requested = false;
-        let mut clear_live_logs_requested = false;
+        let mut clear_preview_logs_requested = false;
         let mut source_changed = false;
         let title = match &self.pricing_ui.target {
             PricingScriptTarget::Global => "全局计价脚本".to_string(),
@@ -273,35 +273,22 @@ impl CodexSwitchApp {
                         self.pricing_ui.preview_script, self.pricing_ui.preview_builtin
                     ));
                 }
-                let live_logs = self
-                    .active_pricing_script()
-                    .map(|script| script.last_logs())
-                    .unwrap_or_default();
                 if !self.pricing_ui.preview_logs.is_empty() {
-                    ui.label("试算日志");
+                    ui.horizontal(|ui| {
+                        ui.label("试算日志");
+                        if ui
+                            .small_button("清理")
+                            .on_hover_text("清空本窗口试算日志")
+                            .clicked()
+                        {
+                            clear_preview_logs_requested = true;
+                        }
+                    });
                     egui::ScrollArea::vertical()
                         .id_salt("pricing_preview_logs_scroll")
                         .max_height(80.0)
                         .show(ui, |ui| {
                             ui.monospace(&self.pricing_ui.preview_logs);
-                        });
-                }
-                if !live_logs.is_empty() {
-                    ui.horizontal(|ui| {
-                        ui.label("最近运行日志");
-                        if ui
-                            .small_button("清理")
-                            .on_hover_text("清空窗口中的最近运行日志, 不影响应用主日志")
-                            .clicked()
-                        {
-                            clear_live_logs_requested = true;
-                        }
-                    });
-                    egui::ScrollArea::vertical()
-                        .id_salt("pricing_live_logs_scroll")
-                        .max_height(80.0)
-                        .show(ui, |ui| {
-                            ui.monospace(live_logs.join("\n"));
                         });
                 }
                 ui.horizontal(|ui| {
@@ -338,10 +325,8 @@ impl CodexSwitchApp {
         if preview_requested {
             self.preview_pricing_script();
         }
-        if clear_live_logs_requested
-            && let Some(script) = self.active_pricing_script()
-        {
-            script.clear_last_logs();
+        if clear_preview_logs_requested {
+            self.pricing_ui.preview_logs.clear();
         }
         if save_requested {
             self.save_pricing_script();

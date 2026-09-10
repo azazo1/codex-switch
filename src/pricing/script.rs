@@ -222,7 +222,6 @@ struct PricingInner {
     ast: Option<AST>,
     compile_error: Option<String>,
     runtime_error: Option<String>,
-    last_logs: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -239,7 +238,6 @@ impl PricingScript {
                 ast: None,
                 compile_error: None,
                 runtime_error: None,
-                last_logs: Vec::new(),
             })),
         }
     }
@@ -280,7 +278,6 @@ impl PricingScript {
         inner.enabled = enabled;
         inner.source = source;
         inner.runtime_error = None;
-        inner.last_logs.clear();
         match compiled {
             Ok(ast) => {
                 inner.ast = ast;
@@ -311,14 +308,6 @@ impl PricingScript {
 
     pub fn runtime_error(&self) -> Option<String> {
         self.lock().runtime_error.clone()
-    }
-
-    pub fn last_logs(&self) -> Vec<String> {
-        self.lock().last_logs.clone()
-    }
-
-    pub fn clear_last_logs(&self) {
-        self.lock().last_logs.clear();
     }
 
     pub fn is_ready(&self) -> bool {
@@ -356,25 +345,11 @@ impl PricingScript {
             ast
         };
         let ctx = build_ctx(env, input, price, builtin);
-        let sink = ScriptLogSink::default();
-        let engine = build_engine_with_sink(Some(sink.clone()));
+        let engine = build_engine_with_sink(None);
         let mut scope = Scope::new();
         let result = engine.call_fn::<Dynamic>(&mut scope, &ast, "estimate", (ctx,));
-        self.append_logs(sink.take());
         let result = result.map_err(|err| err.to_string())?;
         dynamic_to_cost(result)
-    }
-
-    fn append_logs(&self, lines: Vec<String>) {
-        if lines.is_empty() {
-            return;
-        }
-        let mut inner = self.lock();
-        inner.last_logs.extend(lines);
-        let extra = inner.last_logs.len().saturating_sub(MAX_SCRIPT_LOGS);
-        if extra > 0 {
-            inner.last_logs.drain(..extra);
-        }
     }
 
     pub(super) fn record_runtime_error(&self, error: String) {
