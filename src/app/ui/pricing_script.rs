@@ -99,8 +99,11 @@ impl CodexSwitchApp {
                                 job.keep_trailing_whitespace = true;
                                 ui.fonts_mut(|fonts| fonts.layout_job(job))
                             };
+                        let editor_id = ui.id().with("pricing_script_source");
+                        replace_tab_key_with_spaces(ui, editor_id);
                         let response = ui.add(
                             egui::TextEdit::multiline(&mut self.pricing_ui.source)
+                                .id(editor_id)
                                 .code_editor()
                                 .font(egui::TextStyle::Monospace)
                                 .desired_width(f32::INFINITY)
@@ -375,6 +378,27 @@ impl CodexSwitchApp {
 
 fn parse_i64_or_zero(value: &str) -> i64 {
     value.trim().parse().unwrap_or(0).max(0)
+}
+
+/// egui code_editor 默认把 Tab 写成 `\t`. 聚焦脚本框时改成两个空格.
+fn replace_tab_key_with_spaces(ui: &mut egui::Ui, editor_id: egui::Id) {
+    if !ui.memory(|mem| mem.has_focus(editor_id)) {
+        return;
+    }
+    ui.ctx().input_mut(|input| {
+        for event in &mut input.events {
+            if let egui::Event::Key {
+                key: egui::Key::Tab,
+                pressed: true,
+                modifiers,
+                ..
+            } = event
+                && !modifiers.any()
+            {
+                *event = egui::Event::Text("  ".to_owned());
+            }
+        }
+    });
 }
 
 fn format_optional_cost(value: Option<f64>) -> String {
