@@ -548,7 +548,9 @@ impl CacheKeepaliveRuntime {
             error,
         };
         let mut log = log;
-        pricing::attach_estimated_cost(&self.store, &self.pricing, &mut log).await;
+        if pricing::attach_estimated_cost(&self.store, &self.pricing, &mut log).await {
+            self.events.bump_balance_snapshots();
+        }
         match self.store.insert_request_log(log).await {
             Ok(()) => self.events.bump_request_logs(),
             Err(err) => tracing::warn!(error = %err, "failed to record cache keepalive log"),

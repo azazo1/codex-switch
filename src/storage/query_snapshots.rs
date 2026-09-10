@@ -54,8 +54,9 @@ impl Store {
     pub async fn save_balance_snapshot(&self, snapshot: &BalanceSnapshot) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO balance_snapshots (
-                upstream_id, provider, remaining, total, used, unit, is_valid, message, fetched_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                upstream_id, provider, remaining, total, used, unit, is_valid, message, fetched_at,
+                remaining_adjusted
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(upstream_id) DO UPDATE SET
                 provider = excluded.provider,
                 remaining = excluded.remaining,
@@ -64,7 +65,8 @@ impl Store {
                 unit = excluded.unit,
                 is_valid = excluded.is_valid,
                 message = excluded.message,
-                fetched_at = excluded.fetched_at",
+                fetched_at = excluded.fetched_at,
+                remaining_adjusted = excluded.remaining_adjusted",
         )
         .bind(&snapshot.upstream_id)
         .bind(&snapshot.provider)
@@ -75,9 +77,42 @@ impl Store {
         .bind(i64::from(snapshot.is_valid))
         .bind(&snapshot.message)
         .bind(snapshot.fetched_at)
+        .bind(i64::from(snapshot.remaining_adjusted))
         .execute(self.pool())
         .await?;
         Ok(())
+    }
+
+    /// 按计价脚本 charge 的 delta 扣减 remaining. 无有效快照或 remaining 缺失时不改.
+    pub async fn apply_balance_debit(
+        &self,
+        upstream_id: &str,
+        debit: f64,
+    ) -> anyhow::Result<bool> {
+        if !debit.is_finite() || debit == 0.0 {
+            return Ok(false);
+        }
+        let Some(snapshot) = self.get_balance_snapshot(upstream_id).await? else {
+            return Ok(false);
+        };
+        if !snapshot.is_valid {
+            return Ok(false);
+        }
+        let Some(remaining) = snapshot.remaining else {
+            return Ok(false);
+        };
+        let used = snapshot.used.map(|used| used + debit);
+        sqlx::query(
+            "UPDATE balance_snapshots
+             SET remaining = ?1, used = ?2, remaining_adjusted = 1
+             WHERE upstream_id = ?3",
+        )
+        .bind(remaining - debit)
+        .bind(used)
+        .bind(upstream_id)
+        .execute(self.pool())
+        .await?;
+        Ok(true)
     }
 
     pub async fn get_balance_snapshot(
@@ -98,6 +133,7 @@ impl Store {
             is_valid: row.get::<i64, _>("is_valid") != 0,
             message: row.get("message"),
             fetched_at: row.get("fetched_at"),
+            remaining_adjusted: row.get::<i64, _>("remaining_adjusted") != 0,
         }))
     }
 }

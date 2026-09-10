@@ -19,7 +19,16 @@ fn estimate(ctx) {
     let cny = usd_for_tokens(miss_tokens, miss)
         + usd_for_tokens(ctx.usage.cache_read_tokens, hit)
         + usd_for_tokens(ctx.usage.output_tokens, out);
-    cny / fx * ctx.multiplier
+    let usd = cny / fx * ctx.multiplier;
+    // 请求落库时按余额单位扣费, 试算和仪表盘重算为空操作.
+    if ctx.balance != () {
+        if ctx.balance.unit == "CNY" {
+            charge(cny * ctx.multiplier);
+        } else {
+            charge(usd);
+        }
+    }
+    usd
 }
 
 fn is_v4_pro(model) {

@@ -578,6 +578,7 @@ fn parse_common_balance(
         is_valid,
         message,
         fetched_at: chrono::Utc::now().timestamp(),
+        ..BalanceSnapshot::default()
     })
 }
 
@@ -611,6 +612,7 @@ fn parse_quota_object_balance(
         is_valid,
         message,
         fetched_at: chrono::Utc::now().timestamp(),
+        ..BalanceSnapshot::default()
     })
 }
 
@@ -650,6 +652,7 @@ fn parse_newapi_quota_balance(
         is_valid,
         message,
         fetched_at: chrono::Utc::now().timestamp(),
+        ..BalanceSnapshot::default()
     })
 }
 

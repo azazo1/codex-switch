@@ -57,10 +57,16 @@ Rhai 自带的 `timestamp()` 只是单调时钟. 日历时间使用宿主注入�
 | `ctx.fx.fetched_at` | 汇率缓存 unix 秒 |
 | `ctx.now` | 本次估算使用的 unix 秒 (UTC) |
 | `ctx.utc` / `ctx.local` | `DateTime`: `unix`, `year`, `month`, `day`, `hour`, `minute`, `second`, `weekday` (ISO, 1=周一) |
+| `ctx.balance` | 当前有效余额快照. 仅请求落库时有值, 试算和仪表盘汇总为 `()` |
+| `ctx.balance.remaining` / `total` / `used` / `unit` / `fetched_at` | 快照字段, 缺失为 `()` |
 
 写请求日志时 `ctx.now` 用该条日志的完成时间. 仪表盘汇总和试算用估算当下.
 
-宿主还注册 `usd_for_tokens(tokens, usd_per_million)`.
+宿主还注册 `usd_for_tokens(tokens, usd_per_million)` 和 `charge(value)`.
+
+`charge(value)` 从该上游展示余额减去 `value`, 单位由脚本对齐 `ctx.balance.unit`. 正数扣费, 同一次 `estimate` 多次调用会累加. 只在请求日志写入且该层返回了数字费用时生效; 试算, 仪表盘汇总和返回 `()` 的层都是空操作. 无有效快照, remaining 缺失, 或 `value` 为 NaN / Inf 时忽略, 不影响费用写入. 允许扣成负数.
+
+本地扣减会打上标记, 下次手动查询或自动刷新成功时整份覆盖余额, 偏差随刷新消失. 查询失败不覆盖. 本地扣减不触发余额提醒.
 
 脚本可以写日志:
 
@@ -98,6 +104,21 @@ fn estimate(ctx) {
         return cny / fx;
     }
     if ctx.builtin != () { ctx.builtin * ctx.multiplier } else { () }
+}
+```
+
+请求落库时按余额单位扣费:
+
+```rhai
+fn estimate(ctx) {
+    let fx = if ctx.fx != () { ctx.fx.usd_cny } else { 7.2 };
+    let cny = usd_for_tokens(ctx.usage.uncached_input_tokens, 2.0)
+        + usd_for_tokens(ctx.usage.output_tokens, 8.0);
+    let usd = cny / fx;
+    if ctx.balance != () {
+        charge(if ctx.balance.unit == "CNY" { cny } else { usd });
+    }
+    usd
 }
 ```
 

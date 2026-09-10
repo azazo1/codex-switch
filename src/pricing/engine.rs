@@ -1,4 +1,6 @@
-use super::script::{lookup_price, CostEstimateEnv, CostEstimateInput, CostUpstream, PricingScript};
+use super::script::{
+    lookup_price, CostEstimateEnv, CostEstimateInput, CostUpstream, PricingScript, ScriptEstimate,
+};
 use super::estimate_usage_cost;
 use crate::core::models::RequestLog;
 use crate::storage::{Store, UpstreamPricingScript};
@@ -10,6 +12,7 @@ use std::sync::{Arc, Mutex};
 pub struct PricingEngine {
     global: PricingScript,
     upstreams: Arc<Mutex<HashMap<String, PricingScript>>>,
+    charge_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl PricingEngine {
@@ -22,6 +25,7 @@ impl PricingEngine {
         Self {
             global,
             upstreams: Arc::new(Mutex::new(HashMap::new())),
+            charge_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -126,6 +130,75 @@ pub async fn estimate_request_cost(
     env: &CostEstimateEnv,
     input: CostEstimateInput<'_>,
 ) -> Option<f64> {
+    estimate_request(store, engine, env, input).await.cost
+}
+
+pub async fn attach_estimated_cost(
+    store: &Store,
+    engine: &PricingEngine,
+    log: &mut RequestLog,
+) -> bool {
+    let mut env = match super::script::load_cost_estimate_env(store).await {
+        Ok(env) => env,
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to load pricing env");
+            CostEstimateEnv::now(None)
+        }
+    };
+    if let Some(ts) = log.ts {
+        env.now = ts;
+    }
+    env.commit = true;
+    let _guard = if log.upstream_id.is_some() {
+        Some(engine.charge_lock.lock().await)
+    } else {
+        None
+    };
+    if let Some(id) = log.upstream_id.as_deref() {
+        match store.get_balance_snapshot(id).await {
+            Ok(Some(snapshot)) if snapshot.is_valid => env.balance = Some(snapshot),
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    upstream_id = id,
+                    "failed to load balance snapshot for pricing charge"
+                );
+            }
+        }
+    }
+    let owned_upstream = resolve_cost_upstream(store, log).await;
+    let result = estimate_request(
+        store,
+        engine,
+        &env,
+        CostEstimateInput {
+            model: log.model.as_deref(),
+            target_model: log.target_model.as_deref(),
+            usage: &log.usage,
+            upstream: owned_upstream.as_ref(),
+        },
+    )
+    .await;
+    log.estimated_cost_usd = result.cost;
+    let Some(id) = log.upstream_id.as_deref() else {
+        return false;
+    };
+    if result.cost.is_none() {
+        return false;
+    }
+    let Some(debit) = result.debit else {
+        return false;
+    };
+    apply_script_debit(store, id, debit).await
+}
+
+async fn estimate_request(
+    store: &Store,
+    engine: &PricingEngine,
+    env: &CostEstimateEnv,
+    input: CostEstimateInput<'_>,
+) -> ScriptEstimate {
     let price = lookup_price(store, input.model).await;
     let builtin = price
         .as_ref()
@@ -139,7 +212,7 @@ pub async fn estimate_request_cost(
 
     if let Some(upstream) = input.upstream
         && let Some(script) = engine.upstream_script(&upstream.id)
-        && let Some(cost) = eval_layer(
+        && let Some(result) = eval_layer(
             &script,
             env,
             input,
@@ -149,10 +222,10 @@ pub async fn estimate_request_cost(
             Some(upstream.id.as_str()),
         )
     {
-        return Some(cost);
+        return result;
     }
 
-    if let Some(cost) = eval_layer(
+    if let Some(result) = eval_layer(
         engine.global(),
         env,
         input,
@@ -161,40 +234,13 @@ pub async fn estimate_request_cost(
         input.model,
         None,
     ) {
-        return Some(cost);
+        return result;
     }
 
-    fallback
-}
-
-pub async fn attach_estimated_cost(
-    store: &Store,
-    engine: &PricingEngine,
-    log: &mut RequestLog,
-) {
-    let mut env = match super::script::load_cost_estimate_env(store).await {
-        Ok(env) => env,
-        Err(err) => {
-            tracing::warn!(error = %err, "failed to load pricing env");
-            CostEstimateEnv::now(None)
-        }
-    };
-    if let Some(ts) = log.ts {
-        env.now = ts;
+    ScriptEstimate {
+        cost: fallback,
+        debit: None,
     }
-    let owned_upstream = resolve_cost_upstream(store, log).await;
-    log.estimated_cost_usd = estimate_request_cost(
-        store,
-        engine,
-        &env,
-        CostEstimateInput {
-            model: log.model.as_deref(),
-            target_model: log.target_model.as_deref(),
-            usage: &log.usage,
-            upstream: owned_upstream.as_ref(),
-        },
-    )
-    .await;
 }
 
 fn eval_layer(
@@ -205,13 +251,13 @@ fn eval_layer(
     builtin: Option<f64>,
     model: Option<&str>,
     upstream_id: Option<&str>,
-) -> Option<f64> {
+) -> Option<ScriptEstimate> {
     if !script.is_ready() {
         return None;
     }
     match script.eval_estimate(env, input, price, builtin) {
-        Ok(Some(value)) => Some(value),
-        Ok(None) => None,
+        Ok(result) if result.cost.is_some() => Some(result),
+        Ok(_) => None,
         Err(error) => {
             script.record_runtime_error(error.clone());
             tracing::warn!(
@@ -221,6 +267,37 @@ fn eval_layer(
                 "pricing script failed, trying next layer"
             );
             None
+        }
+    }
+}
+
+async fn apply_script_debit(store: &Store, upstream_id: &str, debit: f64) -> bool {
+    if !debit.is_finite() {
+        tracing::warn!(
+            debit,
+            upstream_id,
+            "pricing script charge ignored invalid debit"
+        );
+        return false;
+    }
+    match store.apply_balance_debit(upstream_id, debit).await {
+        Ok(changed) => {
+            if changed {
+                tracing::info!(
+                    upstream_id,
+                    debit,
+                    "pricing script charged upstream remaining"
+                );
+            }
+            changed
+        }
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                upstream_id,
+                "failed to apply pricing script charge"
+            );
+            false
         }
     }
 }
@@ -265,10 +342,10 @@ mod tests {
     }
 
     fn env_at(hour_utc: u32) -> CostEstimateEnv {
-        CostEstimateEnv {
-            now: Utc.with_ymd_and_hms(2024, 6, 15, hour_utc, 30, 0).unwrap(),
-            fx: None,
-        }
+        CostEstimateEnv::at(
+            Utc.with_ymd_and_hms(2024, 6, 15, hour_utc, 30, 0).unwrap(),
+            None,
+        )
     }
 
     async fn test_store() -> Store {

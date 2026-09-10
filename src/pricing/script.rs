@@ -1,6 +1,6 @@
 use super::fx::UsdCnyRate;
 use super::{estimate_usage_cost, usd_for_tokens};
-use crate::core::models::{ModelPrice, TokenUsage, Upstream};
+use crate::core::models::{BalanceSnapshot, ModelPrice, TokenUsage, Upstream};
 use crate::storage::Store;
 use chrono::{DateTime, Datelike, Local, Timelike, Utc};
 use rhai::{CustomType, Dynamic, Engine, Scope, AST};
@@ -110,6 +110,21 @@ struct ScriptUpstream {
 }
 
 #[derive(Debug, Clone, CustomType)]
+#[rhai_type(name = "Balance")]
+struct ScriptBalance {
+    #[rhai_type(readonly)]
+    remaining: Dynamic,
+    #[rhai_type(readonly)]
+    total: Dynamic,
+    #[rhai_type(readonly)]
+    used: Dynamic,
+    #[rhai_type(readonly)]
+    unit: Dynamic,
+    #[rhai_type(readonly)]
+    fetched_at: i64,
+}
+
+#[derive(Debug, Clone, CustomType)]
 #[rhai_type(name = "EstimateCtx")]
 struct ScriptCtx {
     #[rhai_type(readonly)]
@@ -134,6 +149,8 @@ struct ScriptCtx {
     utc: ScriptDateTime,
     #[rhai_type(readonly)]
     local: ScriptDateTime,
+    #[rhai_type(readonly)]
+    balance: Dynamic,
 }
 
 #[derive(Debug, Clone)]
@@ -161,15 +178,30 @@ impl CostUpstream {
 pub struct CostEstimateEnv {
     pub now: DateTime<Utc>,
     pub fx: Option<UsdCnyRate>,
+    /// 仅 attach_estimated_cost 为 true. 试算和仪表盘重算不扣余额.
+    pub commit: bool,
+    pub balance: Option<BalanceSnapshot>,
 }
 
 impl CostEstimateEnv {
     pub fn now(fx: Option<UsdCnyRate>) -> Self {
+        Self::at(Utc::now(), fx)
+    }
+
+    pub fn at(now: DateTime<Utc>, fx: Option<UsdCnyRate>) -> Self {
         Self {
-            now: Utc::now(),
+            now,
             fx,
+            commit: false,
+            balance: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct ScriptEstimate {
+    pub cost: Option<f64>,
+    pub debit: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -213,6 +245,25 @@ impl ScriptLogSink {
 
     fn take(&self) -> Vec<String> {
         std::mem::take(&mut *self.lines.lock().unwrap_or_else(|err| err.into_inner()))
+    }
+}
+
+#[derive(Clone, Default)]
+struct ChargeSink {
+    total: Arc<Mutex<Option<f64>>>,
+}
+
+impl ChargeSink {
+    fn add(&self, value: f64) {
+        let mut total = self.total.lock().unwrap_or_else(|err| err.into_inner());
+        *total = Some(total.unwrap_or(0.0) + value);
+    }
+
+    fn take(&self) -> Option<f64> {
+        self.total
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .take()
     }
 }
 
@@ -333,23 +384,26 @@ impl PricingScript {
         input: CostEstimateInput<'_>,
         price: Option<&ModelPrice>,
         builtin: Option<f64>,
-    ) -> Result<Option<f64>, String> {
+    ) -> Result<ScriptEstimate, String> {
         let ast = {
             let inner = self.lock();
             if !inner.enabled {
-                return Ok(None);
+                return Ok(ScriptEstimate::default());
             }
             let Some(ast) = inner.ast.clone() else {
-                return Ok(None);
+                return Ok(ScriptEstimate::default());
             };
             ast
         };
         let ctx = build_ctx(env, input, price, builtin);
-        let engine = build_engine_with_sink(None);
+        let charge = env.commit.then(ChargeSink::default);
+        let engine = build_engine_with_sink(None, charge.clone());
         let mut scope = Scope::new();
         let result = engine.call_fn::<Dynamic>(&mut scope, &ast, "estimate", (ctx,));
         let result = result.map_err(|err| err.to_string())?;
-        dynamic_to_cost(result)
+        let cost = dynamic_to_cost(result)?;
+        let debit = cost.and_then(|_| charge.and_then(|sink| sink.take()));
+        Ok(ScriptEstimate { cost, debit })
     }
 
     pub(super) fn record_runtime_error(&self, error: String) {
@@ -366,10 +420,10 @@ pub fn compile_check(source: &str) -> Result<(), String> {
 }
 
 pub async fn load_cost_estimate_env(store: &Store) -> anyhow::Result<CostEstimateEnv> {
-    Ok(CostEstimateEnv {
-        now: Utc::now(),
-        fx: super::fx::load_usd_cny_rate_from_store(store).await?,
-    })
+    Ok(CostEstimateEnv::at(
+        Utc::now(),
+        super::fx::load_usd_cny_rate_from_store(store).await?,
+    ))
 }
 
 pub async fn preview_estimate(
@@ -405,7 +459,7 @@ pub async fn preview_estimate(
     };
     let ctx = build_ctx(env, input, price.as_ref(), builtin);
     let sink = ScriptLogSink::default();
-    let engine = build_engine_with_sink(Some(sink.clone()));
+    let engine = build_engine_with_sink(Some(sink.clone()), None);
     let mut scope = Scope::new();
     let result = engine.call_fn::<Dynamic>(&mut scope, &ast, "estimate", (ctx,));
     let logs = sink.take();
@@ -460,10 +514,10 @@ fn compile_source(source: &str) -> Result<Option<AST>, String> {
 }
 
 fn build_engine() -> Engine {
-    build_engine_with_sink(None)
+    build_engine_with_sink(None, None)
 }
 
-fn build_engine_with_sink(sink: Option<ScriptLogSink>) -> Engine {
+fn build_engine_with_sink(sink: Option<ScriptLogSink>, charge: Option<ChargeSink>) -> Engine {
     let mut engine = Engine::new();
     engine.set_max_operations(MAX_OPERATIONS);
     engine.set_max_call_levels(MAX_CALL_LEVELS);
@@ -486,12 +540,26 @@ fn build_engine_with_sink(sink: Option<ScriptLogSink>) -> Engine {
     engine.build_type::<ScriptUsage>();
     engine.build_type::<ScriptPrice>();
     engine.build_type::<ScriptUpstream>();
+    engine.build_type::<ScriptBalance>();
     engine.build_type::<ScriptCtx>();
     engine.register_fn("usd_for_tokens", usd_for_tokens_i64_f64);
     engine.register_fn("usd_for_tokens", usd_for_tokens_i64_i64);
     engine.register_fn("usd_for_tokens", usd_for_tokens_f64_f64);
     register_script_log_fns(&mut engine, sink);
+    register_charge_fn(&mut engine, charge);
     engine
+}
+
+fn register_charge_fn(engine: &mut Engine, sink: Option<ChargeSink>) {
+    if let Some(sink) = sink {
+        let f64_sink = sink.clone();
+        engine.register_fn("charge", move |value: f64| f64_sink.add(value));
+        let i64_sink = sink;
+        engine.register_fn("charge", move |value: i64| i64_sink.add(value as f64));
+    } else {
+        engine.register_fn("charge", |_: f64| {});
+        engine.register_fn("charge", |_: i64| {});
+    }
 }
 
 fn register_script_log_fns(engine: &mut Engine, sink: Option<ScriptLogSink>) {
@@ -595,6 +663,23 @@ fn build_ctx(
         now: env.now.timestamp(),
         utc: script_datetime(env.now),
         local: script_datetime(env.now.with_timezone(&Local)),
+        balance: match env.balance.as_ref().filter(|_| env.commit) {
+            Some(snapshot) if snapshot.is_valid => Dynamic::from(script_balance(snapshot)),
+            _ => Dynamic::UNIT,
+        },
+    }
+}
+
+fn script_balance(snapshot: &BalanceSnapshot) -> ScriptBalance {
+    ScriptBalance {
+        remaining: opt_f64(snapshot.remaining),
+        total: opt_f64(snapshot.total),
+        used: opt_f64(snapshot.used),
+        unit: match snapshot.unit.as_deref() {
+            Some(unit) if !unit.is_empty() => Dynamic::from(unit.to_string()),
+            _ => Dynamic::UNIT,
+        },
+        fetched_at: snapshot.fetched_at,
     }
 }
 
@@ -646,7 +731,7 @@ fn dynamic_to_cost(value: Dynamic) -> Result<Option<f64>, String> {
 mod tests {
     use super::*;
     use crate::core::models::{
-        BalanceProvider, ModelPrice, RequestLog, TokenUsage, Upstream, WireApi,
+        BalanceProvider, BalanceSnapshot, ModelPrice, RequestLog, TokenUsage, Upstream, WireApi,
     };
     use crate::pricing::engine::{attach_estimated_cost, estimate_request_cost, PricingEngine};
     use chrono::TimeZone;
@@ -661,13 +746,13 @@ mod tests {
     }
 
     fn env_at(hour_utc: u32, fx: Option<f64>) -> CostEstimateEnv {
-        CostEstimateEnv {
-            now: Utc.with_ymd_and_hms(2024, 6, 15, hour_utc, 30, 0).unwrap(),
-            fx: fx.map(|rate| UsdCnyRate {
+        CostEstimateEnv::at(
+            Utc.with_ymd_and_hms(2024, 6, 15, hour_utc, 30, 0).unwrap(),
+            fx.map(|rate| UsdCnyRate {
                 rate,
                 fetched_at: 1_000,
             }),
-        }
+        )
     }
 
     async fn test_store() -> Store {
@@ -929,5 +1014,211 @@ mod tests {
         };
         attach_estimated_cost(&store, &PricingEngine::disabled(), &mut log).await;
         assert!((log.estimated_cost_usd.unwrap() - 4.5).abs() < 1e-9);
+    }
+
+    fn sample_log(upstream: &Upstream) -> RequestLog {
+        RequestLog {
+            ts: Some(Utc.with_ymd_and_hms(2024, 6, 15, 11, 0, 0).unwrap()),
+            upstream_id: Some(upstream.id.clone()),
+            upstream_name: Some(upstream.name.clone()),
+            source: crate::core::models::RequestLogSource::Proxy,
+            endpoint: "/responses".to_string(),
+            model: Some("gpt-test".to_string()),
+            target_model: None,
+            reasoning_effort: None,
+            status: 200,
+            usage: usage(),
+            estimated_cost_usd: None,
+            duration_ms: 10,
+            first_token_ms: None,
+            error: None,
+        }
+    }
+
+    async fn seed_relay(store: &Store) -> Upstream {
+        let upstream = Upstream::new_relay(
+            "relay-a".to_string(),
+            "https://example.test".to_string(),
+            WireApi::Responses,
+            true,
+            BalanceProvider::Unsupported,
+        );
+        store.save_upstream(&upstream).await.unwrap();
+        upstream
+    }
+
+    async fn seed_snapshot(
+        store: &Store,
+        upstream_id: &str,
+        remaining: f64,
+        used: Option<f64>,
+        valid: bool,
+    ) {
+        store
+            .save_balance_snapshot(&BalanceSnapshot {
+                upstream_id: upstream_id.to_string(),
+                provider: "deepseek".to_string(),
+                remaining: Some(remaining),
+                used,
+                unit: Some("CNY".to_string()),
+                is_valid: valid,
+                fetched_at: 1_000,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn compile_check_allows_charge() {
+        assert!(compile_check("fn estimate(ctx) { charge(1.0); 1.0 }").is_ok());
+    }
+
+    #[tokio::test]
+    async fn attach_charge_debits_remaining() {
+        let store = test_store().await;
+        let upstream = seed_relay(&store).await;
+        seed_snapshot(&store, &upstream.id, 10.0, Some(1.0), true).await;
+        let script = PricingScript::disabled();
+        script.apply(true, "fn estimate(ctx) { charge(1.5); 2.0 }".to_string());
+        let mut log = sample_log(&upstream);
+        let changed =
+            attach_estimated_cost(&store, &PricingEngine::from_global(script), &mut log).await;
+        assert!(changed);
+        assert!((log.estimated_cost_usd.unwrap() - 2.0).abs() < 1e-9);
+        let snapshot = store
+            .get_balance_snapshot(&upstream.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!((snapshot.remaining.unwrap() - 8.5).abs() < 1e-9);
+        assert!((snapshot.used.unwrap() - 2.5).abs() < 1e-9);
+        assert!(snapshot.remaining_adjusted);
+        assert_eq!(snapshot.fetched_at, 1_000);
+    }
+
+    #[tokio::test]
+    async fn preview_and_estimate_do_not_charge() {
+        let store = test_store().await;
+        let upstream = seed_relay(&store).await;
+        seed_snapshot(&store, &upstream.id, 10.0, None, true).await;
+        let source = "fn estimate(ctx) { charge(1.5); 2.0 }";
+        let script = PricingScript::disabled();
+        script.apply(true, source.to_string());
+        let usage = usage();
+        let cost_upstream = CostUpstream::from_upstream(&upstream);
+        let preview = preview_estimate(
+            &store,
+            source,
+            &env_at(11, None),
+            input(&usage, Some(&cost_upstream)),
+        )
+        .await;
+        assert!((preview.script_cost.unwrap() - 2.0).abs() < 1e-9);
+        let cost = estimate_request_cost(
+            &store,
+            &PricingEngine::from_global(script),
+            &env_at(11, None),
+            input(&usage, Some(&cost_upstream)),
+        )
+        .await
+        .unwrap();
+        assert!((cost - 2.0).abs() < 1e-9);
+        let snapshot = store
+            .get_balance_snapshot(&upstream.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!((snapshot.remaining.unwrap() - 10.0).abs() < 1e-9);
+        assert!(!snapshot.remaining_adjusted);
+    }
+
+    #[tokio::test]
+    async fn provider_snapshot_overwrites_charged_remaining() {
+        let store = test_store().await;
+        let upstream = seed_relay(&store).await;
+        seed_snapshot(&store, &upstream.id, 10.0, Some(1.0), true).await;
+        let script = PricingScript::disabled();
+        script.apply(true, "fn estimate(ctx) { charge(1.5); 2.0 }".to_string());
+        let mut log = sample_log(&upstream);
+        attach_estimated_cost(&store, &PricingEngine::from_global(script), &mut log).await;
+        store
+            .save_balance_snapshot(&BalanceSnapshot {
+                upstream_id: upstream.id.clone(),
+                provider: "deepseek".to_string(),
+                remaining: Some(9.2),
+                used: Some(2.0),
+                unit: Some("CNY".to_string()),
+                is_valid: true,
+                fetched_at: 2_000,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let snapshot = store
+            .get_balance_snapshot(&upstream.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!((snapshot.remaining.unwrap() - 9.2).abs() < 1e-9);
+        assert!(!snapshot.remaining_adjusted);
+        assert_eq!(snapshot.fetched_at, 2_000);
+    }
+
+    #[tokio::test]
+    async fn charge_skips_invalid_or_missing_snapshot() {
+        let store = test_store().await;
+        let upstream = seed_relay(&store).await;
+        seed_snapshot(&store, &upstream.id, 10.0, None, false).await;
+        let script = PricingScript::disabled();
+        script.apply(true, "fn estimate(ctx) { charge(1.5); 2.0 }".to_string());
+        let mut log = sample_log(&upstream);
+        let changed =
+            attach_estimated_cost(&store, &PricingEngine::from_global(script.clone()), &mut log)
+                .await;
+        assert!(!changed);
+        assert!((log.estimated_cost_usd.unwrap() - 2.0).abs() < 1e-9);
+        let snapshot = store
+            .get_balance_snapshot(&upstream.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!((snapshot.remaining.unwrap() - 10.0).abs() < 1e-9);
+        assert!(!snapshot.remaining_adjusted);
+
+        let other = Upstream::new_relay(
+            "relay-b".to_string(),
+            "https://example.test".to_string(),
+            WireApi::Responses,
+            true,
+            BalanceProvider::Unsupported,
+        );
+        store.save_upstream(&other).await.unwrap();
+        let mut log = sample_log(&other);
+        let changed =
+            attach_estimated_cost(&store, &PricingEngine::from_global(script), &mut log).await;
+        assert!(!changed);
+        assert!(store.get_balance_snapshot(&other.id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn unit_return_discards_charge() {
+        let store = test_store().await;
+        seed_price(&store).await;
+        let upstream = seed_relay(&store).await;
+        seed_snapshot(&store, &upstream.id, 10.0, None, true).await;
+        let script = PricingScript::disabled();
+        script.apply(true, "fn estimate(ctx) { charge(1.5); () }".to_string());
+        let mut log = sample_log(&upstream);
+        let changed =
+            attach_estimated_cost(&store, &PricingEngine::from_global(script), &mut log).await;
+        assert!(!changed);
+        let snapshot = store
+            .get_balance_snapshot(&upstream.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!((snapshot.remaining.unwrap() - 10.0).abs() < 1e-9);
+        assert!(!snapshot.remaining_adjusted);
     }
 }

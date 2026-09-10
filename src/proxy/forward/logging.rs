@@ -12,7 +12,9 @@ pub(super) async fn record_request_log(
     let success = (200..300).contains(&log.status) && log.error.is_none();
     let usage = log.usage.clone();
     let mut log = log;
-    crate::pricing::attach_estimated_cost(&state.store, &state.pricing, &mut log).await;
+    if crate::pricing::attach_estimated_cost(&state.store, &state.pricing, &mut log).await {
+        state.events.bump_balance_snapshots();
+    }
     match state.store.insert_request_log(log).await {
         Ok(()) => state.events.bump_request_logs(),
         Err(err) => tracing::warn!(error = %err, "failed to record request log"),

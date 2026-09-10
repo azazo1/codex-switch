@@ -803,6 +803,9 @@ pub struct BalanceSnapshot {
     pub is_valid: bool,
     pub message: Option<String>,
     pub fetched_at: i64,
+    /// 最近一次 remaining 是否由计价脚本 charge 扣减, 查询成功后清零.
+    #[serde(default)]
+    pub remaining_adjusted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

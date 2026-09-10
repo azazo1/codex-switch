@@ -471,5 +471,13 @@ fn format_balance_snapshot(snapshot: Option<&BalanceSnapshot>) -> (String, Optio
     } else {
         format!("{amount} {unit}")
     };
-    (text, snapshot.message.as_deref().map(str::to_string))
+    let mut detail = snapshot.message.clone().filter(|message| !message.is_empty());
+    if snapshot.remaining_adjusted {
+        let hint = "本地扣减, 下次查询时覆盖";
+        detail = Some(match detail {
+            Some(message) => format!("{message}\n{hint}"),
+            None => hint.to_string(),
+        });
+    }
+    (text, detail)
 }

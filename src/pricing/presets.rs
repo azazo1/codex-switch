@@ -35,11 +35,9 @@ mod tests {
     #[test]
     fn presets_compile() {
         for item in PRESETS {
-            assert!(
-                compile_check(item.source).is_ok(),
-                "preset {} failed to compile",
-                item.id
-            );
+            compile_check(item.source).unwrap_or_else(|error| {
+                panic!("preset {} failed to compile: {error}", item.id);
+            });
         }
     }
 }
