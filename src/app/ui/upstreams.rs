@@ -1,4 +1,4 @@
-use super::{CodexSwitchApp, DeleteAction};
+use super::{CodexSwitchApp, DeleteAction, text};
 use crate::core::models::{
     ApiKeyAuthScheme, BalanceSnapshot, CacheKeepaliveMode, UpstreamBalanceAlertSettings,
     UpstreamCacheKeepaliveSettings, UpstreamKind, WireApi,
@@ -6,6 +6,7 @@ use crate::core::models::{
 use crate::core::upstream_detection::{self, DetectedKind};
 use crate::core::upstream_transfer::UpstreamExport;
 use eframe::egui;
+use egui_extras::{Column, TableBuilder};
 
 impl CodexSwitchApp {
     pub(super) fn upstreams_ui(&mut self, ui: &mut egui::Ui) {
@@ -165,65 +166,108 @@ impl CodexSwitchApp {
         let mut delete_requested = None;
         let mut edit = None;
         let mut query_balance = None;
-        egui::ScrollArea::vertical()
+        let max_height = ui.available_height();
+        egui::ScrollArea::horizontal()
             .id_salt("upstreams_list")
-            .max_height(ui.available_height())
+            .auto_shrink([false, false])
             .show(ui, |ui| {
-                egui::Grid::new("upstreams_grid")
+                TableBuilder::new(ui)
                     .striped(true)
-                    .num_columns(7)
-                    .spacing([16.0, 8.0])
-                    .show(ui, |ui| {
-                        ui.strong("启用");
-                        ui.strong("名称");
-                        ui.strong("Base URL");
-                        ui.strong("缓存保持");
-                        ui.strong("余额");
-                        ui.strong("余额刷新");
-                        ui.strong("操作");
-                        ui.end_row();
-
+                    .auto_shrink([false, false])
+                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                    .min_scrolled_height(0.0)
+                    .max_scroll_height(max_height)
+                    .column(Column::auto())
+                    .column(Column::auto())
+                    .column(Column::remainder().at_least(80.0).clip(true))
+                    .column(Column::auto())
+                    .column(Column::auto())
+                    .column(Column::auto())
+                    .column(Column::auto())
+                    .header(22.0, |mut header| {
+                        header.col(|ui| {
+                            ui.strong("启用");
+                        });
+                        header.col(|ui| {
+                            ui.strong("名称");
+                        });
+                        header.col(|ui| {
+                            ui.strong("Base URL");
+                        });
+                        header.col(|ui| {
+                            ui.strong("缓存保持");
+                        });
+                        header.col(|ui| {
+                            ui.strong("余额");
+                        });
+                        header.col(|ui| {
+                            ui.strong("余额刷新");
+                        });
+                        header.col(|ui| {
+                            ui.strong("操作");
+                        });
+                    })
+                    .body(|mut body| {
                         for upstream in &upstreams {
-                            let mut enabled = upstream.enabled;
-                            if ui.checkbox(&mut enabled, "").changed() {
-                                changed.push((upstream.id.clone(), enabled));
-                            }
-                            ui.label(&upstream.name)
-                                .on_hover_text(format!("id: {}", upstream.id));
-                            ui.label(upstream.base_url.as_str());
-                            cache_keepalive_label(ui, cache_settings.get(&upstream.id));
-                            if upstream.kind == UpstreamKind::RelayApiKey {
-                                balance_snapshot_label(
-                                    ui,
-                                    balance_snapshot_for(&balance_snapshots, &upstream.id),
-                                );
-                            } else {
-                                ui.label("-");
-                            }
-                            if upstream.kind == UpstreamKind::RelayApiKey {
-                                balance_alert_label(ui, balance_alert_settings.get(&upstream.id));
-                            } else {
-                                ui.label("-");
-                            }
-                            ui.horizontal(|ui| {
-                                if upstream.kind == UpstreamKind::RelayApiKey
-                                    && ui
-                                        .add_enabled(
-                                            !self.balance_query_pending_ids.contains(&upstream.id),
-                                            egui::Button::new("查余额"),
-                                        )
-                                        .clicked()
-                                {
-                                    query_balance = Some(upstream.id.clone());
-                                }
-                                if ui.button("编辑").clicked() {
-                                    edit = Some(upstream.clone());
-                                }
-                                if ui.button("删除").clicked() {
-                                    delete_requested = Some(upstream.clone());
-                                }
+                            body.row(32.0, |mut row| {
+                                row.col(|ui| {
+                                    let mut enabled = upstream.enabled;
+                                    if ui.checkbox(&mut enabled, "").changed() {
+                                        changed.push((upstream.id.clone(), enabled));
+                                    }
+                                });
+                                row.col(|ui| {
+                                    ui.label(&upstream.name)
+                                        .on_hover_text(format!("id: {}", upstream.id));
+                                });
+                                row.col(|ui| {
+                                    text::truncated_head_label(ui, upstream.base_url.as_str())
+                                        .on_hover_text(&upstream.base_url);
+                                });
+                                row.col(|ui| {
+                                    cache_keepalive_label(ui, cache_settings.get(&upstream.id));
+                                });
+                                row.col(|ui| {
+                                    if upstream.kind == UpstreamKind::RelayApiKey {
+                                        balance_snapshot_label(
+                                            ui,
+                                            balance_snapshot_for(&balance_snapshots, &upstream.id),
+                                        );
+                                    } else {
+                                        ui.label("-");
+                                    }
+                                });
+                                row.col(|ui| {
+                                    if upstream.kind == UpstreamKind::RelayApiKey {
+                                        balance_alert_label(
+                                            ui,
+                                            balance_alert_settings.get(&upstream.id),
+                                        );
+                                    } else {
+                                        ui.label("-");
+                                    }
+                                });
+                                row.col(|ui| {
+                                    if upstream.kind == UpstreamKind::RelayApiKey
+                                        && ui
+                                            .add_enabled(
+                                                !self
+                                                    .balance_query_pending_ids
+                                                    .contains(&upstream.id),
+                                                egui::Button::new("查余额"),
+                                            )
+                                            .clicked()
+                                    {
+                                        query_balance = Some(upstream.id.clone());
+                                    }
+                                    if ui.button("编辑").clicked() {
+                                        edit = Some(upstream.clone());
+                                    }
+                                    if ui.button("删除").clicked() {
+                                        delete_requested = Some(upstream.clone());
+                                    }
+                                });
                             });
-                            ui.end_row();
                         }
                     });
             });

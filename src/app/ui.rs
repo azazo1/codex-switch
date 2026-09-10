@@ -95,6 +95,7 @@ mod pricing_script;
 mod quota;
 mod scheduler;
 mod temp_keys;
+mod text;
 mod token_amount;
 mod tokens;
 mod upstream_editor;
