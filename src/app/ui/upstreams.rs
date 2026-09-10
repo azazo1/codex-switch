@@ -442,7 +442,12 @@ pub(super) fn balance_snapshot_for<'a>(
 
 pub(super) fn balance_snapshot_label(ui: &mut egui::Ui, snapshot: Option<&BalanceSnapshot>) {
     let (balance_text, balance_detail) = format_balance_snapshot(snapshot);
-    let response = ui.label(balance_text);
+    let adjusted = snapshot.is_some_and(|item| item.is_valid && item.remaining_adjusted);
+    let response = if adjusted {
+        ui.colored_label(ui.visuals().warn_fg_color, balance_text)
+    } else {
+        ui.label(balance_text)
+    };
     if let Some(detail) = balance_detail {
         response.on_hover_text(detail);
     }
