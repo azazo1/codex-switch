@@ -229,13 +229,7 @@ impl TrayStats {
             }
             TrayBadgeMetric::ActiveUpstreamBalance => self
                 .current_balance
-                .map(|(val, _)| {
-                    if val < 1.0 {
-                        format!("{:.2}", val)
-                    } else {
-                        format!("{:.1}", val)
-                    }
-                })
+                .map(|(val, _)| format!("{:.2}", val))
                 .or_else(|| Some("-".to_string())),
         }
     }
