@@ -3,9 +3,13 @@ use crate::core::models::TokenUsage;
 use crate::pricing;
 use eframe::egui::{self, TextBuffer};
 
+/// 与 docs/pricing-guide.md 同源, 编译进二进制后可离线查阅.
+const PRICING_GUIDE: &str = include_str!("../../../docs/pricing-guide.md");
+
 #[derive(Debug, Clone)]
 pub(super) struct PricingScriptUi {
     pub open: bool,
+    pub docs_open: bool,
     pub enabled: bool,
     pub source: String,
     pub compile_message: String,
@@ -25,6 +29,7 @@ impl Default for PricingScriptUi {
     fn default() -> Self {
         Self {
             open: false,
+            docs_open: false,
             enabled: false,
             source: String::new(),
             compile_message: String::new(),
@@ -55,6 +60,7 @@ impl CodexSwitchApp {
 
     pub(super) fn pricing_script_window(&mut self, ctx: &egui::Context) {
         if !self.pricing_ui.open {
+            self.pricing_script_docs_window(ctx);
             return;
         }
         let mut open = self.pricing_ui.open;
@@ -62,6 +68,7 @@ impl CodexSwitchApp {
         let mut cancel_requested = false;
         let mut template_requested = false;
         let mut preview_requested = false;
+        let mut docs_requested = false;
         let mut source_changed = false;
         egui::Window::new("计价脚本")
             .open(&mut open)
@@ -201,6 +208,13 @@ impl CodexSwitchApp {
                         });
                 }
                 ui.horizontal(|ui| {
+                    if ui
+                        .button("文档")
+                        .on_hover_text("打开内置约定, 字段和示例")
+                        .clicked()
+                    {
+                        docs_requested = true;
+                    }
                     if ui.button("填入模板").clicked() {
                         template_requested = true;
                     }
@@ -218,6 +232,9 @@ impl CodexSwitchApp {
         if source_changed {
             self.refresh_pricing_compile_message();
         }
+        if docs_requested {
+            self.pricing_ui.docs_open = true;
+        }
         if template_requested {
             self.pricing_ui.source = pricing::DEFAULT_SCRIPT.to_string();
             self.refresh_pricing_compile_message();
@@ -232,6 +249,31 @@ impl CodexSwitchApp {
         } else {
             self.pricing_ui.open = open;
         }
+        self.pricing_script_docs_window(ctx);
+    }
+
+    fn pricing_script_docs_window(&mut self, ctx: &egui::Context) {
+        if !self.pricing_ui.docs_open {
+            return;
+        }
+        let mut open = self.pricing_ui.docs_open;
+        egui::Window::new("计价脚本文档")
+            .id(egui::Id::new("pricing_script_docs_window"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([480.0, 520.0])
+            .min_size([360.0, 240.0])
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("pricing_script_docs_scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.set_max_width(ui.available_width());
+                        show_pricing_guide(ui, PRICING_GUIDE);
+                    });
+            });
+        self.pricing_ui.docs_open = open;
     }
 
     fn refresh_pricing_compile_message(&mut self) {
@@ -340,4 +382,143 @@ fn format_optional_cost(value: Option<f64>) -> String {
         Some(value) => format!("{value:.6} USD"),
         None => "无".to_string(),
     }
+}
+
+fn show_pricing_guide(ui: &mut egui::Ui, source: &str) {
+    let mut lines = source.lines().peekable();
+    while let Some(line) = lines.next() {
+        if line.starts_with("```") {
+            let mut code = String::new();
+            for inner in lines.by_ref() {
+                if inner.starts_with("```") {
+                    break;
+                }
+                if !code.is_empty() {
+                    code.push('\n');
+                }
+                code.push_str(inner);
+            }
+            let width = ui.available_width();
+            egui::Frame::group(ui.style())
+                .inner_margin(8.0)
+                .show(ui, |ui| {
+                    ui.set_max_width(width);
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(&code).monospace())
+                            .wrap_mode(egui::TextWrapMode::Wrap)
+                            .selectable(true),
+                    );
+                });
+            continue;
+        }
+        if line.starts_with('|') {
+            let mut rows = vec![parse_md_row(line)];
+            while lines.peek().is_some_and(|next| next.starts_with('|')) {
+                if let Some(row) = lines.next() {
+                    rows.push(parse_md_row(row));
+                }
+            }
+            rows.retain(|row| !is_md_table_separator(row));
+            show_guide_table(ui, &rows);
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("# ") {
+            ui.add_space(4.0);
+            ui.add(
+                egui::Label::new(egui::RichText::new(strip_md_inline(rest)).heading())
+                    .wrap_mode(egui::TextWrapMode::Wrap)
+                    .selectable(true),
+            );
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("## ") {
+            ui.add_space(8.0);
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(strip_md_inline(rest)).strong().size(16.0),
+                )
+                .wrap_mode(egui::TextWrapMode::Wrap)
+                .selectable(true),
+            );
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("- ") {
+            ui.horizontal_top(|ui| {
+                ui.label("•");
+                ui.add(
+                    egui::Label::new(strip_md_inline(rest))
+                        .wrap_mode(egui::TextWrapMode::Wrap)
+                        .selectable(true),
+                );
+            });
+            continue;
+        }
+        if line.is_empty() {
+            ui.add_space(6.0);
+            continue;
+        }
+        ui.add(
+            egui::Label::new(strip_md_inline(line))
+                .wrap_mode(egui::TextWrapMode::Wrap)
+                .selectable(true),
+        );
+    }
+}
+
+fn show_guide_table(ui: &mut egui::Ui, rows: &[Vec<String>]) {
+    let cols = rows.iter().map(|row| row.len()).max().unwrap_or(0);
+    if cols == 0 {
+        return;
+    }
+    for (index, row) in rows.iter().enumerate() {
+        let fill = if index == 0 {
+            ui.visuals().widgets.inactive.weak_bg_fill
+        } else if index % 2 == 1 {
+            ui.visuals().faint_bg_color
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+        egui::Frame::new()
+            .fill(fill)
+            .inner_margin(egui::Margin::symmetric(8, 5))
+            .show(ui, |ui| {
+                ui.columns(cols, |columns| {
+                    for (col, column) in columns.iter_mut().enumerate() {
+                        let text = row
+                            .get(col)
+                            .map(|cell| strip_md_inline(cell))
+                            .unwrap_or_default();
+                        let rich = if index == 0 {
+                            egui::RichText::new(text).strong()
+                        } else {
+                            egui::RichText::new(text)
+                        };
+                        column.add(
+                            egui::Label::new(rich)
+                                .wrap_mode(egui::TextWrapMode::Wrap)
+                                .selectable(true),
+                        );
+                    }
+                });
+            });
+    }
+}
+
+fn parse_md_row(line: &str) -> Vec<String> {
+    line.trim()
+        .trim_matches('|')
+        .split('|')
+        .map(|cell| cell.trim().to_string())
+        .collect()
+}
+
+fn is_md_table_separator(row: &[String]) -> bool {
+    !row.is_empty()
+        && row.iter().all(|cell| {
+            !cell.is_empty() && cell.chars().all(|ch| matches!(ch, '-' | ':' | ' '))
+        })
+}
+
+fn strip_md_inline(text: &str) -> String {
+    text.replace('`', "")
 }
