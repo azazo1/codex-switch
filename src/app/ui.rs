@@ -36,6 +36,18 @@ const HIDDEN_REPAINT_INTERVAL: Duration = Duration::from_secs(5);
 const CACHE_KEEPALIVE_VISIBLE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const TRAY_STATS_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
+/// 展示访问 key 时保留头尾, 中间用省略号代替.
+fn masked_key(key: &str) -> String {
+    const KEEP: usize = 8;
+    let total = key.chars().count();
+    if total <= KEEP * 2 {
+        return key.to_string();
+    }
+    let head: String = key.chars().take(KEEP).collect();
+    let tail: String = key.chars().skip(total - KEEP).collect();
+    format!("{head}...{tail}")
+}
+
 /// 字节数的人类可读展示, total 存在时输出 "x / y" 形式.
 fn format_bytes(received: u64, total: Option<u64>) -> String {
     const KB: f64 = 1024.0;

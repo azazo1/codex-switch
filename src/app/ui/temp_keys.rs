@@ -133,7 +133,7 @@ impl CodexSwitchApp {
                                 ui.label(if key.name.is_empty() { "-" } else { &key.name });
                                 ui.horizontal(|ui| {
                                     if ui
-                                        .button(&key.key_value)
+                                        .button(super::masked_key(&key.key_value))
                                         .on_hover_text("点击复制")
                                         .clicked()
                                     {

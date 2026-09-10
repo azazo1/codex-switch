@@ -50,7 +50,7 @@ impl CodexSwitchApp {
         ui.horizontal(|ui| {
             ui.label("本地访问 key");
             if ui
-                .button(&self.local_key)
+                .button(super::masked_key(&self.local_key))
                 .on_hover_text("点击复制")
                 .clicked()
             {
@@ -530,7 +530,7 @@ impl CodexSwitchApp {
                 ui.label("刷新后 Codex 需要使用新 key");
                 ui.horizontal(|ui| {
                     ui.label("当前 key");
-                    ui.monospace(&self.local_key);
+                    ui.monospace(super::masked_key(&self.local_key));
                 });
                 ui.horizontal(|ui| {
                     ui.label("新 key");
