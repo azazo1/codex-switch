@@ -1,6 +1,6 @@
 use super::{
     CodexSwitchApp, F64RangeFilter, I64RangeFilter, LogDateTimeFilter, LogRetentionChoice,
-    LogSourceFilter, LogStatusFilter, tokens,
+    LogSourceFilter, LogStatusFilter, text, tokens,
 };
 use crate::core::model_capabilities::ModelCapabilityCache;
 use crate::core::models::{RequestLog, Upstream};
@@ -883,7 +883,7 @@ fn truncated_log_label(
     max_width: f32,
     color: Option<egui::Color32>,
 ) -> egui::Response {
-    let display = elide_to_tail(ui, text, max_width).unwrap_or_else(|| text.to_string());
+    let display = text::elide_to_tail(ui, text, max_width).unwrap_or_else(|| text.to_string());
     let mut rich = egui::RichText::new(display);
     if let Some(color) = color {
         rich = rich.color(color);
@@ -894,39 +894,13 @@ fn truncated_log_label(
 /// 当前页模型列目标宽度: 取最长单行 label, 并留一点余量.
 fn model_column_preferred_width(ui: &egui::Ui, logs: &[RequestLog]) -> f32 {
     let font_id = egui::TextStyle::Body.resolve(ui.style());
-    let mut width = measure_text_width(ui, &font_id, "模型");
+    let mut width = text::measure_text_width(ui, &font_id, "模型");
     for log in logs {
         for line in model_text(log).lines() {
-            width = width.max(measure_text_width(ui, &font_id, line));
+            width = width.max(text::measure_text_width(ui, &font_id, line));
         }
     }
     (width + LOG_MODEL_WIDTH_PAD).max(LOG_MODEL_MIN_WIDTH)
-}
-
-fn measure_text_width(ui: &egui::Ui, font_id: &egui::FontId, text: &str) -> f32 {
-    ui.painter()
-        .layout_no_wrap(text.to_owned(), font_id.clone(), egui::Color32::WHITE)
-        .size()
-        .x
-}
-
-/// 过长时保留末尾并补前导省略号, 不需要截断时返回 None.
-fn elide_to_tail(ui: &egui::Ui, text: &str, max_width: f32) -> Option<String> {
-    let font_id = egui::TextStyle::Body.resolve(ui.style());
-    let measure = |value: &str| measure_text_width(ui, &font_id, value);
-    if measure(text) <= max_width {
-        return None;
-    }
-    const ELLIPSIS: &str = "…";
-    let budget = max_width - measure(ELLIPSIS);
-    let mut keep_from = text.len();
-    for (ch_idx, _) in text.char_indices() {
-        if measure(&text[ch_idx..]) <= budget {
-            keep_from = ch_idx;
-            break;
-        }
-    }
-    Some(format!("{ELLIPSIS}{}", &text[keep_from..]))
 }
 
 fn model_text(log: &RequestLog) -> String {
