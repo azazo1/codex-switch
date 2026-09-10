@@ -856,11 +856,25 @@ async fn estimate_outcome_cost(
     usage: &TokenUsage,
     upstream: Option<&Upstream>,
 ) -> Option<f64> {
-    let price = state.store.find_model_price(model).await.ok().flatten()?;
-    let multiplier = upstream
-        .map(|upstream| upstream.price_multiplier)
-        .unwrap_or(1.0);
-    Some(pricing::estimate_usage_cost(usage, &price).total_usd() * multiplier)
+    let env = pricing::load_cost_estimate_env(&state.store)
+        .await
+        .unwrap_or_else(|err| {
+            tracing::warn!(error = %err, "failed to load pricing env for model test");
+            pricing::CostEstimateEnv::now(None)
+        });
+    let owned = upstream.map(pricing::CostUpstream::from_upstream);
+    pricing::estimate_request_cost(
+        &state.store,
+        &state.pricing,
+        &env,
+        pricing::CostEstimateInput {
+            model: Some(model),
+            target_model: None,
+            usage,
+            upstream: owned.as_ref(),
+        },
+    )
+    .await
 }
 
 /// 按上游协议构造测试请求体, 兼顾单条与多轮消息.

@@ -2120,8 +2120,13 @@ mod tests {
                 .unwrap();
         }
         let events: crate::app::AppEvents = Default::default();
-        let cache_keepalive =
-            CacheKeepaliveRuntime::new(store.clone(), credentials.clone(), events.clone());
+        let pricing = crate::pricing::PricingScript::disabled();
+        let cache_keepalive = CacheKeepaliveRuntime::new(
+            store.clone(),
+            credentials.clone(),
+            events.clone(),
+            pricing.clone(),
+        );
         let oauth_accounts = crate::oauth::OAuthAccountService::new(store.clone());
         let peers = crate::peer::PeerRuntime::new(&store).await.unwrap();
         let update = crate::update::UpdateRuntime::new_for_tests(store.clone(), events.clone());
@@ -2136,6 +2141,7 @@ mod tests {
             cache_keepalive,
             peers,
             update,
+            pricing,
             single_instance: None,
         }
     }

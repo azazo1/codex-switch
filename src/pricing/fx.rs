@@ -1,4 +1,5 @@
 use crate::app::AppState;
+use crate::storage::Store;
 use anyhow::Context;
 use serde_json::Value;
 use std::time::Duration;
@@ -55,10 +56,15 @@ pub async fn fetch_usd_cny_rate(state: &AppState) -> anyhow::Result<UsdCnyRate> 
 
 /// 读取设置中缓存的汇率.
 pub async fn load_usd_cny_rate(state: &AppState) -> anyhow::Result<Option<UsdCnyRate>> {
-    let Some(rate) = state.store.get_setting(RATE_SETTING_KEY).await? else {
+    load_usd_cny_rate_from_store(&state.store).await
+}
+
+/// 从 SQLite settings 读取汇率缓存, 供估算路径使用.
+pub async fn load_usd_cny_rate_from_store(store: &Store) -> anyhow::Result<Option<UsdCnyRate>> {
+    let Some(rate) = store.get_setting(RATE_SETTING_KEY).await? else {
         return Ok(None);
     };
-    let Some(fetched_at) = state.store.get_setting(RATE_FETCHED_AT_SETTING_KEY).await? else {
+    let Some(fetched_at) = store.get_setting(RATE_FETCHED_AT_SETTING_KEY).await? else {
         return Ok(None);
     };
     let rate = rate

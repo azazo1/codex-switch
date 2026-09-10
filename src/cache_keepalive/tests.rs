@@ -184,7 +184,12 @@ async fn test_runtime() -> CacheKeepaliveRuntime {
     ));
     let store = Store::open(path).await.unwrap();
     let credentials = CredentialStore::new_for_tests(store.clone());
-    CacheKeepaliveRuntime::new(store, credentials, AppEvents::default())
+    CacheKeepaliveRuntime::new(
+        store,
+        credentials,
+        AppEvents::default(),
+        crate::pricing::PricingScript::disabled(),
+    )
 }
 
 async fn save_enabled_settings(runtime: &CacheKeepaliveRuntime, upstream: &Upstream) {

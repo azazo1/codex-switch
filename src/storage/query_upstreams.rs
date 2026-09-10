@@ -204,23 +204,6 @@ impl Store {
         })
     }
 
-    /// 查询上游的价格倍率, 上游不存在或未指定时返回 1.0.
-    pub async fn upstream_price_multiplier(
-        &self,
-        upstream_id: Option<&str>,
-    ) -> anyhow::Result<f64> {
-        let Some(id) = upstream_id.map(str::trim).filter(|id| !id.is_empty()) else {
-            return Ok(1.0);
-        };
-        let row = sqlx::query("SELECT price_multiplier FROM upstreams WHERE id = ?1")
-            .bind(id)
-            .fetch_optional(self.pool())
-            .await?;
-        Ok(row
-            .map(|row| row.get::<f64, _>("price_multiplier"))
-            .unwrap_or(1.0))
-    }
-
     pub async fn set_upstream_enabled(&self, id: &str, enabled: bool) -> anyhow::Result<()> {
         sqlx::query("UPDATE upstreams SET enabled = ?2, updated_at = ?3 WHERE id = ?1")
             .bind(id)
@@ -606,21 +589,6 @@ mod tests {
         let saved = store.get_upstream(&upstream.id).await.unwrap().unwrap();
 
         assert_eq!(saved.price_multiplier, 2.5);
-        assert_eq!(
-            store
-                .upstream_price_multiplier(Some(&upstream.id))
-                .await
-                .unwrap(),
-            2.5
-        );
-        assert_eq!(store.upstream_price_multiplier(None).await.unwrap(), 1.0);
-        assert_eq!(
-            store
-                .upstream_price_multiplier(Some("missing"))
-                .await
-                .unwrap(),
-            1.0
-        );
     }
 
     #[tokio::test]

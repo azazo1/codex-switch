@@ -106,6 +106,22 @@ impl Store {
         if self.get_setting("lnd_discovery_enabled").await?.is_none() {
             self.set_setting("lnd_discovery_enabled", "false").await?;
         }
+        if self
+            .get_setting(crate::pricing::SETTING_PRICING_SCRIPT_ENABLED)
+            .await?
+            .is_none()
+        {
+            self.set_setting(crate::pricing::SETTING_PRICING_SCRIPT_ENABLED, "false")
+                .await?;
+        }
+        if self
+            .get_setting(crate::pricing::SETTING_PRICING_SCRIPT)
+            .await?
+            .is_none()
+        {
+            self.set_setting(crate::pricing::SETTING_PRICING_SCRIPT, "")
+                .await?;
+        }
         self.ensure_default_schedule_group().await?;
         Ok(())
     }

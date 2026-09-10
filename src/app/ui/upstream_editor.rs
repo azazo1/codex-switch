@@ -336,7 +336,7 @@ impl UpstreamEditor {
                     .range(0.0..=1000.0),
             )
             .on_hover_text(
-                "估算成本 = 模型官方价 x 倍率, 用于中转站按倍率计费的场景. 只影响成本统计, 不影响请求转发.",
+                "内置估算成本 = 模型官方价 x 倍率. 启用计价脚本后需自行使用 ctx.multiplier. 只影响成本统计, 不影响请求转发.",
             );
         });
         ui.horizontal(|ui| {

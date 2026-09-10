@@ -64,6 +64,7 @@ Invoke-RestMethod -Uri "http://127.0.0.1:15721/v1/models" -Headers $headers
 | 余额查询, 自动刷新和系统提醒 | [余额刷新与提醒指南](docs/balance-alert-guide.md) |
 | 运行中的请求 | [活跃连接指南](docs/active-connections-guide.md) |
 | 请求记录和筛选 | [日志使用指南](docs/logs-guide.md) |
+| 费用估算和计价脚本 | [费用估算与计价脚本](docs/pricing-guide.md) |
 | SQLite, 凭据和备份 | [存储与备份指南](docs/storage-guide.md) |
 | 本地构建和 GitHub Release | [构建与发布指南](docs/build-release-guide.md) |
 | 自动检查, 下载和安装新版本 | [自动更新指南](docs/update-guide.md) |

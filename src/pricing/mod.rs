@@ -1,4 +1,11 @@
 pub mod fx;
+mod script;
+
+pub use script::{
+    attach_estimated_cost, compile_check, estimate_request_cost, load_cost_estimate_env,
+    preview_estimate, CostEstimateEnv, CostEstimateInput, CostUpstream, PricingScript,
+    DEFAULT_SCRIPT, SETTING_PRICING_SCRIPT, SETTING_PRICING_SCRIPT_ENABLED,
+};
 
 use crate::app::AppState;
 use crate::core::model_capabilities::model_multimodal_from_item;
@@ -119,7 +126,7 @@ pub fn should_keepalive_cache(
     cost.keepalive_usd * ((keepalive_count.max(0) + 1) as f64) < cost.refresh_loss_usd * 0.8
 }
 
-fn usd_for_tokens(tokens: i64, usd_per_million: f64) -> f64 {
+pub(crate) fn usd_for_tokens(tokens: i64, usd_per_million: f64) -> f64 {
     tokens.max(0) as f64 * usd_per_million / 1_000_000.0
 }
 

@@ -14,7 +14,7 @@ use crate::core::models::{
     CacheKeepaliveMode, RequestLog, RequestLogSource, TokenUsage, UpstreamCacheKeepaliveSettings,
     UpstreamKind, WireApi,
 };
-use crate::pricing;
+use crate::pricing::{self, PricingScript};
 use crate::storage::{Store, credentials::CredentialStore};
 use crate::{
     proxy::{transform, upstream_auth},
@@ -32,15 +32,22 @@ pub struct CacheKeepaliveRuntime {
     pub(super) store: Store,
     credentials: CredentialStore,
     events: AppEvents,
+    pricing: PricingScript,
 }
 
 impl CacheKeepaliveRuntime {
-    pub fn new(store: Store, credentials: CredentialStore, events: AppEvents) -> Self {
+    pub fn new(
+        store: Store,
+        credentials: CredentialStore,
+        events: AppEvents,
+        pricing: PricingScript,
+    ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(CacheKeepaliveInner::default())),
             store,
             credentials,
             events,
+            pricing,
         }
     }
 
@@ -540,6 +547,8 @@ impl CacheKeepaliveRuntime {
             first_token_ms: None,
             error,
         };
+        let mut log = log;
+        pricing::attach_estimated_cost(&self.store, &self.pricing, &mut log).await;
         match self.store.insert_request_log(log).await {
             Ok(()) => self.events.bump_request_logs(),
             Err(err) => tracing::warn!(error = %err, "failed to record cache keepalive log"),

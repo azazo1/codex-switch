@@ -29,6 +29,7 @@ rcgen = "0.14"
 reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls", "stream", "system-proxy"] }
 resvg = { version = "0.48.1", default-features = false }
 rfd = "0.17"
+rhai = { version = "1.26", features = ["sync"] }
 ron = { version = "0.12", features = ["integer128"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pki-types = "1"

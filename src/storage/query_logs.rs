@@ -1,7 +1,6 @@
 use crate::core::models::{
     DashboardStats, ModelUsageStats, ProviderStats, RequestLog, RequestLogSource, TokenUsage,
 };
-use crate::pricing;
 use crate::storage::Store;
 use chrono::{DateTime, Utc};
 use sqlx::{QueryBuilder, Row, Sqlite};
@@ -57,16 +56,6 @@ impl Store {
             .upstream_name
             .clone()
             .unwrap_or_else(|| "未选择".to_string());
-        let price_multiplier = self
-            .upstream_price_multiplier(log.upstream_id.as_deref())
-            .await?;
-        let estimated_cost_usd = match log.model.as_deref() {
-            Some(model) => self.find_model_price(model).await?.map(|price| {
-                pricing::estimate_usage_cost(&log.usage, &price).total_usd() * price_multiplier
-            }),
-            None => None,
-        };
-
         sqlx::query(
             "INSERT INTO request_logs (
                 ts, upstream_id, upstream_name, endpoint, model, target_model, reasoning_effort,
@@ -87,7 +76,7 @@ impl Store {
         .bind(log.usage.cache_read_tokens)
         .bind(log.usage.cache_creation_tokens)
         .bind(log.usage.total_tokens)
-        .bind(estimated_cost_usd)
+        .bind(log.estimated_cost_usd)
         .bind(log.duration_ms)
         .bind(log.first_token_ms)
         .bind(&log.error)
@@ -640,7 +629,7 @@ fn usage_from_rollup(row: &sqlx::sqlite::SqliteRow) -> TokenUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::models::{BalanceProvider, ModelPrice, Upstream, WireApi};
+    use crate::core::models::{BalanceProvider, Upstream, WireApi};
     use chrono::TimeZone;
 
     #[tokio::test]
@@ -773,29 +762,12 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
         let store = Store::open(path).await.unwrap();
-        store
-            .replace_model_prices(&[ModelPrice {
-                provider_id: "openai".to_string(),
-                provider_name: "OpenAI".to_string(),
-                model_id: "gpt-test".to_string(),
-                model_name: "GPT Test".to_string(),
-                input_usd_per_million: Some(1.0),
-                output_usd_per_million: Some(2.0),
-                currency: "USD".to_string(),
-                source: "test".to_string(),
-                official: true,
-                ..Default::default()
-            }])
-            .await
-            .unwrap();
-        store
-            .insert_request_log(test_log(Some("upstream-a"), Some("relay-a"), 100))
-            .await
-            .unwrap();
-        store
-            .insert_request_log(test_log(Some("upstream-a"), Some("relay-a"), 2_000_000))
-            .await
-            .unwrap();
+        let mut cheap = test_log(Some("upstream-a"), Some("relay-a"), 100);
+        cheap.estimated_cost_usd = Some(0.1);
+        let mut expensive = test_log(Some("upstream-a"), Some("relay-a"), 2_000_000);
+        expensive.estimated_cost_usd = Some(2.0);
+        store.insert_request_log(cheap).await.unwrap();
+        store.insert_request_log(expensive).await.unwrap();
 
         let filter = RequestLogFilter {
             estimated_cost_usd_min: Some(1.0),
@@ -874,54 +846,6 @@ mod tests {
             .unwrap();
         assert_eq!(fallback_logs.len(), 1);
         assert_eq!(fallback_logs[0].model.as_deref(), Some("gpt-5.2"));
-    }
-
-    #[tokio::test]
-    async fn estimated_cost_applies_upstream_price_multiplier() {
-        let path =
-            std::env::temp_dir().join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
-        let store = Store::open(path).await.unwrap();
-        store
-            .replace_model_prices(&[ModelPrice {
-                provider_id: "openai".to_string(),
-                provider_name: "OpenAI".to_string(),
-                model_id: "gpt-test".to_string(),
-                model_name: "GPT Test".to_string(),
-                input_usd_per_million: Some(1.0),
-                output_usd_per_million: Some(2.0),
-                currency: "USD".to_string(),
-                source: "test".to_string(),
-                official: true,
-                ..Default::default()
-            }])
-            .await
-            .unwrap();
-        let mut upstream = save_test_upstream(&store, "relay-a").await;
-        upstream.price_multiplier = 1.5;
-        store.save_upstream(&upstream).await.unwrap();
-
-        let mut log = test_log(Some(&upstream.id), Some("relay-a"), 1_000_000);
-        log.usage.output_tokens = 1_000_000;
-        store.insert_request_log(log).await.unwrap();
-        let mut unassigned = test_log(None, None, 1_000_000);
-        unassigned.usage.output_tokens = 1_000_000;
-        store.insert_request_log(unassigned).await.unwrap();
-
-        let logs = store.recent_logs_page(10, 0).await.unwrap();
-        let assigned_cost = logs
-            .iter()
-            .find(|log| log.upstream_id.as_deref() == Some(&upstream.id))
-            .unwrap()
-            .estimated_cost_usd
-            .unwrap();
-        let unassigned_cost = logs
-            .iter()
-            .find(|log| log.upstream_id.is_none())
-            .unwrap()
-            .estimated_cost_usd
-            .unwrap();
-        assert!((assigned_cost - 4.5).abs() < 1e-9);
-        assert!((unassigned_cost - 3.0).abs() < 1e-9);
     }
 
     fn test_log(

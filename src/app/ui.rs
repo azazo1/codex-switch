@@ -79,6 +79,7 @@ mod logs;
 mod model_test;
 mod oauth;
 mod peers;
+mod pricing_script;
 mod quota;
 mod scheduler;
 mod temp_keys;
@@ -482,6 +483,7 @@ pub struct CodexSwitchApp {
     local_key_copied_at: Option<Instant>,
     local_key_refresh_open: bool,
     local_key_refresh_value: String,
+    pricing_ui: pricing_script::PricingScriptUi,
     last_seen_request_log_version: u64,
     last_request_log_poll_at: Instant,
     last_seen_live_stream_version: u64,
@@ -717,6 +719,7 @@ impl CodexSwitchApp {
             local_key_copied_at: None,
             local_key_refresh_open: false,
             local_key_refresh_value: String::new(),
+            pricing_ui: pricing_script::PricingScriptUi::default(),
             last_seen_request_log_version,
             last_request_log_poll_at: Instant::now(),
             last_seen_live_stream_version,
