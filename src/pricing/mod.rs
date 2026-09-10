@@ -1,8 +1,10 @@
 pub mod fx;
 mod engine;
+mod presets;
 mod script;
 
 pub use engine::{attach_estimated_cost, estimate_request_cost, PricingEngine};
+pub use presets::{preset, PricingPreset, PRESETS, PRESET_DEFAULT, PRESET_DEEPSEEK_OFFICIAL};
 pub use script::{
     compile_check, load_cost_estimate_env, preview_estimate, CostEstimateEnv, CostEstimateInput,
     CostUpstream, PricingScript, DEFAULT_SCRIPT, SETTING_PRICING_SCRIPT,

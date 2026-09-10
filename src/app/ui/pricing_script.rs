@@ -30,6 +30,7 @@ pub(super) struct PricingScriptUi {
     pub preview_script: String,
     pub preview_builtin: String,
     pub preview_logs: String,
+    pub selected_preset: String,
 }
 
 impl Default for PricingScriptUi {
@@ -51,6 +52,7 @@ impl Default for PricingScriptUi {
             preview_script: String::new(),
             preview_builtin: String::new(),
             preview_logs: String::new(),
+            selected_preset: pricing::PRESET_DEFAULT.to_string(),
         }
     }
 }
@@ -58,12 +60,14 @@ impl Default for PricingScriptUi {
 impl CodexSwitchApp {
     pub(super) fn open_pricing_script_window(&mut self) {
         self.pricing_ui.target = PricingScriptTarget::Global;
+        self.pricing_ui.selected_preset = pricing::PRESET_DEFAULT.to_string();
         self.load_pricing_editor_from_state();
     }
 
     pub(super) fn open_upstream_pricing_script_window(&mut self, id: String, name: String) {
         self.pricing_ui.preview_upstream_id = Some(id.clone());
         self.pricing_ui.target = PricingScriptTarget::Upstream { id, name };
+        self.pricing_ui.selected_preset = pricing::PRESET_DEEPSEEK_OFFICIAL.to_string();
         self.load_pricing_editor_from_state();
     }
 
@@ -124,7 +128,31 @@ impl CodexSwitchApp {
                 ui.label(
                     "优先级: 上游脚本 > 全局脚本 > 内置公式. 保存后立即覆盖费用估算, 无需重启. 返回值必须是 USD. 未启用, 为空, 编译失败, 返回 () 或运行失败时进入下一层.",
                 );
-                ui.checkbox(&mut self.pricing_ui.enabled, "启用脚本");
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.pricing_ui.enabled, "启用脚本");
+                    ui.label("预设");
+                    let selected_label = pricing::preset(&self.pricing_ui.selected_preset)
+                        .map(|preset| preset.label)
+                        .unwrap_or("默认");
+                    egui::ComboBox::from_id_salt("pricing_preset")
+                        .selected_text(selected_label)
+                        .show_ui(ui, |ui| {
+                            for preset in pricing::PRESETS {
+                                ui.selectable_value(
+                                    &mut self.pricing_ui.selected_preset,
+                                    preset.id.to_string(),
+                                    preset.label,
+                                );
+                            }
+                        });
+                    if ui
+                        .button("填入")
+                        .on_hover_text("用所选预设替换当前脚本, 不会自动保存")
+                        .clicked()
+                    {
+                        template_requested = true;
+                    }
+                });
                 egui::ScrollArea::both()
                     .id_salt("pricing_script_source_scroll")
                     .max_height(240.0)
@@ -284,9 +312,6 @@ impl CodexSwitchApp {
                     {
                         docs_requested = true;
                     }
-                    if ui.button("填入模板").clicked() {
-                        template_requested = true;
-                    }
                     if ui.button("试算").clicked() {
                         preview_requested = true;
                     }
@@ -305,8 +330,10 @@ impl CodexSwitchApp {
             self.pricing_ui.docs_open = true;
         }
         if template_requested {
-            self.pricing_ui.source = pricing::DEFAULT_SCRIPT.to_string();
-            self.refresh_pricing_compile_message();
+            if let Some(preset) = pricing::preset(&self.pricing_ui.selected_preset) {
+                self.pricing_ui.source = preset.source.to_string();
+                self.refresh_pricing_compile_message();
+            }
         }
         if preview_requested {
             self.preview_pricing_script();

@@ -10,20 +10,11 @@ pub const SETTING_PRICING_SCRIPT_ENABLED: &str = "pricing_script_enabled";
 pub const SETTING_PRICING_SCRIPT: &str = "pricing_script";
 
 pub const DEFAULT_SCRIPT: &str = r#"fn estimate(ctx) {
-  // 返回值必须是 USD. 人民币报价先算 CNY 再除以汇率.
-  let fx = if ctx.fx != () { ctx.fx.usd_cny } else { 7.2 };
-
-  if ctx.model.contains("deepseek") {
-    let cny = usd_for_tokens(ctx.usage.uncached_input_tokens, 2.0)
-      + usd_for_tokens(ctx.usage.output_tokens, 8.0);
-    return cny / fx;
+  // 返回值必须是 USD. 未启用或返回 () 时进入下一层.
+  if ctx.builtin != () {
+    return ctx.builtin * ctx.multiplier;
   }
-
-  let cost = if ctx.builtin != () { ctx.builtin * ctx.multiplier } else { () };
-  if cost != () && ctx.local.hour >= 19 && ctx.local.hour < 23 {
-    return cost * 1.2;
-  }
-  cost
+  ()
 }
 "#;
 
