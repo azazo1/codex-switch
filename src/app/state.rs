@@ -19,6 +19,7 @@ use std::sync::{
 const DATA_DIR_ENV: &str = "CODEX_SWITCH_DATA_DIR";
 
 pub(crate) const SETTING_HIDE_ON_LAUNCH: &str = "hide_on_launch";
+#[cfg(target_os = "macos")]
 pub(crate) const SETTING_DOCK_ICON_FOLLOWS_WINDOW: &str = "dock_icon_follows_window";
 pub(crate) const SETTING_START_SERVER_ON_LAUNCH: &str = "start_server_on_launch";
 pub(crate) const SETTING_START_PEER_ON_LAUNCH: &str = "start_peer_on_launch";
