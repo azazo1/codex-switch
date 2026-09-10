@@ -95,9 +95,7 @@ impl CodexSwitchApp {
                         self.update_window_open = true;
                     }
                 }
-                UpdateState::ReadyToRestart
-                | UpdateState::HandedOff
-                | UpdateState::DmgOpened => {
+                UpdateState::ReadyToRestart | UpdateState::HandedOff | UpdateState::DmgOpened => {
                     if ui
                         .link(egui::RichText::new("更新已就绪, 点击查看").strong())
                         .clicked()

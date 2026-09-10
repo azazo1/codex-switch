@@ -1,4 +1,3 @@
-use super::compile_check;
 use super::DEFAULT_SCRIPT;
 
 pub const PRESET_DEFAULT: &str = "default";
@@ -30,6 +29,7 @@ pub fn preset(id: &str) -> Option<&'static PricingPreset> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::compile_check;
     use super::*;
 
     #[test]

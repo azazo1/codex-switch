@@ -1,3 +1,4 @@
+use super::query_pricing::{UpstreamPricingScript, save_upstream_pricing_script_in_tx};
 use crate::core::models::{
     ApiKeyAuthScheme, BalanceProvider, ErrorRetryPolicy, UnknownModalityPolicy, Upstream,
     UpstreamKind, WireApi,
@@ -5,7 +6,6 @@ use crate::core::models::{
 use crate::core::upstream_transfer::{
     UPSTREAM_EXPORT_VERSION, UpstreamExport, UpstreamExportItem, UpstreamPricingScriptExport,
 };
-use super::query_pricing::{save_upstream_pricing_script_in_tx, UpstreamPricingScript};
 use crate::storage::Store;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
@@ -689,7 +689,10 @@ mod tests {
             item.credentials.get("api_key").map(String::as_str),
             Some("sk-test")
         );
-        let script = item.pricing_script.as_ref().expect("pricing script exported");
+        let script = item
+            .pricing_script
+            .as_ref()
+            .expect("pricing script exported");
         assert!(script.enabled);
         assert_eq!(script.source, "fn estimate(ctx) { 1.0 }");
 

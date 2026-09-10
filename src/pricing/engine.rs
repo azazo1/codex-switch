@@ -1,7 +1,7 @@
-use super::script::{
-    lookup_price, CostEstimateEnv, CostEstimateInput, CostUpstream, PricingScript, ScriptEstimate,
-};
 use super::estimate_usage_cost;
+use super::script::{
+    CostEstimateEnv, CostEstimateInput, CostUpstream, PricingScript, ScriptEstimate, lookup_price,
+};
 use crate::core::models::RequestLog;
 use crate::storage::{Store, UpstreamPricingScript};
 use std::collections::HashMap;
@@ -118,9 +118,7 @@ impl PricingEngine {
     }
 
     fn lock_upstreams(&self) -> std::sync::MutexGuard<'_, HashMap<String, PricingScript>> {
-        self.upstreams
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
+        self.upstreams.lock().unwrap_or_else(|err| err.into_inner())
     }
 }
 
@@ -401,18 +399,16 @@ mod tests {
         let store = test_store().await;
         seed_price(&store).await;
         let engine = PricingEngine::disabled();
-        engine.global().apply(true, "fn estimate(ctx) { 9.0 }".to_string());
+        engine
+            .global()
+            .apply(true, "fn estimate(ctx) { 9.0 }".to_string());
         engine.apply_upstream("u1", true, "fn estimate(ctx) { 1.5 }".to_string());
         let usage = usage();
         let upstream = cost_upstream("u1", 1.5);
-        let cost = estimate_request_cost(
-            &store,
-            &engine,
-            &env_at(11),
-            input(&usage, Some(&upstream)),
-        )
-        .await
-        .unwrap();
+        let cost =
+            estimate_request_cost(&store, &engine, &env_at(11), input(&usage, Some(&upstream)))
+                .await
+                .unwrap();
         assert!((cost - 1.5).abs() < 1e-9);
     }
 
@@ -421,18 +417,16 @@ mod tests {
         let store = test_store().await;
         seed_price(&store).await;
         let engine = PricingEngine::disabled();
-        engine.global().apply(true, "fn estimate(ctx) { 8.0 }".to_string());
+        engine
+            .global()
+            .apply(true, "fn estimate(ctx) { 8.0 }".to_string());
         engine.apply_upstream("u1", true, "fn estimate(ctx) { () }".to_string());
         let usage = usage();
         let upstream = cost_upstream("u1", 1.0);
-        let cost = estimate_request_cost(
-            &store,
-            &engine,
-            &env_at(11),
-            input(&usage, Some(&upstream)),
-        )
-        .await
-        .unwrap();
+        let cost =
+            estimate_request_cost(&store, &engine, &env_at(11), input(&usage, Some(&upstream)))
+                .await
+                .unwrap();
         assert!((cost - 8.0).abs() < 1e-9);
     }
 
@@ -441,18 +435,16 @@ mod tests {
         let store = test_store().await;
         seed_price(&store).await;
         let engine = PricingEngine::disabled();
-        engine.global().apply(true, "fn estimate(ctx) { 8.0 }".to_string());
+        engine
+            .global()
+            .apply(true, "fn estimate(ctx) { 8.0 }".to_string());
         engine.apply_upstream("u1", true, "fn estimate(ctx) { ctx.missing }".to_string());
         let usage = usage();
         let upstream = cost_upstream("u1", 1.0);
-        let cost = estimate_request_cost(
-            &store,
-            &engine,
-            &env_at(11),
-            input(&usage, Some(&upstream)),
-        )
-        .await
-        .unwrap();
+        let cost =
+            estimate_request_cost(&store, &engine, &env_at(11), input(&usage, Some(&upstream)))
+                .await
+                .unwrap();
         assert!((cost - 8.0).abs() < 1e-9);
     }
 
@@ -461,17 +453,15 @@ mod tests {
         let store = test_store().await;
         seed_price(&store).await;
         let engine = PricingEngine::disabled();
-        engine.global().apply(true, "fn estimate(ctx) { 7.0 }".to_string());
+        engine
+            .global()
+            .apply(true, "fn estimate(ctx) { 7.0 }".to_string());
         let usage = usage();
         let upstream = cost_upstream("u1", 1.0);
-        let cost = estimate_request_cost(
-            &store,
-            &engine,
-            &env_at(11),
-            input(&usage, Some(&upstream)),
-        )
-        .await
-        .unwrap();
+        let cost =
+            estimate_request_cost(&store, &engine, &env_at(11), input(&usage, Some(&upstream)))
+                .await
+                .unwrap();
         assert!((cost - 7.0).abs() < 1e-9);
     }
 
@@ -480,18 +470,16 @@ mod tests {
         let store = test_store().await;
         seed_price(&store).await;
         let engine = PricingEngine::disabled();
-        engine.global().apply(true, "fn estimate(ctx) { () }".to_string());
+        engine
+            .global()
+            .apply(true, "fn estimate(ctx) { () }".to_string());
         engine.apply_upstream("u1", true, "fn estimate(ctx) { () }".to_string());
         let usage = usage();
         let upstream = cost_upstream("u1", 1.5);
-        let cost = estimate_request_cost(
-            &store,
-            &engine,
-            &env_at(11),
-            input(&usage, Some(&upstream)),
-        )
-        .await
-        .unwrap();
+        let cost =
+            estimate_request_cost(&store, &engine, &env_at(11), input(&usage, Some(&upstream)))
+                .await
+                .unwrap();
         assert!((cost - 4.5).abs() < 1e-9);
     }
 
@@ -507,11 +495,7 @@ mod tests {
         );
         store.save_upstream(&upstream).await.unwrap();
         let engine = PricingEngine::disabled();
-        engine.apply_upstream(
-            &upstream.id,
-            true,
-            "fn estimate(ctx) { 2.0 }".to_string(),
-        );
+        engine.apply_upstream(&upstream.id, true, "fn estimate(ctx) { 2.0 }".to_string());
         engine.persist_upstream(&store, &upstream.id).await.unwrap();
         let loaded = PricingEngine::load(&store).await.unwrap();
         let script = loaded.upstream_script(&upstream.id).unwrap();

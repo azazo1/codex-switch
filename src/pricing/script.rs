@@ -3,7 +3,7 @@ use super::{estimate_usage_cost, usd_for_tokens};
 use crate::core::models::{BalanceSnapshot, ModelPrice, TokenUsage, Upstream};
 use crate::storage::Store;
 use chrono::{DateTime, Datelike, Local, Timelike, Utc};
-use rhai::{CustomType, Dynamic, Engine, Scope, AST};
+use rhai::{AST, CustomType, Dynamic, Engine, Scope};
 use std::sync::{Arc, Mutex};
 
 pub const SETTING_PRICING_SCRIPT_ENABLED: &str = "pricing_script_enabled";
@@ -719,7 +719,10 @@ fn dynamic_to_cost(value: Dynamic) -> Result<Option<f64>, String> {
     } else if let Some(value) = value.clone().try_cast::<i64>() {
         value as f64
     } else {
-        return Err(format!("estimate 必须返回数字或 (), 实际类型 {}", value.type_name()));
+        return Err(format!(
+            "estimate 必须返回数字或 (), 实际类型 {}",
+            value.type_name()
+        ));
     };
     if !cost.is_finite() || cost < 0.0 {
         return Err(format!("estimate 返回了无效费用 {cost}"));
@@ -733,7 +736,7 @@ mod tests {
     use crate::core::models::{
         BalanceProvider, BalanceSnapshot, ModelPrice, RequestLog, TokenUsage, Upstream, WireApi,
     };
-    use crate::pricing::engine::{attach_estimated_cost, estimate_request_cost, PricingEngine};
+    use crate::pricing::engine::{PricingEngine, attach_estimated_cost, estimate_request_cost};
     use chrono::TimeZone;
 
     fn usage() -> TokenUsage {
@@ -781,7 +784,10 @@ mod tests {
             .unwrap();
     }
 
-    fn input<'a>(usage: &'a TokenUsage, upstream: Option<&'a CostUpstream>) -> CostEstimateInput<'a> {
+    fn input<'a>(
+        usage: &'a TokenUsage,
+        upstream: Option<&'a CostUpstream>,
+    ) -> CostEstimateInput<'a> {
         CostEstimateInput {
             model: Some("gpt-test"),
             target_model: None,
@@ -803,9 +809,14 @@ mod tests {
             base_url: "https://example.test".to_string(),
             multiplier: 1.5,
         };
-        let cost = estimate_request_cost(&store, &PricingEngine::from_global(script.clone()), &env_at(11, None), input(&usage, Some(&upstream)))
-            .await
-            .unwrap();
+        let cost = estimate_request_cost(
+            &store,
+            &PricingEngine::from_global(script.clone()),
+            &env_at(11, None),
+            input(&usage, Some(&upstream)),
+        )
+        .await
+        .unwrap();
         assert!((cost - 4.5).abs() < 1e-9);
     }
 
@@ -814,10 +825,7 @@ mod tests {
         let store = test_store().await;
         seed_price(&store).await;
         let script = PricingScript::disabled();
-        script.apply(
-            true,
-            "fn estimate(ctx) { 9.0 }".to_string(),
-        );
+        script.apply(true, "fn estimate(ctx) { 9.0 }".to_string());
         let usage = usage();
         let upstream = CostUpstream {
             id: "u1".to_string(),
@@ -826,9 +834,14 @@ mod tests {
             base_url: "https://example.test".to_string(),
             multiplier: 1.5,
         };
-        let cost = estimate_request_cost(&store, &PricingEngine::from_global(script.clone()), &env_at(11, None), input(&usage, Some(&upstream)))
-            .await
-            .unwrap();
+        let cost = estimate_request_cost(
+            &store,
+            &PricingEngine::from_global(script.clone()),
+            &env_at(11, None),
+            input(&usage, Some(&upstream)),
+        )
+        .await
+        .unwrap();
         assert!((cost - 9.0).abs() < 1e-9);
     }
 
@@ -839,9 +852,14 @@ mod tests {
         let script = PricingScript::disabled();
         script.apply(true, "fn estimate(ctx) { () }".to_string());
         let usage = usage();
-        let cost = estimate_request_cost(&store, &PricingEngine::from_global(script.clone()), &env_at(11, None), input(&usage, None))
-            .await
-            .unwrap();
+        let cost = estimate_request_cost(
+            &store,
+            &PricingEngine::from_global(script.clone()),
+            &env_at(11, None),
+            input(&usage, None),
+        )
+        .await
+        .unwrap();
         assert!((cost - 3.0).abs() < 1e-9);
     }
 
@@ -854,9 +872,14 @@ mod tests {
             "fn estimate(ctx) { usd_for_tokens(ctx.usage.uncached_input_tokens, 4.0) }".to_string(),
         );
         let usage = usage();
-        let cost = estimate_request_cost(&store, &PricingEngine::from_global(script.clone()), &env_at(11, None), input(&usage, None))
-            .await
-            .unwrap();
+        let cost = estimate_request_cost(
+            &store,
+            &PricingEngine::from_global(script.clone()),
+            &env_at(11, None),
+            input(&usage, None),
+        )
+        .await
+        .unwrap();
         assert!((cost - 4.0).abs() < 1e-9);
     }
 
@@ -933,9 +956,14 @@ mod tests {
         assert!(script.compile_error().is_some());
         assert!(!script.is_ready());
         let usage = usage();
-        let cost = estimate_request_cost(&store, &PricingEngine::from_global(script.clone()), &env_at(11, None), input(&usage, None))
-            .await
-            .unwrap();
+        let cost = estimate_request_cost(
+            &store,
+            &PricingEngine::from_global(script.clone()),
+            &env_at(11, None),
+            input(&usage, None),
+        )
+        .await
+        .unwrap();
         assert!((cost - 3.0).abs() < 1e-9);
     }
 
@@ -946,9 +974,14 @@ mod tests {
         let script = PricingScript::disabled();
         script.apply(true, "fn estimate(ctx) { ctx.missing }".to_string());
         let usage = usage();
-        let cost = estimate_request_cost(&store, &PricingEngine::from_global(script.clone()), &env_at(11, None), input(&usage, None))
-            .await
-            .unwrap();
+        let cost = estimate_request_cost(
+            &store,
+            &PricingEngine::from_global(script.clone()),
+            &env_at(11, None),
+            input(&usage, None),
+        )
+        .await
+        .unwrap();
         assert!((cost - 3.0).abs() < 1e-9);
         assert!(script.runtime_error().is_some());
     }
@@ -960,9 +993,14 @@ mod tests {
         let script = PricingScript::disabled();
         script.apply(true, "fn estimate(ctx) { loop {} }".to_string());
         let usage = usage();
-        let cost = estimate_request_cost(&store, &PricingEngine::from_global(script.clone()), &env_at(11, None), input(&usage, None))
-            .await
-            .unwrap();
+        let cost = estimate_request_cost(
+            &store,
+            &PricingEngine::from_global(script.clone()),
+            &env_at(11, None),
+            input(&usage, None),
+        )
+        .await
+        .unwrap();
         assert!((cost - 3.0).abs() < 1e-9);
     }
 
@@ -1173,9 +1211,12 @@ mod tests {
         let script = PricingScript::disabled();
         script.apply(true, "fn estimate(ctx) { charge(1.5); 2.0 }".to_string());
         let mut log = sample_log(&upstream);
-        let changed =
-            attach_estimated_cost(&store, &PricingEngine::from_global(script.clone()), &mut log)
-                .await;
+        let changed = attach_estimated_cost(
+            &store,
+            &PricingEngine::from_global(script.clone()),
+            &mut log,
+        )
+        .await;
         assert!(!changed);
         assert!((log.estimated_cost_usd.unwrap() - 2.0).abs() < 1e-9);
         let snapshot = store
@@ -1198,7 +1239,13 @@ mod tests {
         let changed =
             attach_estimated_cost(&store, &PricingEngine::from_global(script), &mut log).await;
         assert!(!changed);
-        assert!(store.get_balance_snapshot(&other.id).await.unwrap().is_none());
+        assert!(
+            store
+                .get_balance_snapshot(&other.id)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]

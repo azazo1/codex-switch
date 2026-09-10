@@ -316,11 +316,11 @@ impl CodexSwitchApp {
         if docs_requested {
             self.pricing_ui.docs_open = true;
         }
-        if template_requested {
-            if let Some(preset) = pricing::preset(&self.pricing_ui.selected_preset) {
-                self.pricing_ui.source = preset.source.to_string();
-                self.refresh_pricing_compile_message();
-            }
+        if template_requested
+            && let Some(preset) = pricing::preset(&self.pricing_ui.selected_preset)
+        {
+            self.pricing_ui.source = preset.source.to_string();
+            self.refresh_pricing_compile_message();
         }
         if preview_requested {
             self.preview_pricing_script();
@@ -552,7 +552,9 @@ fn show_pricing_guide(ui: &mut egui::Ui, source: &str) {
             ui.add_space(8.0);
             ui.add(
                 egui::Label::new(
-                    egui::RichText::new(strip_md_inline(rest)).strong().size(16.0),
+                    egui::RichText::new(strip_md_inline(rest))
+                        .strong()
+                        .size(16.0),
                 )
                 .wrap_mode(egui::TextWrapMode::Wrap)
                 .selectable(true),
@@ -631,9 +633,9 @@ fn parse_md_row(line: &str) -> Vec<String> {
 
 fn is_md_table_separator(row: &[String]) -> bool {
     !row.is_empty()
-        && row.iter().all(|cell| {
-            !cell.is_empty() && cell.chars().all(|ch| matches!(ch, '-' | ':' | ' '))
-        })
+        && row
+            .iter()
+            .all(|cell| !cell.is_empty() && cell.chars().all(|ch| matches!(ch, '-' | ':' | ' ')))
 }
 
 fn strip_md_inline(text: &str) -> String {

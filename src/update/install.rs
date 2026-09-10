@@ -301,7 +301,10 @@ mod macos {
             ),
             (
                 "__LOG__",
-                work_dir.join(HELPER_LOG_NAME).to_string_lossy().into_owned(),
+                work_dir
+                    .join(HELPER_LOG_NAME)
+                    .to_string_lossy()
+                    .into_owned(),
             ),
             (
                 "__MOUNT_POINT__",
@@ -455,7 +458,9 @@ mod macos_tests {
         assert!(!script.contains("__BUNDLE__"));
         assert!(script.contains("'/Applications/Codex Switch.app'"));
         assert!(script.contains("'/Applications/Codex Switch.app.old'"));
-        assert!(script.contains("'/Users/me/Library/Application Support/Codex Switch/update/a.dmg'"));
+        assert!(
+            script.contains("'/Users/me/Library/Application Support/Codex Switch/update/a.dmg'")
+        );
     }
 
     #[test]
@@ -475,7 +480,10 @@ mod macos_tests {
             .status()
             .expect("failed to run bash -n");
         let _ = std::fs::remove_dir_all(&dir);
-        assert!(status.success(), "generated helper script has syntax errors");
+        assert!(
+            status.success(),
+            "generated helper script has syntax errors"
+        );
     }
 }
 

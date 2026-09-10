@@ -84,11 +84,7 @@ impl Store {
     }
 
     /// 按计价脚本 charge 的 delta 扣减 remaining. 无有效快照或 remaining 缺失时不改.
-    pub async fn apply_balance_debit(
-        &self,
-        upstream_id: &str,
-        debit: f64,
-    ) -> anyhow::Result<bool> {
+    pub async fn apply_balance_debit(&self, upstream_id: &str, debit: f64) -> anyhow::Result<bool> {
         if !debit.is_finite() || debit == 0.0 {
             return Ok(false);
         }

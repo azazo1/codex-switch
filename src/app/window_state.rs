@@ -331,7 +331,10 @@ mod tests {
         let mut kv = HashMap::new();
         let mut settings = valid_settings();
         settings.fullscreen = true;
-        kv.insert(WINDOW_KEY.to_owned(), ron::ser::to_string(&settings).unwrap());
+        kv.insert(
+            WINDOW_KEY.to_owned(),
+            ron::ser::to_string(&settings).unwrap(),
+        );
         write_kv(&path, &kv);
 
         assert!(take_initial_fullscreen(&path));

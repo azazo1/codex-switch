@@ -553,15 +553,13 @@ fn migrations() -> &'static [Migration] {
         Migration {
             version: 24,
             name: "upstream_pricing_scripts",
-            statements: &[
-                "CREATE TABLE IF NOT EXISTS upstream_pricing_scripts (
+            statements: &["CREATE TABLE IF NOT EXISTS upstream_pricing_scripts (
                 upstream_id TEXT PRIMARY KEY,
                 enabled INTEGER NOT NULL DEFAULT 0,
                 source TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (upstream_id) REFERENCES upstreams(id) ON DELETE CASCADE
-            )",
-            ],
+            )"],
         },
         Migration {
             version: 25,

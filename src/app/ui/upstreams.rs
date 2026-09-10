@@ -476,7 +476,10 @@ fn format_balance_snapshot(snapshot: Option<&BalanceSnapshot>) -> (String, Optio
     } else {
         format!("{amount} {unit}")
     };
-    let mut detail = snapshot.message.clone().filter(|message| !message.is_empty());
+    let mut detail = snapshot
+        .message
+        .clone()
+        .filter(|message| !message.is_empty());
     if snapshot.remaining_adjusted {
         let hint = "本地扣减, 下次查询时覆盖";
         detail = Some(match detail {

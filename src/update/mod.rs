@@ -28,7 +28,10 @@ pub(crate) enum UpdateState {
     Checking,
     UpToDate,
     Available(ReleaseInfo),
-    Downloading { received: u64, total: Option<u64> },
+    Downloading {
+        received: u64,
+        total: Option<u64>,
+    },
     ReadyToRestart,
     /// macOS 替换脚本已接管: 应用即将退出, 由脚本替换 bundle 并重新拉起.
     HandedOff,
@@ -116,7 +119,11 @@ impl UpdateRuntime {
                 return;
             }
             // 上次交接失败的原因要留给用户看, 不被静默检查覆盖.
-            if self.handoff_failure.lock().is_ok_and(|guard| guard.is_some()) {
+            if self
+                .handoff_failure
+                .lock()
+                .is_ok_and(|guard| guard.is_some())
+            {
                 tracing::debug!("skip startup update check: pending handoff failure");
                 return;
             }

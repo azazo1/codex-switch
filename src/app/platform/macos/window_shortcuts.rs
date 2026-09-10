@@ -6,8 +6,8 @@ use objc2::rc::Retained;
 use objc2::runtime::Sel;
 use objc2::{MainThreadMarker, sel};
 use objc2_app_kit::{
-    NSApplication, NSEvent, NSEventMask, NSEventModifierFlags, NSMenu, NSMenuItem,
-    NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSApplication, NSEvent, NSEventMask, NSEventModifierFlags, NSMenu, NSMenuItem, NSWindow,
+    NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::NSString;
 
