@@ -14,6 +14,7 @@ chrono = { version = "0.4", features = ["serde"] }
 directories = "6"
 ed25519-dalek = { version = "3", features = ["pkcs8", "alloc", "rand_core", "pem"] }
 eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "glow", "persistence", "wayland", "x11"] }
+egui_extras = "0.36.2"
 futures-util = "0.3"
 hostname = "0.4"
 http-body-util = "0.1"

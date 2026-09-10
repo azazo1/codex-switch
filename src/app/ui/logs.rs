@@ -7,12 +7,12 @@ use crate::core::models::{RequestLog, Upstream};
 use crate::storage::RequestLogRetention;
 use chrono::{Duration, Local, Utc};
 use eframe::egui;
+use egui_extras::{Column, TableBuilder};
 use std::collections::BTreeSet;
 
 const LOG_RANGE_LABEL_WIDTH: f32 = 220.0;
 const LOG_PAGE_BUTTON_WIDTH: f32 = 32.0;
 const LOG_PAGE_SLOT_COUNT: usize = 7;
-const LOG_MODEL_WIDTH: f32 = 100.0;
 const DEFAULT_REASONING_EFFORT_OPTIONS: [&str; 5] = ["Minimal", "Low", "Medium", "High", "XHigh"];
 
 impl CodexSwitchApp {
@@ -31,39 +31,79 @@ impl CodexSwitchApp {
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                egui::Grid::new("recent_logs_grid")
+                TableBuilder::new(ui)
                     .striped(true)
-                    .num_columns(8)
-                    .spacing([28.0, 10.0])
-                    .show(ui, |ui| {
-                        ui.strong("上游");
-                        ui.strong("模型");
-                        ui.strong("推理强度");
-                        ui.strong("TOKEN");
-                        ui.strong("费用")
-                            .on_hover_text("点击费用数值可在美元和人民币之间切换");
-                        ui.strong("首 TOKEN");
-                        ui.strong("耗时");
-                        ui.strong("时间");
-                        ui.end_row();
-
+                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                    .column(Column::auto().at_least(80.0)) // 上游
+                    .column(Column::remainder()) // 模型 ← 吃满剩余
+                    .column(Column::auto()) // 推理强度
+                    .column(Column::auto()) // TOKEN
+                    .column(Column::auto()) // 费用
+                    .column(Column::auto()) // 首 TOKEN
+                    .column(Column::auto()) // 耗时
+                    .column(Column::auto()) // 时间
+                    .header(22.0, |mut header| {
+                        header.col(|ui| {
+                            ui.strong("上游");
+                        });
+                        header.col(|ui| {
+                            ui.strong("模型");
+                        });
+                        header.col(|ui| {
+                            ui.strong("推理强度");
+                        });
+                        header.col(|ui| {
+                            ui.strong("TOKEN");
+                        });
+                        header.col(|ui| {
+                            ui.strong("费用")
+                                .on_hover_text("点击费用数值可在美元和人民币之间切换");
+                        });
+                        header.col(|ui| {
+                            ui.strong("首 TOKEN");
+                        });
+                        header.col(|ui| {
+                            ui.strong("耗时");
+                        });
+                        header.col(|ui| {
+                            ui.strong("时间");
+                        });
+                    })
+                    .body(|mut body| {
                         for (index, log) in self.logs.iter().enumerate() {
                             let hover = log_hover_text(log, &self.state.model_capabilities);
-                            ui.label(upstream_text(log)).on_hover_text(hover.clone());
-                            log_model_label(ui, log.status >= 400, &model_text(log))
-                                .on_hover_text(hover);
-                            ui.label(log.reasoning_effort.as_deref().unwrap_or("-"));
-                            log_token_cell(ui, &mut token_display_mode, log);
-                            log_cost_cell(
-                                ui,
-                                &mut currency_display_mode,
-                                usd_cny_rate,
-                                self.log_estimated_cost_usd.get(index).copied().flatten(),
-                            );
-                            ui.label(format_optional_duration(log.first_token_ms));
-                            ui.label(format_duration(log.duration_ms));
-                            ui.label(format_log_time(log));
-                            ui.end_row();
+                            body.row(34.0, |mut row| {
+                                row.col(|ui| {
+                                    ui.label(upstream_text(log)).on_hover_text(hover.clone());
+                                });
+                                row.col(|ui| {
+                                    log_model_label(ui, log.status >= 400, &model_text(log))
+                                        .on_hover_text(hover);
+                                });
+                                row.col(|ui| {
+                                    ui.label(log.reasoning_effort.as_deref().unwrap_or("-"));
+                                });
+                                row.col(|ui| {
+                                    log_token_cell(ui, &mut token_display_mode, log);
+                                });
+                                row.col(|ui| {
+                                    log_cost_cell(
+                                        ui,
+                                        &mut currency_display_mode,
+                                        usd_cny_rate,
+                                        self.log_estimated_cost_usd.get(index).copied().flatten(),
+                                    );
+                                });
+                                row.col(|ui| {
+                                    ui.label(format_optional_duration(log.first_token_ms));
+                                });
+                                row.col(|ui| {
+                                    ui.label(format_duration(log.duration_ms));
+                                });
+                                row.col(|ui| {
+                                    ui.label(format_log_time(log));
+                                });
+                            });
                         }
                     });
             });
@@ -813,26 +853,29 @@ fn log_cost_cell(
     }
 }
 
+
 fn log_model_label(ui: &mut egui::Ui, failed: bool, text: &str) -> egui::Response {
+    let max_width = ui.available_width();
     let color = failed.then(|| ui.visuals().error_fg_color);
     if text.contains('\n') {
         ui.vertical(|ui| {
             for line in text.lines() {
-                truncated_log_label(ui, line, color);
+                truncated_log_label(ui, line, max_width, color);
             }
         })
         .response
     } else {
-        truncated_log_label(ui, text, color)
+        truncated_log_label(ui, text, max_width, color)
     }
 }
 
 fn truncated_log_label(
     ui: &mut egui::Ui,
     text: &str,
+    max_width: f32,
     color: Option<egui::Color32>,
 ) -> egui::Response {
-    let display = elide_to_tail(ui, text, LOG_MODEL_WIDTH).unwrap_or_else(|| text.to_string());
+    let display = elide_to_tail(ui, text, max_width).unwrap_or_else(|| text.to_string());
     let mut rich = egui::RichText::new(display);
     if let Some(color) = color {
         rich = rich.color(color);

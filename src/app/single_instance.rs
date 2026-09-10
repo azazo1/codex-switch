@@ -41,13 +41,13 @@ pub(crate) async fn acquire(data_dir: &Path) -> anyhow::Result<AcquireOutcome> {
             )
         })?;
         tracing::info!(path = %socket_path.display(), "single instance lock acquired");
-        return Ok(AcquireOutcome::Primary(InstanceListener {
+        Ok(AcquireOutcome::Primary(InstanceListener {
             endpoint: Mutex::new(Some(Endpoint::Unix {
                 listener,
                 _socket_file: UnixSocketFile { path: socket_path },
             })),
             shutdown_tx: Mutex::new(None),
-        }));
+        }))
     }
     #[cfg(windows)]
     {
