@@ -1653,6 +1653,7 @@ impl eframe::App for CodexSwitchApp {
                 tab_button(ui, &mut self.tab, Tab::Upstreams, "上游");
                 tab_button(ui, &mut self.tab, Tab::Peers, "节点");
                 tab_button(ui, &mut self.tab, Tab::Scheduler, "调度组");
+                tab_button(ui, &mut self.tab, Tab::ModelTest, "测试台");
                 tab_button(
                     ui,
                     &mut self.tab,
@@ -1667,7 +1668,6 @@ impl eframe::App for CodexSwitchApp {
                         &self.live_connections,
                     )),
                 );
-                tab_button(ui, &mut self.tab, Tab::ModelTest, "测试台");
                 tab_button(ui, &mut self.tab, Tab::Logs, "日志");
                 if ui.button("刷新").clicked() {
                     self.refresh_from_button();
