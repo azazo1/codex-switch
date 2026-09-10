@@ -2120,7 +2120,7 @@ mod tests {
                 .unwrap();
         }
         let events: crate::app::AppEvents = Default::default();
-        let pricing = crate::pricing::PricingScript::disabled();
+        let pricing = crate::pricing::PricingEngine::disabled();
         let cache_keepalive = CacheKeepaliveRuntime::new(
             store.clone(),
             credentials.clone(),

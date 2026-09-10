@@ -15,6 +15,26 @@ pub struct UpstreamExportItem {
     )]
     pub upstream: Upstream,
     pub credentials: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing_script: Option<UpstreamPricingScriptExport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpstreamPricingScriptExport {
+    pub enabled: bool,
+    pub source: String,
+}
+
+impl UpstreamPricingScriptExport {
+    pub fn from_saved(enabled: bool, source: &str) -> Option<Self> {
+        if !enabled && source.is_empty() {
+            return None;
+        }
+        Some(Self {
+            enabled,
+            source: source.to_string(),
+        })
+    }
 }
 
 /// 上游导出/导入的 JSON 载荷: 顶层版本号 + 上游条目数组, 单条导出即长度为 1 的数组.

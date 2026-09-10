@@ -1740,6 +1740,7 @@ impl eframe::App for CodexSwitchApp {
         });
         self.delete_confirmation_window(&ctx);
         self.update_window(&ctx);
+        self.pricing_script_window(&ctx);
     }
 }
 

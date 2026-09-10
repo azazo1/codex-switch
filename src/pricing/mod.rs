@@ -1,10 +1,12 @@
 pub mod fx;
+mod engine;
 mod script;
 
+pub use engine::{attach_estimated_cost, estimate_request_cost, PricingEngine};
 pub use script::{
-    attach_estimated_cost, compile_check, estimate_request_cost, load_cost_estimate_env,
-    preview_estimate, CostEstimateEnv, CostEstimateInput, CostUpstream, PricingScript,
-    DEFAULT_SCRIPT, SETTING_PRICING_SCRIPT, SETTING_PRICING_SCRIPT_ENABLED,
+    compile_check, load_cost_estimate_env, preview_estimate, CostEstimateEnv, CostEstimateInput,
+    CostUpstream, PricingScript, DEFAULT_SCRIPT, SETTING_PRICING_SCRIPT,
+    SETTING_PRICING_SCRIPT_ENABLED,
 };
 
 use crate::app::AppState;

@@ -234,7 +234,7 @@ mod tests {
         let store = Store::open(path).await.unwrap();
         let credentials = CredentialStore::new_for_tests(store.clone());
         let events: crate::app::AppEvents = Default::default();
-        let pricing = crate::pricing::PricingScript::disabled();
+        let pricing = crate::pricing::PricingEngine::disabled();
         let cache_keepalive = CacheKeepaliveRuntime::new(
             store.clone(),
             credentials.clone(),

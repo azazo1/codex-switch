@@ -6,9 +6,16 @@ use eframe::egui::{self, TextBuffer};
 /// 与 docs/pricing-guide.md 同源, 编译进二进制后可离线查阅.
 const PRICING_GUIDE: &str = include_str!("../../../docs/pricing-guide.md");
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum PricingScriptTarget {
+    Global,
+    Upstream { id: String, name: String },
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct PricingScriptUi {
     pub open: bool,
+    pub target: PricingScriptTarget,
     pub docs_open: bool,
     pub enabled: bool,
     pub source: String,
@@ -29,6 +36,7 @@ impl Default for PricingScriptUi {
     fn default() -> Self {
         Self {
             open: false,
+            target: PricingScriptTarget::Global,
             docs_open: false,
             enabled: false,
             source: String::new(),
@@ -49,13 +57,40 @@ impl Default for PricingScriptUi {
 
 impl CodexSwitchApp {
     pub(super) fn open_pricing_script_window(&mut self) {
-        self.pricing_ui.enabled = self.state.pricing.enabled();
-        self.pricing_ui.source = self.state.pricing.source();
+        self.pricing_ui.target = PricingScriptTarget::Global;
+        self.load_pricing_editor_from_state();
+    }
+
+    pub(super) fn open_upstream_pricing_script_window(&mut self, id: String, name: String) {
+        self.pricing_ui.preview_upstream_id = Some(id.clone());
+        self.pricing_ui.target = PricingScriptTarget::Upstream { id, name };
+        self.load_pricing_editor_from_state();
+    }
+
+    fn load_pricing_editor_from_state(&mut self) {
+        match &self.pricing_ui.target {
+            PricingScriptTarget::Global => {
+                self.pricing_ui.enabled = self.state.pricing.global().enabled();
+                self.pricing_ui.source = self.state.pricing.global().source();
+            }
+            PricingScriptTarget::Upstream { id, .. } => {
+                let script = self.state.pricing.upstream_script(id);
+                self.pricing_ui.enabled = script.as_ref().map(|s| s.enabled()).unwrap_or(false);
+                self.pricing_ui.source = script.map(|s| s.source()).unwrap_or_default();
+            }
+        }
         self.refresh_pricing_compile_message();
         self.pricing_ui.preview_script.clear();
         self.pricing_ui.preview_builtin.clear();
         self.pricing_ui.preview_logs.clear();
         self.pricing_ui.open = true;
+    }
+
+    fn active_pricing_script(&self) -> Option<pricing::PricingScript> {
+        match &self.pricing_ui.target {
+            PricingScriptTarget::Global => Some(self.state.pricing.global().clone()),
+            PricingScriptTarget::Upstream { id, .. } => self.state.pricing.upstream_script(id),
+        }
     }
 
     pub(super) fn pricing_script_window(&mut self, ctx: &egui::Context) {
@@ -71,7 +106,15 @@ impl CodexSwitchApp {
         let mut docs_requested = false;
         let mut clear_live_logs_requested = false;
         let mut source_changed = false;
-        egui::Window::new("计价脚本")
+        let title = match &self.pricing_ui.target {
+            PricingScriptTarget::Global => "全局计价脚本".to_string(),
+            PricingScriptTarget::Upstream { name, .. } => format!("上游计价脚本 - {name}"),
+        };
+        let lock_upstream_name = match &self.pricing_ui.target {
+            PricingScriptTarget::Upstream { name, .. } => Some(name.clone()),
+            PricingScriptTarget::Global => None,
+        };
+        egui::Window::new(title)
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
@@ -79,7 +122,7 @@ impl CodexSwitchApp {
             .default_height(520.0)
             .show(ctx, |ui| {
                 ui.label(
-                    "保存后立即覆盖费用估算, 无需重启. 返回值必须是 USD. 未启用, 为空, 编译失败或返回 () 时回退内置公式.",
+                    "优先级: 上游脚本 > 全局脚本 > 内置公式. 保存后立即覆盖费用估算, 无需重启. 返回值必须是 USD. 未启用, 为空, 编译失败, 返回 () 或运行失败时进入下一层.",
                 );
                 ui.checkbox(&mut self.pricing_ui.enabled, "启用脚本");
                 egui::ScrollArea::both()
@@ -119,10 +162,16 @@ impl CodexSwitchApp {
                     ui.visuals().error_fg_color
                 };
                 ui.colored_label(message_color, &self.pricing_ui.compile_message);
-                if let Some(error) = self.state.pricing.compile_error() {
+                if let Some(error) = self
+                    .active_pricing_script()
+                    .and_then(|script| script.compile_error())
+                {
                     ui.colored_label(ui.visuals().warn_fg_color, format!("已保存脚本: {error}"));
                 }
-                if let Some(error) = self.state.pricing.runtime_error() {
+                if let Some(error) = self
+                    .active_pricing_script()
+                    .and_then(|script| script.runtime_error())
+                {
                     ui.colored_label(ui.visuals().warn_fg_color, format!("最近运行: {error}"));
                 }
                 ui.separator();
@@ -134,33 +183,37 @@ impl CodexSwitchApp {
                             .desired_width(180.0),
                     );
                     ui.label("上游");
-                    let selected = self
-                        .pricing_ui
-                        .preview_upstream_id
-                        .as_deref()
-                        .and_then(|id| {
-                            self.upstreams
-                                .iter()
-                                .find(|upstream| upstream.id == id)
-                                .map(|upstream| upstream.name.as_str())
-                        })
-                        .unwrap_or("无");
-                    egui::ComboBox::from_id_salt("pricing_preview_upstream")
-                        .selected_text(selected)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut self.pricing_ui.preview_upstream_id,
-                                None,
-                                "无",
-                            );
-                            for upstream in &self.upstreams {
+                    if let Some(name) = &lock_upstream_name {
+                        ui.label(name);
+                    } else {
+                        let selected = self
+                            .pricing_ui
+                            .preview_upstream_id
+                            .as_deref()
+                            .and_then(|id| {
+                                self.upstreams
+                                    .iter()
+                                    .find(|upstream| upstream.id == id)
+                                    .map(|upstream| upstream.name.as_str())
+                            })
+                            .unwrap_or("无");
+                        egui::ComboBox::from_id_salt("pricing_preview_upstream")
+                            .selected_text(selected)
+                            .show_ui(ui, |ui| {
                                 ui.selectable_value(
                                     &mut self.pricing_ui.preview_upstream_id,
-                                    Some(upstream.id.clone()),
-                                    &upstream.name,
+                                    None,
+                                    "无",
                                 );
-                            }
-                        });
+                                for upstream in &self.upstreams {
+                                    ui.selectable_value(
+                                        &mut self.pricing_ui.preview_upstream_id,
+                                        Some(upstream.id.clone()),
+                                        &upstream.name,
+                                    );
+                                }
+                            });
+                    }
                 });
                 ui.horizontal(|ui| {
                     ui.label("输入");
@@ -188,11 +241,14 @@ impl CodexSwitchApp {
                     || !self.pricing_ui.preview_builtin.is_empty()
                 {
                     ui.label(format!(
-                        "脚本: {}    内置: {}",
+                        "本层: {}    内置: {}",
                         self.pricing_ui.preview_script, self.pricing_ui.preview_builtin
                     ));
                 }
-                let live_logs = self.state.pricing.last_logs();
+                let live_logs = self
+                    .active_pricing_script()
+                    .map(|script| script.last_logs())
+                    .unwrap_or_default();
                 if !self.pricing_ui.preview_logs.is_empty() {
                     ui.label("试算日志");
                     egui::ScrollArea::vertical()
@@ -255,8 +311,10 @@ impl CodexSwitchApp {
         if preview_requested {
             self.preview_pricing_script();
         }
-        if clear_live_logs_requested {
-            self.state.pricing.clear_last_logs();
+        if clear_live_logs_requested
+            && let Some(script) = self.active_pricing_script()
+        {
+            script.clear_last_logs();
         }
         if save_requested {
             self.save_pricing_script();
@@ -364,19 +422,29 @@ impl CodexSwitchApp {
     }
 
     fn save_pricing_script(&mut self) {
-        self.state
-            .pricing
-            .apply(self.pricing_ui.enabled, self.pricing_ui.source.clone());
-        match self
-            .runtime
-            .block_on(self.state.pricing.persist(&self.state.store))
-        {
+        let enabled = self.pricing_ui.enabled;
+        let source = self.pricing_ui.source.clone();
+        let persist = match &self.pricing_ui.target {
+            PricingScriptTarget::Global => {
+                self.state.pricing.global().apply(enabled, source);
+                self.runtime
+                    .block_on(self.state.pricing.global().persist(&self.state.store))
+            }
+            PricingScriptTarget::Upstream { id, .. } => {
+                let id = id.clone();
+                self.state.pricing.apply_upstream(&id, enabled, source);
+                self.runtime
+                    .block_on(self.state.pricing.persist_upstream(&self.state.store, &id))
+            }
+        };
+        match persist {
             Ok(()) => {
                 self.pricing_ui.open = false;
-                self.status = if self.state.pricing.is_ready() {
+                let script = self.active_pricing_script();
+                self.status = if script.as_ref().is_some_and(|script| script.is_ready()) {
                     "计价脚本已保存并启用".to_string()
-                } else if self.state.pricing.enabled() {
-                    "计价脚本已保存, 但编译失败, 已回退内置公式".to_string()
+                } else if script.as_ref().is_some_and(|script| script.enabled()) {
+                    "计价脚本已保存, 但编译失败, 已回退下一层".to_string()
                 } else {
                     "计价脚本已保存".to_string()
                 };

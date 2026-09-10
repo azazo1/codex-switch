@@ -34,6 +34,7 @@ pub(super) struct UpstreamEditor {
     newapi_user_id: String,
     /// 点过 "应用识别结果" 之后显示的一次性提示.
     apply_status: String,
+    open_pricing_requested: bool,
 }
 
 impl UpstreamEditor {
@@ -56,6 +57,7 @@ impl UpstreamEditor {
             newapi_user_key: String::new(),
             newapi_user_id: String::new(),
             apply_status: String::new(),
+            open_pricing_requested: false,
         }
     }
 }
@@ -127,6 +129,18 @@ impl CodexSwitchApp {
             });
         if !open {
             action = EditorAction::Cancel;
+        }
+        let mut open_pricing = false;
+        if let Some(editor) = &mut self.upstream_editor
+            && editor.open_pricing_requested
+        {
+            editor.open_pricing_requested = false;
+            open_pricing = true;
+        }
+        if open_pricing && let Some(editor) = &self.upstream_editor {
+            let id = editor.upstream.id.clone();
+            let name = editor.upstream.name.clone();
+            self.open_upstream_pricing_script_window(id, name);
         }
         match action {
             EditorAction::None => {}
@@ -338,6 +352,13 @@ impl UpstreamEditor {
             .on_hover_text(
                 "内置估算成本 = 模型官方价 x 倍率. 启用计价脚本后需自行使用 ctx.multiplier. 只影响成本统计, 不影响请求转发.",
             );
+            if ui
+                .button("计价脚本")
+                .on_hover_text("该上游独立脚本优先于全局脚本, 只影响成本统计.")
+                .clicked()
+            {
+                self.open_pricing_requested = true;
+            }
         });
         ui.horizontal(|ui| {
             ui.label("错误重试");

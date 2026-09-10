@@ -550,6 +550,19 @@ fn migrations() -> &'static [Migration] {
                 "ALTER TABLE request_logs ADD COLUMN source TEXT NOT NULL DEFAULT 'proxy'",
             ],
         },
+        Migration {
+            version: 24,
+            name: "upstream_pricing_scripts",
+            statements: &[
+                "CREATE TABLE IF NOT EXISTS upstream_pricing_scripts (
+                upstream_id TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (upstream_id) REFERENCES upstreams(id) ON DELETE CASCADE
+            )",
+            ],
+        },
     ]
 }
 
@@ -570,7 +583,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 23);
+        assert_eq!(rows.len(), 24);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -656,6 +669,11 @@ mod tests {
         );
         assert_eq!(rows[22].get::<i64, _>("version"), 23);
         assert_eq!(rows[22].get::<String, _>("name"), "request_log_source");
+        assert_eq!(rows[23].get::<i64, _>("version"), 24);
+        assert_eq!(
+            rows[23].get::<String, _>("name"),
+            "upstream_pricing_scripts"
+        );
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
             Some("127.0.0.1:15721")
@@ -684,6 +702,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 23);
+        assert_eq!(count, 24);
     }
 }

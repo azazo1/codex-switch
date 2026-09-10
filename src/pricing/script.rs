@@ -1,6 +1,6 @@
 use super::fx::UsdCnyRate;
 use super::{estimate_usage_cost, usd_for_tokens};
-use crate::core::models::{ModelPrice, RequestLog, TokenUsage, Upstream};
+use crate::core::models::{ModelPrice, TokenUsage, Upstream};
 use crate::storage::Store;
 use chrono::{DateTime, Datelike, Local, Timelike, Utc};
 use rhai::{CustomType, Dynamic, Engine, Scope, AST};
@@ -347,7 +347,7 @@ impl PricingScript {
         }
     }
 
-    fn eval_estimate(
+    pub(super) fn eval_estimate(
         &self,
         env: &CostEstimateEnv,
         input: CostEstimateInput<'_>,
@@ -386,6 +386,10 @@ impl PricingScript {
         }
     }
 
+    pub(super) fn record_runtime_error(&self, error: String) {
+        self.lock().runtime_error = Some(error);
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, PricingInner> {
         self.inner.lock().unwrap_or_else(|err| err.into_inner())
     }
@@ -400,66 +404,6 @@ pub async fn load_cost_estimate_env(store: &Store) -> anyhow::Result<CostEstimat
         now: Utc::now(),
         fx: super::fx::load_usd_cny_rate_from_store(store).await?,
     })
-}
-
-pub async fn estimate_request_cost(
-    store: &Store,
-    script: &PricingScript,
-    env: &CostEstimateEnv,
-    input: CostEstimateInput<'_>,
-) -> Option<f64> {
-    let price = lookup_price(store, input.model).await;
-    let builtin = price
-        .as_ref()
-        .map(|price| estimate_usage_cost(input.usage, price).total_usd());
-    let multiplier = input
-        .upstream
-        .map(|upstream| upstream.multiplier)
-        .filter(|value| value.is_finite() && *value >= 0.0)
-        .unwrap_or(1.0);
-    let fallback = builtin.map(|value| value * multiplier);
-    if !script.is_ready() {
-        return fallback;
-    }
-    match script.eval_estimate(env, input, price.as_ref(), builtin) {
-        Ok(Some(value)) => Some(value),
-        Ok(None) => fallback,
-        Err(error) => {
-            script.lock().runtime_error = Some(error.clone());
-            tracing::warn!(
-                error = %error,
-                model = input.model.unwrap_or(""),
-                "pricing script failed, falling back"
-            );
-            fallback
-        }
-    }
-}
-
-pub async fn attach_estimated_cost(store: &Store, script: &PricingScript, log: &mut RequestLog) {
-    let mut env = match load_cost_estimate_env(store).await {
-        Ok(env) => env,
-        Err(err) => {
-            tracing::warn!(error = %err, "failed to load pricing env");
-            CostEstimateEnv::now(None)
-        }
-    };
-    if let Some(ts) = log.ts {
-        env.now = ts;
-    }
-    let owned_upstream = resolve_cost_upstream(store, log).await;
-    log.estimated_cost_usd = estimate_request_cost(
-        store,
-        script,
-        &env,
-        CostEstimateInput {
-            model: log.model.as_deref(),
-            target_model: log.target_model.as_deref(),
-            usage: &log.usage,
-            upstream: owned_upstream.as_ref(),
-        },
-    )
-    .await;
 }
 
 pub async fn preview_estimate(
@@ -523,37 +467,13 @@ pub async fn preview_estimate(
     }
 }
 
-async fn lookup_price(store: &Store, model: Option<&str>) -> Option<ModelPrice> {
+pub(super) async fn lookup_price(store: &Store, model: Option<&str>) -> Option<ModelPrice> {
     let model = model.filter(|value| !value.is_empty())?;
     match store.find_model_price(model).await {
         Ok(price) => price,
         Err(err) => {
             tracing::warn!(error = %err, model, "failed to lookup model price");
             None
-        }
-    }
-}
-
-async fn resolve_cost_upstream(store: &Store, log: &RequestLog) -> Option<CostUpstream> {
-    let id = log.upstream_id.as_deref()?;
-    match store.get_upstream(id).await {
-        Ok(Some(upstream)) => Some(CostUpstream::from_upstream(&upstream)),
-        Ok(None) => Some(CostUpstream {
-            id: id.to_string(),
-            name: log.upstream_name.clone().unwrap_or_default(),
-            kind: String::new(),
-            base_url: String::new(),
-            multiplier: 1.0,
-        }),
-        Err(err) => {
-            tracing::warn!(error = %err, upstream_id = id, "failed to load upstream for pricing");
-            Some(CostUpstream {
-                id: id.to_string(),
-                name: log.upstream_name.clone().unwrap_or_default(),
-                kind: String::new(),
-                base_url: String::new(),
-                multiplier: 1.0,
-            })
         }
     }
 }
@@ -759,8 +679,10 @@ fn dynamic_to_cost(value: Dynamic) -> Result<Option<f64>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::models::{ModelPrice, TokenUsage, Upstream, WireApi};
-    use crate::core::models::BalanceProvider;
+    use crate::core::models::{
+        BalanceProvider, ModelPrice, RequestLog, TokenUsage, Upstream, WireApi,
+    };
+    use crate::pricing::engine::{attach_estimated_cost, estimate_request_cost, PricingEngine};
     use chrono::TimeZone;
 
     fn usage() -> TokenUsage {
@@ -830,7 +752,7 @@ mod tests {
             base_url: "https://example.test".to_string(),
             multiplier: 1.5,
         };
-        let cost = estimate_request_cost(&store, &script, &env_at(11, None), input(&usage, Some(&upstream)))
+        let cost = estimate_request_cost(&store, &PricingEngine::from_global(script.clone()), &env_at(11, None), input(&usage, Some(&upstream)))
             .await
             .unwrap();
         assert!((cost - 4.5).abs() < 1e-9);
@@ -853,7 +775,7 @@ mod tests {
             base_url: "https://example.test".to_string(),
             multiplier: 1.5,
         };
-        let cost = estimate_request_cost(&store, &script, &env_at(11, None), input(&usage, Some(&upstream)))
+        let cost = estimate_request_cost(&store, &PricingEngine::from_global(script.clone()), &env_at(11, None), input(&usage, Some(&upstream)))
             .await
             .unwrap();
         assert!((cost - 9.0).abs() < 1e-9);
@@ -866,7 +788,7 @@ mod tests {
         let script = PricingScript::disabled();
         script.apply(true, "fn estimate(ctx) { () }".to_string());
         let usage = usage();
-        let cost = estimate_request_cost(&store, &script, &env_at(11, None), input(&usage, None))
+        let cost = estimate_request_cost(&store, &PricingEngine::from_global(script.clone()), &env_at(11, None), input(&usage, None))
             .await
             .unwrap();
         assert!((cost - 3.0).abs() < 1e-9);
@@ -881,7 +803,7 @@ mod tests {
             "fn estimate(ctx) { usd_for_tokens(ctx.usage.uncached_input_tokens, 4.0) }".to_string(),
         );
         let usage = usage();
-        let cost = estimate_request_cost(&store, &script, &env_at(11, None), input(&usage, None))
+        let cost = estimate_request_cost(&store, &PricingEngine::from_global(script.clone()), &env_at(11, None), input(&usage, None))
             .await
             .unwrap();
         assert!((cost - 4.0).abs() < 1e-9);
@@ -915,7 +837,7 @@ mod tests {
         let usage = usage();
         let cost = estimate_request_cost(
             &store,
-            &script,
+            &PricingEngine::from_global(script.clone()),
             &env_at(11, Some(7.5)),
             input(&usage, None),
         )
@@ -942,7 +864,7 @@ mod tests {
         };
         let cost = estimate_request_cost(
             &store,
-            &script,
+            &PricingEngine::from_global(script.clone()),
             &env_at(11, None),
             input(&usage, Some(&upstream)),
         )
@@ -960,7 +882,7 @@ mod tests {
         assert!(script.compile_error().is_some());
         assert!(!script.is_ready());
         let usage = usage();
-        let cost = estimate_request_cost(&store, &script, &env_at(11, None), input(&usage, None))
+        let cost = estimate_request_cost(&store, &PricingEngine::from_global(script.clone()), &env_at(11, None), input(&usage, None))
             .await
             .unwrap();
         assert!((cost - 3.0).abs() < 1e-9);
@@ -973,7 +895,7 @@ mod tests {
         let script = PricingScript::disabled();
         script.apply(true, "fn estimate(ctx) { ctx.missing }".to_string());
         let usage = usage();
-        let cost = estimate_request_cost(&store, &script, &env_at(11, None), input(&usage, None))
+        let cost = estimate_request_cost(&store, &PricingEngine::from_global(script.clone()), &env_at(11, None), input(&usage, None))
             .await
             .unwrap();
         assert!((cost - 3.0).abs() < 1e-9);
@@ -987,7 +909,7 @@ mod tests {
         let script = PricingScript::disabled();
         script.apply(true, "fn estimate(ctx) { loop {} }".to_string());
         let usage = usage();
-        let cost = estimate_request_cost(&store, &script, &env_at(11, None), input(&usage, None))
+        let cost = estimate_request_cost(&store, &PricingEngine::from_global(script.clone()), &env_at(11, None), input(&usage, None))
             .await
             .unwrap();
         assert!((cost - 3.0).abs() < 1e-9);
@@ -1039,7 +961,7 @@ mod tests {
             first_token_ms: None,
             error: None,
         };
-        attach_estimated_cost(&store, &PricingScript::disabled(), &mut log).await;
+        attach_estimated_cost(&store, &PricingEngine::disabled(), &mut log).await;
         assert!((log.estimated_cost_usd.unwrap() - 4.5).abs() < 1e-9);
     }
 }

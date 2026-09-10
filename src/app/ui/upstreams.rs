@@ -312,6 +312,12 @@ impl CodexSwitchApp {
             .block_on(self.state.store.import_upstreams(&payload))
         {
             Ok(result) => {
+                if let Err(err) = self
+                    .runtime
+                    .block_on(self.state.pricing.reload_upstreams(&self.state.store))
+                {
+                    tracing::warn!(error = %err, "failed to reload upstream pricing scripts after import");
+                }
                 self.upstream_import_text.clear();
                 self.upstream_import_open = false;
                 let mut message = format!("已导入 {} 个上游", result.imported.len());
@@ -364,6 +370,7 @@ impl CodexSwitchApp {
     pub(super) fn delete_upstream(&mut self, id: &str) {
         match self.runtime.block_on(self.state.store.delete_upstream(id)) {
             Ok(()) => {
+                self.state.pricing.remove_upstream(id);
                 self.status = "上游已删除".to_string();
                 self.refresh_all();
             }

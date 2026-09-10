@@ -2,7 +2,10 @@ use crate::core::models::{
     ApiKeyAuthScheme, BalanceProvider, ErrorRetryPolicy, UnknownModalityPolicy, Upstream,
     UpstreamKind, WireApi,
 };
-use crate::core::upstream_transfer::{UPSTREAM_EXPORT_VERSION, UpstreamExport, UpstreamExportItem};
+use crate::core::upstream_transfer::{
+    UPSTREAM_EXPORT_VERSION, UpstreamExport, UpstreamExportItem, UpstreamPricingScriptExport,
+};
+use super::query_pricing::{save_upstream_pricing_script_in_tx, UpstreamPricingScript};
 use crate::storage::Store;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
@@ -236,6 +239,10 @@ impl Store {
             .bind(id)
             .execute(self.pool())
             .await?;
+        sqlx::query("DELETE FROM upstream_pricing_scripts WHERE upstream_id = ?1")
+            .bind(id)
+            .execute(self.pool())
+            .await?;
         sqlx::query("DELETE FROM schedule_route_rules WHERE target_upstream_id = ?1")
             .bind(id)
             .execute(self.pool())
@@ -339,9 +346,16 @@ impl Store {
                 .into_iter()
                 .map(|row| (row.get::<String, _>("name"), row.get::<String, _>("value")))
                 .collect();
+            let pricing_script = self
+                .get_upstream_pricing_script(&upstream.id)
+                .await?
+                .and_then(|script| {
+                    UpstreamPricingScriptExport::from_saved(script.enabled, &script.source)
+                });
             items.push(UpstreamExportItem {
                 upstream,
                 credentials,
+                pricing_script,
             });
         }
         Ok(UpstreamExport::new(items))
@@ -379,6 +393,17 @@ impl Store {
             insert_upstream(&mut tx, &upstream).await?;
             for (name, value) in &item.credentials {
                 save_credential_in_tx(&mut tx, &upstream.id, name, value).await?;
+            }
+            if let Some(script) = &item.pricing_script {
+                save_upstream_pricing_script_in_tx(
+                    &mut tx,
+                    &UpstreamPricingScript {
+                        upstream_id: upstream.id.clone(),
+                        enabled: script.enabled,
+                        source: script.source.clone(),
+                    },
+                )
+                .await?;
             }
             tracing::info!(
                 upstream_id = %upstream.id,
@@ -635,6 +660,14 @@ mod tests {
             .save_credential(&upstream.id, "api_key", "sk-test")
             .await
             .unwrap();
+        store
+            .save_upstream_pricing_script(&crate::storage::UpstreamPricingScript {
+                upstream_id: upstream.id.clone(),
+                enabled: true,
+                source: "fn estimate(ctx) { 1.0 }".to_string(),
+            })
+            .await
+            .unwrap();
 
         let export = store
             .export_upstream(&upstream.id)
@@ -656,6 +689,9 @@ mod tests {
             item.credentials.get("api_key").map(String::as_str),
             Some("sk-test")
         );
+        let script = item.pricing_script.as_ref().expect("pricing script exported");
+        assert!(script.enabled);
+        assert_eq!(script.source, "fn estimate(ctx) { 1.0 }");
 
         let mut imported = store.import_upstreams(&parsed).await.unwrap();
         let imported = imported.imported.pop().unwrap();
@@ -670,6 +706,13 @@ mod tests {
                 .as_deref(),
             Some("sk-test")
         );
+        let imported_script = store
+            .get_upstream_pricing_script(&imported.id)
+            .await
+            .unwrap()
+            .expect("pricing script imported");
+        assert!(imported_script.enabled);
+        assert_eq!(imported_script.source, "fn estimate(ctx) { 1.0 }");
 
         assert!(store.export_upstream("missing-id").await.unwrap().is_none());
     }
@@ -750,6 +793,7 @@ mod tests {
             .push(crate::core::upstream_transfer::UpstreamExportItem {
                 upstream: peer_upstream,
                 credentials: Default::default(),
+                pricing_script: None,
             });
         let before = target.list_upstreams().await.unwrap().len();
         let mixed = target.import_upstreams(&with_peer).await.unwrap();

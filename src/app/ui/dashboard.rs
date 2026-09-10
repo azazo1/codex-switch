@@ -77,7 +77,6 @@ impl CodexSwitchApp {
             }
         });
         self.local_key_refresh_window(ui.ctx());
-        self.pricing_script_window(ui.ctx());
         ui.horizontal_wrapped(|ui| {
             ui.label(format!("当前版本: {}", crate::app::display_version()));
             match self.state.update.state() {
@@ -177,7 +176,7 @@ impl CodexSwitchApp {
             }
             if ui
                 .button("计价脚本")
-                .on_hover_text("用脚本覆盖费用估算, 保存后立即生效")
+                .on_hover_text("编辑全局计价脚本. 上游脚本优先, 保存后立即生效")
                 .clicked()
             {
                 self.open_pricing_script_window();

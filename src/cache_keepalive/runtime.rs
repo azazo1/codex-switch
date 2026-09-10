@@ -14,7 +14,7 @@ use crate::core::models::{
     CacheKeepaliveMode, RequestLog, RequestLogSource, TokenUsage, UpstreamCacheKeepaliveSettings,
     UpstreamKind, WireApi,
 };
-use crate::pricing::{self, PricingScript};
+use crate::pricing::{self, PricingEngine};
 use crate::storage::{Store, credentials::CredentialStore};
 use crate::{
     proxy::{transform, upstream_auth},
@@ -32,7 +32,7 @@ pub struct CacheKeepaliveRuntime {
     pub(super) store: Store,
     credentials: CredentialStore,
     events: AppEvents,
-    pricing: PricingScript,
+    pricing: PricingEngine,
 }
 
 impl CacheKeepaliveRuntime {
@@ -40,7 +40,7 @@ impl CacheKeepaliveRuntime {
         store: Store,
         credentials: CredentialStore,
         events: AppEvents,
-        pricing: PricingScript,
+        pricing: PricingEngine,
     ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(CacheKeepaliveInner::default())),

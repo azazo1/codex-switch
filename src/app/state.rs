@@ -37,7 +37,7 @@ pub struct AppState {
     pub cache_keepalive: CacheKeepaliveRuntime,
     pub peers: PeerRuntime,
     pub update: crate::update::UpdateRuntime,
-    pub pricing: crate::pricing::PricingScript,
+    pub pricing: crate::pricing::PricingEngine,
     pub(crate) single_instance: Option<Arc<crate::app::single_instance::InstanceListener>>,
 }
 
@@ -161,7 +161,7 @@ impl AppState {
         let credentials = CredentialStore::new(store.clone()).await?;
         let oauth_accounts = OAuthAccountService::new(store.clone());
         let events = AppEvents::default();
-        let pricing = crate::pricing::PricingScript::load(&store).await?;
+        let pricing = crate::pricing::PricingEngine::load(&store).await?;
         let cache_keepalive = CacheKeepaliveRuntime::new(
             store.clone(),
             credentials.clone(),
