@@ -1,4 +1,7 @@
 pub(crate) mod tray_title;
+mod window_shortcuts;
+
+pub(crate) use window_shortcuts::install as install_window_shortcuts;
 
 use anyhow::{Context, bail};
 use objc2::MainThreadMarker;

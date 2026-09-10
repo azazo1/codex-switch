@@ -1635,6 +1635,7 @@ impl eframe::App for CodexSwitchApp {
 
     // Tray 命令必须在 logic 中处理, 因为隐藏窗口不会调用 ui.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        platform::install_window_shortcuts();
         self.handle_app_events(ctx);
         self.ensure_tray(ctx);
         self.handle_close_request(ctx);
