@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 const LOG_RANGE_LABEL_WIDTH: f32 = 220.0;
 const LOG_PAGE_BUTTON_WIDTH: f32 = 32.0;
 const LOG_PAGE_SLOT_COUNT: usize = 7;
-const LOG_MODEL_MIN_WIDTH: f32 = 80.0;
+const LOG_MODEL_MIN_WIDTH: f32 = 40.0;
 const LOG_MODEL_WIDTH_PAD: f32 = 4.0;
 const DEFAULT_REASONING_EFFORT_OPTIONS: [&str; 5] = ["Minimal", "Low", "Medium", "High", "XHigh"];
 
