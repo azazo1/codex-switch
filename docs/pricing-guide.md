@@ -42,7 +42,7 @@ Rhai 自带的 `timestamp()` 只是单调时钟. 日历时间使用宿主注入�
 | `ctx.price.input` / `cached_input` / `cache_write` / `output` | USD / million, 缺失为 `()` |
 | `ctx.price.model_id` / `provider_id` / `official` | 价格缓存元数据 |
 | `ctx.upstream` | 上游. 无上游时为 `()` |
-| `ctx.upstream.id` / `name` / `kind` / `multiplier` | 上游字段 |
+| `ctx.upstream.id` / `name` / `kind` / `base_url` / `multiplier` | 上游字段. 上游已删除时 `base_url` 为空字符串 |
 | `ctx.builtin` | 内置 `estimate_usage_cost` 结果, 尚未乘倍率. 无价格时为 `()` |
 | `ctx.multiplier` | 上游价格倍率, 无上游为 `1.0` |
 | `ctx.fx` | 汇率缓存. 尚未获取时为 `()` |

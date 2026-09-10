@@ -69,6 +69,7 @@ impl CodexSwitchApp {
         let mut template_requested = false;
         let mut preview_requested = false;
         let mut docs_requested = false;
+        let mut clear_live_logs_requested = false;
         let mut source_changed = false;
         egui::Window::new("计价脚本")
             .open(&mut open)
@@ -202,7 +203,16 @@ impl CodexSwitchApp {
                         });
                 }
                 if !live_logs.is_empty() {
-                    ui.label("最近运行日志");
+                    ui.horizontal(|ui| {
+                        ui.label("最近运行日志");
+                        if ui
+                            .small_button("清理")
+                            .on_hover_text("清空窗口中的最近运行日志, 不影响应用主日志")
+                            .clicked()
+                        {
+                            clear_live_logs_requested = true;
+                        }
+                    });
                     egui::ScrollArea::vertical()
                         .id_salt("pricing_live_logs_scroll")
                         .max_height(80.0)
@@ -244,6 +254,9 @@ impl CodexSwitchApp {
         }
         if preview_requested {
             self.preview_pricing_script();
+        }
+        if clear_live_logs_requested {
+            self.state.pricing.clear_last_logs();
         }
         if save_requested {
             self.save_pricing_script();

@@ -113,6 +113,8 @@ struct ScriptUpstream {
     #[rhai_type(readonly)]
     kind: String,
     #[rhai_type(readonly)]
+    base_url: String,
+    #[rhai_type(readonly)]
     multiplier: f64,
 }
 
@@ -148,6 +150,7 @@ pub struct CostUpstream {
     pub id: String,
     pub name: String,
     pub kind: String,
+    pub base_url: String,
     pub multiplier: f64,
 }
 
@@ -157,6 +160,7 @@ impl CostUpstream {
             id: upstream.id.clone(),
             name: upstream.name.clone(),
             kind: upstream.kind.as_str().to_string(),
+            base_url: upstream.base_url.clone(),
             multiplier: upstream.price_multiplier,
         }
     }
@@ -320,6 +324,10 @@ impl PricingScript {
 
     pub fn last_logs(&self) -> Vec<String> {
         self.lock().last_logs.clone()
+    }
+
+    pub fn clear_last_logs(&self) {
+        self.lock().last_logs.clear();
     }
 
     pub fn is_ready(&self) -> bool {
@@ -534,6 +542,7 @@ async fn resolve_cost_upstream(store: &Store, log: &RequestLog) -> Option<CostUp
             id: id.to_string(),
             name: log.upstream_name.clone().unwrap_or_default(),
             kind: String::new(),
+            base_url: String::new(),
             multiplier: 1.0,
         }),
         Err(err) => {
@@ -542,6 +551,7 @@ async fn resolve_cost_upstream(store: &Store, log: &RequestLog) -> Option<CostUp
                 id: id.to_string(),
                 name: log.upstream_name.clone().unwrap_or_default(),
                 kind: String::new(),
+                base_url: String::new(),
                 multiplier: 1.0,
             })
         }
@@ -682,6 +692,7 @@ fn build_ctx(
                 id: upstream.id.clone(),
                 name: upstream.name.clone(),
                 kind: upstream.kind.clone(),
+                base_url: upstream.base_url.clone(),
                 multiplier: upstream.multiplier,
             }),
             None => Dynamic::UNIT,
@@ -816,6 +827,7 @@ mod tests {
             id: "u1".to_string(),
             name: "relay".to_string(),
             kind: "relay_api_key".to_string(),
+            base_url: "https://example.test".to_string(),
             multiplier: 1.5,
         };
         let cost = estimate_request_cost(&store, &script, &env_at(11, None), input(&usage, Some(&upstream)))
@@ -838,6 +850,7 @@ mod tests {
             id: "u1".to_string(),
             name: "relay".to_string(),
             kind: "relay_api_key".to_string(),
+            base_url: "https://example.test".to_string(),
             multiplier: 1.5,
         };
         let cost = estimate_request_cost(&store, &script, &env_at(11, None), input(&usage, Some(&upstream)))
@@ -909,6 +922,33 @@ mod tests {
         .await
         .unwrap();
         assert!((cost - 1.25).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn script_reads_upstream_base_url() {
+        let store = test_store().await;
+        let script = PricingScript::disabled();
+        script.apply(
+            true,
+            "fn estimate(ctx) {\n    if ctx.upstream.base_url == \"https://example.test\" {\n        return 2.5;\n    }\n    0.0\n}".to_string(),
+        );
+        let usage = usage();
+        let upstream = CostUpstream {
+            id: "u1".to_string(),
+            name: "relay".to_string(),
+            kind: "relay_api_key".to_string(),
+            base_url: "https://example.test".to_string(),
+            multiplier: 1.0,
+        };
+        let cost = estimate_request_cost(
+            &store,
+            &script,
+            &env_at(11, None),
+            input(&usage, Some(&upstream)),
+        )
+        .await
+        .unwrap();
+        assert!((cost - 2.5).abs() < 1e-9);
     }
 
     #[tokio::test]
