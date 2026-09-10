@@ -86,6 +86,11 @@ fn main() -> eframe::Result<()> {
         .expect("failed to resolve application data directory")
         .join("window-state.ron");
     app::window_state::sanitize_file(&persistence_path);
+    // macOS 上不能带着 fullscreen 创建窗口, 详见 take_initial_fullscreen 的说明.
+    #[cfg(target_os = "macos")]
+    let defer_fullscreen = app::window_state::take_initial_fullscreen(&persistence_path);
+    #[cfg(not(target_os = "macos"))]
+    let defer_fullscreen = false;
     let native_options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Codex Switch")
@@ -107,6 +112,7 @@ fn main() -> eframe::Result<()> {
                 cc.egui_ctx.clone(),
                 cc.storage,
                 hide_on_launch,
+                defer_fullscreen,
             )))
         }),
     )

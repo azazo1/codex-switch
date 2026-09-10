@@ -473,6 +473,7 @@ pub struct CodexSwitchApp {
     #[cfg(target_os = "macos")]
     dock_icon_follows_window: bool,
     last_good_window: Option<PersistedWindowSettings>,
+    deferred_fullscreen: window_state::DeferredFullscreen,
     background_reopen: platform::BackgroundReopenMonitor,
     last_seen_show_window_version: u64,
     last_seen_exit_request_version: u64,
@@ -587,6 +588,7 @@ impl CodexSwitchApp {
         egui_ctx: egui::Context,
         storage: Option<&dyn eframe::Storage>,
         hide_on_launch: bool,
+        restore_fullscreen: bool,
     ) -> Self {
         let repaint_ctx = egui_ctx.clone();
         state.events.set_repaint_requester(move || {
@@ -706,6 +708,7 @@ impl CodexSwitchApp {
             #[cfg(target_os = "macos")]
             dock_icon_follows_window,
             last_good_window,
+            deferred_fullscreen: window_state::DeferredFullscreen::new(restore_fullscreen),
             background_reopen: platform::BackgroundReopenMonitor::default(),
             last_seen_show_window_version,
             last_seen_exit_request_version,
@@ -954,6 +957,16 @@ impl CodexSwitchApp {
         if self.background_reopen.should_show_hidden_window() {
             self.show_main_window(ctx);
         }
+    }
+
+    /// 恢复上次退出时的原生全屏状态.
+    ///
+    /// 不能在窗口创建时带上 fullscreen: eframe 固定以隐藏状态创建窗口, 此时的切换会失败,
+    /// 而 winit 会每 0.5 秒重试, 结果窗口刚显示就被拖进新的全屏 space. 这里改为等窗口可见
+    /// 之后再显式切换, 详见 `window_state::take_initial_fullscreen`.
+    fn restore_deferred_fullscreen(&mut self, ctx: &egui::Context) {
+        self.deferred_fullscreen
+            .maybe_apply(ctx, !self.window_hidden_to_tray);
     }
 
     /// macOS 自更新交接后必须尽快退出: 替换脚本在等本进程消失才会覆盖 bundle.
@@ -1624,6 +1637,8 @@ impl eframe::App for CodexSwitchApp {
         self.handle_close_request(ctx);
         self.handle_dock_reopen(ctx);
         self.handle_update_handoff(ctx);
+        // 全屏恢复放在显隐处理之后, 保证窗口已真正可见才开始切换.
+        self.restore_deferred_fullscreen(ctx);
         self.maybe_auto_refresh(ctx);
         self.sync_tray_stats();
         self.drain_task_events(ctx);
