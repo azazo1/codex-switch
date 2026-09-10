@@ -23,7 +23,7 @@ fn estimate(ctx) {
         + usd_for_tokens(ctx.usage.cache_read_tokens, hit)
         + usd_for_tokens(ctx.usage.output_tokens, out);
     let usd = cny / fx * ctx.multiplier;
-    // 请求落库时按余额单位扣费, 试算和仪表盘重算为空操作.
+    // 请求落库时按余额单位扣费, 试算为空操作.
     if ctx.balance != () {
         if ctx.balance.unit == "CNY" {
             charge(cny * ctx.multiplier);

@@ -696,13 +696,6 @@ pub struct ProviderStats {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct ModelUsageStats {
-    pub upstream_id: Option<String>,
-    pub model: Option<String>,
-    pub usage: TokenUsage,
-}
-
-#[derive(Debug, Clone, Default)]
 pub struct ModelPrice {
     pub provider_id: String,
     pub provider_name: String,

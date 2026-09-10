@@ -178,7 +178,7 @@ impl CostUpstream {
 pub struct CostEstimateEnv {
     pub now: DateTime<Utc>,
     pub fx: Option<UsdCnyRate>,
-    /// 仅 attach_estimated_cost 为 true. 试算和仪表盘重算不扣余额.
+    /// 仅 attach_estimated_cost 为 true. 试算不扣余额.
     pub commit: bool,
     pub balance: Option<BalanceSnapshot>,
 }

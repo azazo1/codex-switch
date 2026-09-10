@@ -1,10 +1,9 @@
 use crate::app::state::AppState;
 use crate::core::models::{
-    BalanceSnapshot, DashboardStats, DatabaseInfo, ModelUsageStats, ProviderStats, QuotaSnapshot,
-    RequestLog, ScheduleGroup, ScheduleGroupChild, ScheduleGroupMember, ScheduleRouteRule,
-    Upstream, UpstreamBalanceAlertSettings, UpstreamCacheKeepaliveSettings,
+    BalanceSnapshot, DashboardStats, DatabaseInfo, ProviderStats, QuotaSnapshot, RequestLog,
+    ScheduleGroup, ScheduleGroupChild, ScheduleGroupMember, ScheduleRouteRule, Upstream,
+    UpstreamBalanceAlertSettings, UpstreamCacheKeepaliveSettings,
 };
-use crate::pricing;
 use crate::storage::RequestLogFilter;
 use std::collections::BTreeMap;
 
@@ -80,30 +79,10 @@ pub(super) async fn load_view_data(
         .recent_logs_page_filtered(log_limit, log_offset, log_filter)
         .await?;
     let log_estimated_cost_usd = logs.iter().map(|log| log.estimated_cost_usd).collect();
-    let total_model_usage = state.store.model_usage_stats(false).await?;
-    let today_model_usage = state.store.model_usage_stats(true).await?;
-    let cost_upstreams: BTreeMap<String, pricing::CostUpstream> = upstreams
-        .iter()
-        .map(|upstream| {
-            (
-                upstream.id.clone(),
-                pricing::CostUpstream::from_upstream(upstream),
-            )
-        })
-        .collect();
-    let cost_env = pricing::load_cost_estimate_env(&state.store).await?;
-    let total_estimated_cost_usd =
-        estimate_model_usage_cost(state, &cost_env, &total_model_usage, &cost_upstreams).await?;
-    let today_estimated_cost_usd =
-        estimate_model_usage_cost(state, &cost_env, &today_model_usage, &cost_upstreams).await?;
-    let provider_estimated_cost_usd = estimate_provider_costs(
-        state,
-        &cost_env,
-        &total_model_usage,
-        &provider_stats,
-        &cost_upstreams,
-    )
-    .await?;
+    let costs = state.store.estimated_cost_summary().await?;
+    let total_estimated_cost_usd = costs.total_usd;
+    let today_estimated_cost_usd = costs.today_usd;
+    let provider_estimated_cost_usd = costs.by_upstream;
     let price_cache_count = state.store.model_price_count().await?;
     let price_cache_age_seconds = state.store.model_price_cache_age_seconds().await?;
     let database_info = state.store.database_info().await?;
@@ -143,76 +122,4 @@ pub(super) async fn load_view_data(
         quota_snapshots,
         balance_snapshots,
     })
-}
-
-async fn estimate_model_usage_cost(
-    state: &AppState,
-    env: &pricing::CostEstimateEnv,
-    rows: &[ModelUsageStats],
-    cost_upstreams: &BTreeMap<String, pricing::CostUpstream>,
-) -> anyhow::Result<Option<f64>> {
-    let mut total = 0.0;
-    let mut matched = false;
-    for row in rows {
-        let Some(cost) = estimate_row_cost(state, env, row, cost_upstreams).await else {
-            continue;
-        };
-        total += cost;
-        matched = true;
-    }
-    Ok(matched.then_some(total))
-}
-
-async fn estimate_provider_costs(
-    state: &AppState,
-    env: &pricing::CostEstimateEnv,
-    rows: &[ModelUsageStats],
-    providers: &[ProviderStats],
-    cost_upstreams: &BTreeMap<String, pricing::CostUpstream>,
-) -> anyhow::Result<BTreeMap<String, Option<f64>>> {
-    let mut totals: BTreeMap<String, (f64, bool)> = BTreeMap::new();
-    for provider in providers {
-        totals.insert(provider.upstream_id.clone(), (0.0, false));
-    }
-    for row in rows {
-        let upstream_id = row
-            .upstream_id
-            .clone()
-            .unwrap_or_else(|| "none".to_string());
-        let Some(cost) = estimate_row_cost(state, env, row, cost_upstreams).await else {
-            continue;
-        };
-        let entry = totals.entry(upstream_id).or_insert((0.0, false));
-        entry.0 += cost;
-        entry.1 = true;
-    }
-    Ok(totals
-        .into_iter()
-        .map(|(key, (value, matched))| (key, matched.then_some(value)))
-        .collect())
-}
-
-async fn estimate_row_cost(
-    state: &AppState,
-    env: &pricing::CostEstimateEnv,
-    row: &ModelUsageStats,
-    cost_upstreams: &BTreeMap<String, pricing::CostUpstream>,
-) -> Option<f64> {
-    let model = row.model.as_deref()?;
-    let upstream = row
-        .upstream_id
-        .as_deref()
-        .and_then(|id| cost_upstreams.get(id));
-    pricing::estimate_request_cost(
-        &state.store,
-        &state.pricing,
-        env,
-        pricing::CostEstimateInput {
-            model: Some(model),
-            target_model: None,
-            usage: &row.usage,
-            upstream,
-        },
-    )
-    .await
 }

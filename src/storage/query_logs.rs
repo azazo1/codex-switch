@@ -1,9 +1,10 @@
 use crate::core::models::{
-    DashboardStats, ModelUsageStats, ProviderStats, RequestLog, RequestLogSource, TokenUsage,
+    DashboardStats, ProviderStats, RequestLog, RequestLogSource, TokenUsage,
 };
 use crate::storage::Store;
 use chrono::{DateTime, Utc};
 use sqlx::{QueryBuilder, Row, Sqlite};
+use std::collections::BTreeMap;
 
 const UNASSIGNED_UPSTREAM_ID: &str = "none";
 
@@ -42,6 +43,13 @@ pub struct RequestLogFilter {
     pub source: Option<RequestLogSource>,
     pub started_at: Option<DateTime<Utc>>,
     pub ended_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct EstimatedCostSummary {
+    pub total_usd: Option<f64>,
+    pub today_usd: Option<f64>,
+    pub by_upstream: BTreeMap<String, Option<f64>>,
 }
 
 impl Store {
@@ -173,44 +181,33 @@ impl Store {
             .collect())
     }
 
-    pub async fn model_usage_stats(
-        &self,
-        today_only: bool,
-    ) -> anyhow::Result<Vec<ModelUsageStats>> {
+    pub async fn estimated_cost_summary(&self) -> anyhow::Result<EstimatedCostSummary> {
         let today = Utc::now().format("%Y-%m-%d").to_string();
-        let query = if today_only {
-            "SELECT upstream_id, upstream_name, model,
-                    COALESCE(SUM(input_tokens), 0) AS input_tokens,
-                    COALESCE(SUM(output_tokens), 0) AS output_tokens,
-                    COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
-                    COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
-                    COALESCE(SUM(total_tokens), 0) AS total_tokens
+        let totals = sqlx::query(
+            "SELECT SUM(estimated_cost_usd) AS total_usd,
+                    SUM(CASE WHEN substr(ts, 1, 10) = ?1 THEN estimated_cost_usd END) AS today_usd
+             FROM request_logs",
+        )
+        .bind(&today)
+        .fetch_one(self.pool())
+        .await?;
+        let rows = sqlx::query(
+            "SELECT upstream_id, SUM(estimated_cost_usd) AS estimated_cost_usd
              FROM request_logs
-             WHERE substr(ts, 1, 10) = ?1
-             GROUP BY upstream_id, upstream_name, model"
-        } else {
-            "SELECT upstream_id, upstream_name, model,
-                    COALESCE(SUM(input_tokens), 0) AS input_tokens,
-                    COALESCE(SUM(output_tokens), 0) AS output_tokens,
-                    COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
-                    COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
-                    COALESCE(SUM(total_tokens), 0) AS total_tokens
-             FROM request_logs
-             GROUP BY upstream_id, upstream_name, model"
-        };
-        let mut builder = sqlx::query(query);
-        if today_only {
-            builder = builder.bind(today);
+             WHERE upstream_id IS NOT NULL
+             GROUP BY upstream_id",
+        )
+        .fetch_all(self.pool())
+        .await?;
+        let mut by_upstream = BTreeMap::new();
+        for row in rows {
+            by_upstream.insert(row.get("upstream_id"), row.get("estimated_cost_usd"));
         }
-        let rows = builder.fetch_all(self.pool()).await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| ModelUsageStats {
-                upstream_id: row.get("upstream_id"),
-                model: row.get("model"),
-                usage: usage_from_rollup(&row),
-            })
-            .collect())
+        Ok(EstimatedCostSummary {
+            total_usd: totals.get("total_usd"),
+            today_usd: totals.get("today_usd"),
+            by_upstream,
+        })
     }
 
     #[cfg(test)]
@@ -782,6 +779,42 @@ mod tests {
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].usage.total_tokens, 2_000_000);
         assert!(logs[0].estimated_cost_usd.unwrap() >= 1.0);
+    }
+
+    #[tokio::test]
+    async fn estimated_cost_summary_sums_stored_costs() {
+        let path =
+            std::env::temp_dir().join(format!("codex-switch-test-{}.sqlite", uuid::Uuid::new_v4()));
+        let store = Store::open(path).await.unwrap();
+        let today_upstream = save_test_upstream(&store, "relay-today").await;
+        let old_upstream = save_test_upstream(&store, "relay-old").await;
+        let today = Utc::now();
+        let old = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        let mut today_a = test_log_at(today, Some(&today_upstream.id), Some("relay-today"), 10);
+        today_a.estimated_cost_usd = Some(0.10);
+        let mut today_b = test_log_at(today, Some(&today_upstream.id), Some("relay-today"), 20);
+        today_b.estimated_cost_usd = Some(0.20);
+        let today_missing = test_log_at(today, Some(&today_upstream.id), Some("relay-today"), 30);
+        let mut old_log = test_log_at(old, Some(&old_upstream.id), Some("relay-old"), 40);
+        old_log.estimated_cost_usd = Some(9.0);
+
+        store.insert_request_log(today_a).await.unwrap();
+        store.insert_request_log(today_b).await.unwrap();
+        store.insert_request_log(today_missing).await.unwrap();
+        store.insert_request_log(old_log).await.unwrap();
+
+        let summary = store.estimated_cost_summary().await.unwrap();
+        assert!((summary.total_usd.unwrap() - 9.30).abs() < 1e-9);
+        assert!((summary.today_usd.unwrap() - 0.30).abs() < 1e-9);
+        assert!(
+            (summary.by_upstream.get(&today_upstream.id).copied().flatten().unwrap() - 0.30).abs()
+                < 1e-9
+        );
+        assert!(
+            (summary.by_upstream.get(&old_upstream.id).copied().flatten().unwrap() - 9.0).abs()
+                < 1e-9
+        );
     }
 
     #[tokio::test]

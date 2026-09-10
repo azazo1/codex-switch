@@ -134,7 +134,7 @@ impl CodexSwitchApp {
             .default_height(520.0)
             .show(ctx, |ui| {
                 ui.label(
-                    "优先级: 上游脚本 > 全局脚本 > 内置公式. 保存后立即覆盖费用估算, 无需重启. 返回值必须是 USD. 未启用, 为空, 编译失败, 返回 () 或运行失败时进入下一层.",
+                    "优先级: 上游脚本 > 全局脚本 > 内置公式. 保存后立即作用于后续请求和试算, 无需重启. 已写入的日志费用和仪表盘合计不会回写. 返回值必须是 USD. 未启用, 为空, 编译失败, 返回 () 或运行失败时进入下一层.",
                 );
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut self.pricing_ui.enabled, "启用脚本");
