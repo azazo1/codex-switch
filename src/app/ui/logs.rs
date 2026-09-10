@@ -13,6 +13,8 @@ use std::collections::BTreeSet;
 const LOG_RANGE_LABEL_WIDTH: f32 = 220.0;
 const LOG_PAGE_BUTTON_WIDTH: f32 = 32.0;
 const LOG_PAGE_SLOT_COUNT: usize = 7;
+const LOG_MODEL_MIN_WIDTH: f32 = 80.0;
+const LOG_MODEL_WIDTH_PAD: f32 = 4.0;
 const DEFAULT_REASONING_EFFORT_OPTIONS: [&str; 5] = ["Minimal", "Low", "Medium", "High", "XHigh"];
 
 impl CodexSwitchApp {
@@ -28,14 +30,21 @@ impl CodexSwitchApp {
         let mut token_display_mode = self.token_display_mode;
         let mut currency_display_mode = self.currency_display_mode;
         let usd_cny_rate = self.usd_cny_rate;
-        egui::ScrollArea::both()
+        let model_column_width = model_column_preferred_width(ui, &self.logs);
+        egui::ScrollArea::horizontal()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 TableBuilder::new(ui)
                     .striped(true)
+                    .auto_shrink([false, false])
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                     .column(Column::auto().at_least(80.0)) // 上游
-                    .column(Column::remainder()) // 模型 ← 吃满剩余
+                    .column(
+                        Column::remainder()
+                            .at_least(LOG_MODEL_MIN_WIDTH)
+                            .at_most(model_column_width)
+                            .clip(true),
+                    ) // 模型: 当前最长, 空间不够时截断填剩余
                     .column(Column::auto()) // 推理强度
                     .column(Column::auto()) // TOKEN
                     .column(Column::auto()) // 费用
@@ -853,7 +862,6 @@ fn log_cost_cell(
     }
 }
 
-
 fn log_model_label(ui: &mut egui::Ui, failed: bool, text: &str) -> egui::Response {
     let max_width = ui.available_width();
     let color = failed.then(|| ui.visuals().error_fg_color);
@@ -883,15 +891,29 @@ fn truncated_log_label(
     ui.add(egui::Label::new(rich))
 }
 
+/// 当前页模型列目标宽度: 取最长单行 label, 并留一点余量.
+fn model_column_preferred_width(ui: &egui::Ui, logs: &[RequestLog]) -> f32 {
+    let font_id = egui::TextStyle::Body.resolve(ui.style());
+    let mut width = measure_text_width(ui, &font_id, "模型");
+    for log in logs {
+        for line in model_text(log).lines() {
+            width = width.max(measure_text_width(ui, &font_id, line));
+        }
+    }
+    (width + LOG_MODEL_WIDTH_PAD).max(LOG_MODEL_MIN_WIDTH)
+}
+
+fn measure_text_width(ui: &egui::Ui, font_id: &egui::FontId, text: &str) -> f32 {
+    ui.painter()
+        .layout_no_wrap(text.to_owned(), font_id.clone(), egui::Color32::WHITE)
+        .size()
+        .x
+}
+
 /// 过长时保留末尾并补前导省略号, 不需要截断时返回 None.
 fn elide_to_tail(ui: &egui::Ui, text: &str, max_width: f32) -> Option<String> {
     let font_id = egui::TextStyle::Body.resolve(ui.style());
-    let measure = |value: &str| -> f32 {
-        ui.painter()
-            .layout_no_wrap(value.to_owned(), font_id.clone(), egui::Color32::WHITE)
-            .size()
-            .x
-    };
+    let measure = |value: &str| measure_text_width(ui, &font_id, value);
     if measure(text) <= max_width {
         return None;
     }
