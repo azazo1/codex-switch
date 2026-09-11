@@ -138,7 +138,8 @@ pub(super) struct ModelTestUiState {
     custom_wire_api: WireApi,
     model_input: String,
     fetched_models: Vec<String>,
-    fetched_for_upstream: Option<String>,
+    /// 已拉取模型列表对应的目标键, 见 `model_list_target_key`.
+    fetched_for_target: Option<String>,
     models_fetching: bool,
     stream: bool,
     max_tokens_input: String,
@@ -168,7 +169,7 @@ impl Default for ModelTestUiState {
             custom_wire_api: WireApi::ChatCompletions,
             model_input: String::new(),
             fetched_models: Vec::new(),
-            fetched_for_upstream: None,
+            fetched_for_target: None,
             models_fetching: false,
             stream: true,
             max_tokens_input: DEFAULT_MAX_TOKENS.to_string(),
@@ -197,6 +198,30 @@ impl Default for ModelTestUiState {
 impl ModelTestUiState {
     fn busy(&self) -> bool {
         self.single_result.started.is_some() || self.chat_running
+    }
+
+    /// 当前发送方式下模型列表缓存归属的目标键: 上游按 id, 临时上游按 Base URL.
+    /// 经调度组没有可拉取的单个上游, 返回 None.
+    fn model_list_target_key(&self) -> Option<String> {
+        match self.target_mode {
+            TargetMode::Direct => self
+                .selected_upstream_id
+                .as_ref()
+                .map(|id| format!("upstream:{id}")),
+            TargetMode::Custom => {
+                let base_url = self.custom_base_url.trim();
+                (!base_url.is_empty()).then(|| format!("custom:{base_url}"))
+            }
+            TargetMode::Scheduler => None,
+        }
+    }
+
+    /// 已拉取的模型列表是否属于当前目标.
+    fn model_list_matches_target(&self) -> bool {
+        let Some(key) = self.model_list_target_key() else {
+            return false;
+        };
+        self.fetched_for_target.as_deref() == Some(key.as_str())
     }
 }
 
@@ -299,7 +324,7 @@ impl CodexSwitchApp {
                                 if ui.selectable_label(selected, &upstream.name).clicked() {
                                     if !selected {
                                         self.model_test_ui.fetched_models.clear();
-                                        self.model_test_ui.fetched_for_upstream = None;
+                                        self.model_test_ui.fetched_for_target = None;
                                     }
                                     self.model_test_ui.selected_upstream_id =
                                         Some(upstream.id.clone());
@@ -313,20 +338,7 @@ impl CodexSwitchApp {
                                 == Some(&upstream.id)
                         })
                         .is_some_and(|upstream| upstream.kind == UpstreamKind::CodexOauth);
-                    let fetch_label = if self.model_test_ui.models_fetching {
-                        "拉取中..."
-                    } else {
-                        "拉取模型列表"
-                    };
-                    if ui
-                        .add_enabled(
-                            !self.model_test_ui.models_fetching && !selected_is_oauth,
-                            egui::Button::new(fetch_label),
-                        )
-                        .clicked()
-                    {
-                        self.fetch_model_test_models();
-                    }
+                    self.model_test_fetch_models_button(ui, !selected_is_oauth);
                 }
                 TargetMode::Scheduler => {
                     ui.separator();
@@ -366,16 +378,18 @@ impl CodexSwitchApp {
                     ui.label("Base URL");
                     ui.add(
                         egui::TextEdit::singleline(&mut self.model_test_ui.custom_base_url)
-                            .desired_width(280.0)
+                            .desired_width(180.0)
                             .hint_text("https://relay.example.com"),
                     );
                     ui.label("API Key");
                     ui.add(
                         egui::TextEdit::singleline(&mut self.model_test_ui.custom_api_key)
-                            .desired_width(160.0)
+                            .desired_width(110.0)
                             .password(true)
                             .hint_text("留空则不带认证"),
                     );
+                    // 与直连上游的拉取按钮位置一致, 都紧跟目标选择.
+                    self.model_test_fetch_models_button(ui, true);
                 }
             }
         });
@@ -422,11 +436,8 @@ impl CodexSwitchApp {
                     .desired_width(260.0)
                     .hint_text("模型名, 如 gpt-5-codex"),
             );
-            let model_list_for_target = self.model_test_ui.fetched_for_upstream.as_deref()
-                == self.model_test_ui.selected_upstream_id.as_deref();
             if !self.model_test_ui.fetched_models.is_empty()
-                && model_list_for_target
-                && self.model_test_ui.target_mode == TargetMode::Direct
+                && self.model_test_ui.model_list_matches_target()
             {
                 egui::ComboBox::from_id_salt("model_test_model_list")
                     .selected_text("从列表选择")
@@ -480,6 +491,33 @@ impl CodexSwitchApp {
             .iter()
             .find(|group| group.id == id)
             .map(|group| group.name.clone())
+    }
+
+    /// 目标选择右侧的模型列表拉取按钮, 直连上游与临时上游位置一致.
+    /// `target_supports_models` 由调用方判断目标本身能否拉取 (OAuth 上游不能).
+    fn model_test_fetch_models_button(&mut self, ui: &mut egui::Ui, target_supports_models: bool) {
+        let fetching = self.model_test_ui.models_fetching;
+        let custom = self.model_test_ui.target_mode == TargetMode::Custom;
+        let enabled = !fetching
+            && target_supports_models
+            && (!custom || !self.model_test_ui.custom_base_url.trim().is_empty());
+        let label = if fetching {
+            "拉取中..."
+        } else {
+            "拉取模型列表"
+        };
+        if ui
+            .add_enabled(enabled, egui::Button::new(label))
+            .on_hover_text("查询该目标的模型列表, 便于填充下方模型名")
+            .on_disabled_hover_text(if custom {
+                "请先填写 Base URL"
+            } else {
+                "OAuth 上游无法拉取模型列表"
+            })
+            .clicked()
+        {
+            self.fetch_model_test_models();
+        }
     }
 
     fn model_test_reasoning_supported(&self) -> bool {
@@ -1052,31 +1090,48 @@ impl CodexSwitchApp {
         }
     }
 
+    /// 拉取当前发送目标 (上游或临时上游) 的模型列表.
     fn fetch_model_test_models(&mut self) {
         if self.model_test_ui.models_fetching {
             return;
         }
-        let Some(upstream) = self.model_test_target_upstream() else {
-            self.status = "请选择要测试的上游".to_string();
+        // 临时上游未保存, 认证直接使用明文密钥; 保存过的上游从凭据存储读取.
+        let custom = self.model_test_ui.target_mode == TargetMode::Custom;
+        let (upstream, api_key) = if custom {
+            let Ok(upstream) = self.model_test_custom_upstream() else {
+                self.status = "请填写临时上游的 Base URL".to_string();
+                return;
+            };
+            let api_key = self.model_test_ui.custom_api_key.trim().to_string();
+            (upstream, Some(api_key))
+        } else {
+            let Some(upstream) = self.model_test_target_upstream() else {
+                self.status = "请选择要测试的上游".to_string();
+                return;
+            };
+            (upstream, None)
+        };
+        let Some(target_key) = self.model_test_ui.model_list_target_key() else {
             return;
         };
         self.model_test_ui.models_fetching = true;
-        self.status = format!("正在拉取上游 {} 的模型列表", upstream.name);
+        self.status = if custom {
+            format!("正在拉取{CUSTOM_UPSTREAM_NAME}的模型列表")
+        } else {
+            format!("正在拉取上游 {} 的模型列表", upstream.name)
+        };
         let state = self.state.clone();
         let tx = self.task_tx.clone();
-        let upstream_id = upstream.id.clone();
         self.runtime.spawn(async move {
-            let result = test_bench::fetch_upstream_model_ids(&state, &upstream).await;
-            let _ = tx.send(UiTaskEvent::ModelTestModelsFetched {
-                upstream_id,
-                result,
-            });
+            let result =
+                test_bench::fetch_upstream_model_ids(&state, &upstream, api_key.as_deref()).await;
+            let _ = tx.send(UiTaskEvent::ModelTestModelsFetched { target_key, result });
         });
     }
 
     pub(super) fn handle_model_test_models_fetched(
         &mut self,
-        upstream_id: String,
+        target_key: String,
         result: anyhow::Result<Vec<String>>,
     ) {
         self.model_test_ui.models_fetching = false;
@@ -1084,7 +1139,7 @@ impl CodexSwitchApp {
             Ok(models) => {
                 self.status = format!("已获取 {} 个模型", models.len());
                 self.model_test_ui.fetched_models = models;
-                self.model_test_ui.fetched_for_upstream = Some(upstream_id);
+                self.model_test_ui.fetched_for_target = Some(target_key);
             }
             Err(err) => {
                 self.status = format!("拉取模型列表失败: {err}");

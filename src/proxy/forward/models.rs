@@ -4,6 +4,7 @@ use crate::core::models::{
 };
 use crate::core::upstream_detection::{self, DetectedUpstream};
 use crate::proxy::transform;
+use crate::proxy::upstream_auth;
 use crate::scheduler::{glob_captures, rewrite_model_template};
 use axum::http::HeaderMap;
 use serde_json::{Value, json};
@@ -354,7 +355,7 @@ async fn query_upstream_models(
 ) -> anyhow::Result<Vec<Value>> {
     match upstream.kind {
         UpstreamKind::RelayApiKey | UpstreamKind::PeerNode => {
-            query_relay_models(state, headers, upstream).await
+            query_relay_models(state, headers, upstream, None).await
         }
         UpstreamKind::CodexOauth => Ok(vec![fallback_model(upstream)]),
     }
@@ -368,10 +369,14 @@ fn detect_for_models(upstream: &Upstream) -> DetectedUpstream {
     upstream_detection::detect_upstream(&upstream.base_url)
 }
 
+/// 查询单个上游的模型列表.
+/// `api_key` 用于未保存的临时上游, 直接使用明文密钥, 空字符串表示不带认证;
+/// 保存过的上游传 None, 认证信息从凭据存储读取.
 pub(super) async fn query_relay_models(
     state: &AppState,
     headers: &HeaderMap,
     upstream: &Upstream,
+    api_key: Option<&str>,
 ) -> anyhow::Result<Vec<Value>> {
     let detected = detect_for_models(upstream);
     let target_url = if upstream.kind == UpstreamKind::PeerNode {
@@ -401,7 +406,17 @@ pub(super) async fn query_relay_models(
         if upstream.wire_api == crate::core::models::WireApi::AnthropicMessages {
             request = request.query(&[("limit", "1000")]);
         }
-        let request = apply_headers(state, upstream, request, headers, client_wire_api).await?;
+        let request = match api_key {
+            Some(api_key) => {
+                let request = if api_key.is_empty() {
+                    request
+                } else {
+                    upstream_auth::apply_api_key_auth(request, upstream, api_key)
+                };
+                upstream_auth::apply_anthropic_version(request, upstream)
+            }
+            None => apply_headers(state, upstream, request, headers, client_wire_api).await?,
+        };
         let response = request.send().await?;
         let status = response.status();
         let value = response.json::<Value>().await?;
@@ -411,6 +426,14 @@ pub(super) async fn query_relay_models(
         anyhow::bail!("{message}");
     }
     let items = normalize_models_response(&value, upstream, detected);
+    // 临时上游每次都是新的随机 id, 缓存模型能力没有意义.
+    if api_key.is_none() {
+        cache_model_capabilities(state, upstream, &items);
+    }
+    Ok(items)
+}
+
+fn cache_model_capabilities(state: &AppState, upstream: &Upstream, items: &[Value]) {
     let capabilities = items
         .iter()
         .filter_map(|item| {
@@ -422,7 +445,6 @@ pub(super) async fn query_relay_models(
     if !capabilities.is_empty() {
         state.model_capabilities.extend(&upstream.id, capabilities);
     }
-    Ok(items)
 }
 
 fn push_models(models: &mut Vec<Value>, seen: &mut BTreeSet<String>, items: Vec<Value>) {

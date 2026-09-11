@@ -447,7 +447,7 @@ enum UiTaskEvent {
     },
     PeerPaired(anyhow::Result<String>),
     ModelTestModelsFetched {
-        upstream_id: String,
+        target_key: String,
         result: anyhow::Result<Vec<String>>,
     },
     ModelTestDelta {
@@ -1236,11 +1236,8 @@ impl CodexSwitchApp {
                         }
                     }
                 }
-                UiTaskEvent::ModelTestModelsFetched {
-                    upstream_id,
-                    result,
-                } => {
-                    self.handle_model_test_models_fetched(upstream_id, result);
+                UiTaskEvent::ModelTestModelsFetched { target_key, result } => {
+                    self.handle_model_test_models_fetched(target_key, result);
                 }
                 UiTaskEvent::ModelTestDelta { kind, part } => {
                     self.handle_model_test_delta(kind, part);

@@ -371,14 +371,18 @@ async fn run_scheduler_test_inner(
 }
 
 /// 拉取指定上游的模型 id 列表, OAuth 上游不支持.
+/// `api_key` 用于临时上游的明文密钥, 空字符串表示不带认证;
+/// 保存过的上游传 None, 认证信息从凭据存储读取.
 pub async fn fetch_upstream_model_ids(
     state: &AppState,
     upstream: &Upstream,
+    api_key: Option<&str>,
 ) -> anyhow::Result<Vec<String>> {
     if upstream.kind == UpstreamKind::CodexOauth {
         anyhow::bail!("OAuth 上游无法拉取模型列表, 请手动输入模型名");
     }
-    let items = super::models::query_relay_models(state, &HeaderMap::new(), upstream).await?;
+    let items =
+        super::models::query_relay_models(state, &HeaderMap::new(), upstream, api_key).await?;
     Ok(items
         .iter()
         .filter_map(|item| item.get("id").and_then(Value::as_str).map(str::to_string))
