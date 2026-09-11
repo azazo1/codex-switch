@@ -607,8 +607,11 @@ async fn forward_with_upstream(
         reasoning_effort: request.reasoning_effort.clone(),
     });
     request.state.events.bump_live_streams();
-    let mut active_guard =
-        ActiveRequestGuard::new(request.state.clone(), request.request_id.clone());
+    let mut active_guard = ActiveRequestGuard::new(
+        request.state.clone(),
+        request.request_id.clone(),
+        &upstream.id,
+    );
     let (status, response_headers, _content_type, body, stream) =
         if upstream.kind == UpstreamKind::PeerNode {
             send_peer_upstream(

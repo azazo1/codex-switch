@@ -568,6 +568,14 @@ fn migrations() -> &'static [Migration] {
                 "ALTER TABLE balance_snapshots ADD COLUMN remaining_adjusted INTEGER NOT NULL DEFAULT 0",
             ],
         },
+        Migration {
+            version: 26,
+            name: "upstream_balance_active_refresh",
+            statements: &[
+                "ALTER TABLE upstream_balance_alert_settings ADD COLUMN active_interval_seconds INTEGER NOT NULL DEFAULT 5",
+                "ALTER TABLE upstream_balance_alert_settings ADD COLUMN active_window_seconds INTEGER NOT NULL DEFAULT 10",
+            ],
+        },
     ]
 }
 
@@ -588,7 +596,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 25);
+        assert_eq!(rows.len(), 26);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -684,6 +692,11 @@ mod tests {
             rows[24].get::<String, _>("name"),
             "balance_snapshot_remaining_adjusted"
         );
+        assert_eq!(rows[25].get::<i64, _>("version"), 26);
+        assert_eq!(
+            rows[25].get::<String, _>("name"),
+            "upstream_balance_active_refresh"
+        );
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
             Some("127.0.0.1:15721")
@@ -712,6 +725,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 25);
+        assert_eq!(count, 26);
     }
 }

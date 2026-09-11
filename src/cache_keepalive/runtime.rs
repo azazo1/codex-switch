@@ -8,6 +8,7 @@ use super::{
     DISABLED_SESSION_RETENTION, INTERNAL_ENDPOINT, KEEPALIVE_REQUEST_TIMEOUT,
     OUTPUT_TOKENS_WARNING_THRESHOLD, SCAN_INTERVAL,
 };
+use crate::activity::UpstreamActivity;
 use crate::app::{AppEvents, http};
 use crate::balance::API_KEY_CREDENTIAL;
 use crate::core::models::{
@@ -33,6 +34,7 @@ pub struct CacheKeepaliveRuntime {
     credentials: CredentialStore,
     events: AppEvents,
     pricing: PricingEngine,
+    activity: UpstreamActivity,
 }
 
 impl CacheKeepaliveRuntime {
@@ -41,6 +43,7 @@ impl CacheKeepaliveRuntime {
         credentials: CredentialStore,
         events: AppEvents,
         pricing: PricingEngine,
+        activity: UpstreamActivity,
     ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(CacheKeepaliveInner::default())),
@@ -48,6 +51,7 @@ impl CacheKeepaliveRuntime {
             credentials,
             events,
             pricing,
+            activity,
         }
     }
 
@@ -419,6 +423,8 @@ impl CacheKeepaliveRuntime {
         session: &CacheKeepaliveSession,
         settings: &UpstreamCacheKeepaliveSettings,
     ) -> anyhow::Result<TokenUsage> {
+        // 缓存保持同样消耗上游余额, 计入活跃度.
+        let _activity = self.activity.begin(&session.upstream.id);
         let target_body = keepalive_body(&session.body, session.wire_api, settings)?;
         let target_url = match session.wire_api {
             WireApi::Responses => {

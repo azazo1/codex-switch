@@ -432,9 +432,16 @@ fn balance_alert_label(ui: &mut egui::Ui, settings: Option<&UpstreamBalanceAlert
         ui.label("关闭");
         return;
     }
+    let interval_hint = format!(
+        "有模型调用时每 {} 秒查询一次, 空闲时每 {} 秒查询一次",
+        settings.active_interval_seconds, settings.interval_seconds
+    );
     if !settings.alert_enabled {
-        ui.label(format!("刷新 / {} 秒", settings.interval_seconds))
-            .on_hover_text("仅自动刷新余额, 不发送系统提醒");
+        ui.label(format!(
+            "活跃 {}s / 空闲 {}s",
+            settings.active_interval_seconds, settings.interval_seconds
+        ))
+        .on_hover_text(format!("{interval_hint}, 仅自动刷新余额, 不发送系统提醒"));
         return;
     }
     let response = if settings.alert_active {
@@ -445,7 +452,7 @@ fn balance_alert_label(ui: &mut egui::Ui, settings: Option<&UpstreamBalanceAlert
     } else {
         ui.label(format!("<= {:.4}", settings.threshold))
     };
-    response.on_hover_text(format!("每 {} 秒检查一次", settings.interval_seconds));
+    response.on_hover_text(interval_hint);
 }
 
 pub(super) fn cache_keepalive_label(

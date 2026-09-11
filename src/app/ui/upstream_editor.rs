@@ -207,7 +207,9 @@ impl CodexSwitchApp {
         let uses_newapi_balance = uses_newapi_balance(&upstream);
         let mut balance_alert = editor.balance_alert;
         balance_alert.upstream_id = upstream.id.clone();
-        balance_alert.interval_seconds = balance_alert.interval_seconds.max(60);
+        balance_alert.interval_seconds = balance_alert.interval_seconds.max(1);
+        balance_alert.active_interval_seconds = balance_alert.active_interval_seconds.max(1);
+        balance_alert.active_window_seconds = balance_alert.active_window_seconds.max(1);
         if !balance_alert.enabled {
             balance_alert.alert_enabled = false;
         }
@@ -584,22 +586,41 @@ fn balance_alert_form(ui: &mut egui::Ui, settings: &mut UpstreamBalanceAlertSett
     ui.separator();
     ui.heading("余额自动刷新");
     ui.horizontal(|ui| {
-        if ui
-            .checkbox(&mut settings.enabled, "启用自动刷新")
-            .on_hover_text("按检查间隔查询并覆盖余额快照, 不要求开启系统提醒")
-            .changed()
-            && !settings.enabled
-        {
+        ui.checkbox(&mut settings.enabled, "启用自动刷新")
+            .on_hover_text("按间隔定时查询并覆盖余额快照, 不要求开启系统提醒");
+        if !settings.enabled {
             settings.alert_enabled = false;
         }
-        ui.label("检查间隔秒");
-        ui.add(
-            egui::DragValue::new(&mut settings.interval_seconds)
-                .range(60..=i64::MAX)
-                .speed(60),
-        );
     });
     ui.add_enabled_ui(settings.enabled, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("空闲间隔秒").on_hover_text(
+                "上游没有模型调用时的查询间隔. 例如 1800 表示空闲时大约每 30 分钟查一次余额, 具体频率可能稍有偏差",
+            );
+            ui.add(
+                egui::DragValue::new(&mut settings.interval_seconds)
+                    .range(1..=i64::MAX)
+                    .speed(30),
+            );
+            ui.label("活跃间隔秒").on_hover_text(
+                "上游有模型调用时改用这个间隔, 调用结束后活跃窗口内仍按它查询. 例如 5 表示调用期间大约每 5 秒查一次余额, 具体频率可能稍有偏差",
+            );
+            ui.add(
+                egui::DragValue::new(&mut settings.active_interval_seconds)
+                    .range(1..=i64::MAX)
+                    .speed(1),
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.label("活跃窗口秒").on_hover_text(
+                "最后一次模型调用结束后, 继续按活跃间隔查询的秒数, 超过后回到空闲间隔. 例如 10 表示调用结束后再密集查 10 秒",
+            );
+            ui.add(
+                egui::DragValue::new(&mut settings.active_window_seconds)
+                    .range(1..=i64::MAX)
+                    .speed(5),
+            );
+        });
         ui.horizontal(|ui| {
             ui.checkbox(&mut settings.alert_enabled, "启用系统提醒")
                 .on_hover_text("关闭时只定时刷新余额快照, 不比较阈值, 也不发送系统通知");

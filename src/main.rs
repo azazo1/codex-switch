@@ -4,6 +4,7 @@
     windows_subsystem = "windows"
 )]
 
+mod activity;
 mod app;
 mod balance;
 mod balance_alert;

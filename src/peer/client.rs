@@ -235,11 +235,13 @@ mod tests {
         let credentials = CredentialStore::new_for_tests(store.clone());
         let events: crate::app::AppEvents = Default::default();
         let pricing = crate::pricing::PricingEngine::disabled();
+        let activity = crate::activity::UpstreamActivity::default();
         let cache_keepalive = CacheKeepaliveRuntime::new(
             store.clone(),
             credentials.clone(),
             events.clone(),
             pricing.clone(),
+            activity.clone(),
         );
         let oauth_accounts = crate::oauth::OAuthAccountService::new(store.clone());
         let peers = crate::peer::PeerRuntime::new(&store).await.unwrap();
@@ -252,6 +254,7 @@ mod tests {
             events,
             scheduler: Default::default(),
             live_requests: Default::default(),
+            activity,
             cache_keepalive,
             peers,
             update,

@@ -1,3 +1,4 @@
+use crate::activity::UpstreamActivity;
 use crate::app::http;
 use crate::cache_keepalive::CacheKeepaliveRuntime;
 use crate::core::model_capabilities::ModelCapabilityCache;
@@ -35,6 +36,7 @@ pub struct AppState {
     pub events: AppEvents,
     pub scheduler: SchedulerRuntime,
     pub live_requests: LiveRequestStore,
+    pub activity: UpstreamActivity,
     pub cache_keepalive: CacheKeepaliveRuntime,
     pub peers: PeerRuntime,
     pub update: crate::update::UpdateRuntime,
@@ -163,11 +165,13 @@ impl AppState {
         let oauth_accounts = OAuthAccountService::new(store.clone());
         let events = AppEvents::default();
         let pricing = crate::pricing::PricingEngine::load(&store).await?;
+        let activity = UpstreamActivity::default();
         let cache_keepalive = CacheKeepaliveRuntime::new(
             store.clone(),
             credentials.clone(),
             events.clone(),
             pricing.clone(),
+            activity.clone(),
         );
         let peers = PeerRuntime::new(&store).await?;
         let update = crate::update::UpdateRuntime::new(store.clone(), events.clone()).await;
@@ -179,6 +183,7 @@ impl AppState {
             events,
             scheduler: SchedulerRuntime::default(),
             live_requests: LiveRequestStore::default(),
+            activity,
             cache_keepalive,
             peers,
             update,

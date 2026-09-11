@@ -189,6 +189,7 @@ async fn test_runtime() -> CacheKeepaliveRuntime {
         credentials,
         AppEvents::default(),
         crate::pricing::PricingEngine::disabled(),
+        crate::activity::UpstreamActivity::default(),
     )
 }
 

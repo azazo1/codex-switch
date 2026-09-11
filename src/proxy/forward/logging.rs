@@ -207,19 +207,24 @@ impl StreamLogDraft {
 pub(super) struct ActiveRequestGuard {
     state: AppState,
     request_id: String,
+    activity: Option<crate::activity::ActivityGuard>,
     active: bool,
 }
 
 impl ActiveRequestGuard {
-    pub(super) fn new(state: AppState, request_id: String) -> Self {
+    pub(super) fn new(state: AppState, request_id: String, upstream_id: &str) -> Self {
+        let activity = state.activity.begin(upstream_id);
         Self {
             state,
             request_id,
+            activity: Some(activity),
             active: true,
         }
     }
 
     pub(super) fn finish(&mut self) {
+        // 释放活跃标记, 让上游在窗口期后回落到空闲刷新频率.
+        self.activity.take();
         if !self.active {
             return;
         }

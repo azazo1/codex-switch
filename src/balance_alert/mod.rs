@@ -2,7 +2,7 @@ use crate::app::AppState;
 use crate::core::models::{BalanceSnapshot, UpstreamBalanceAlertSettings, UpstreamKind};
 use std::time::Duration;
 
-const SCAN_INTERVAL: Duration = Duration::from_secs(30);
+const SCAN_INTERVAL: Duration = Duration::from_secs(5);
 
 pub fn start(state: AppState) {
     tokio::spawn(async move {
@@ -24,7 +24,8 @@ async fn scan_once(state: &AppState) -> anyhow::Result<()> {
     let settings = state.store.list_enabled_balance_alert_settings().await?;
     let now = chrono::Utc::now().timestamp();
     for setting in settings {
-        if !is_due(&setting, now) {
+        let active = is_upstream_active(state, &setting);
+        if !is_due(&setting, now, active) {
             continue;
         }
         let Some(upstream) = state.store.get_upstream(&setting.upstream_id).await? else {
@@ -36,7 +37,8 @@ async fn scan_once(state: &AppState) -> anyhow::Result<()> {
         tracing::info!(
             upstream_id = %upstream.id,
             upstream_name = %upstream.name,
-            interval_seconds = setting.interval_seconds,
+            active,
+            interval_seconds = refresh_interval_seconds(&setting, active),
             alert_enabled = setting.alert_enabled,
             "refreshing upstream balance"
         );
@@ -120,10 +122,28 @@ async fn evaluate_alert(
     }
 }
 
-fn is_due(settings: &UpstreamBalanceAlertSettings, now: i64) -> bool {
+fn is_due(settings: &UpstreamBalanceAlertSettings, now: i64, active: bool) -> bool {
+    let interval = refresh_interval_seconds(settings, active);
     settings
         .last_checked_at
-        .is_none_or(|last| now.saturating_sub(last) >= settings.interval_seconds.max(60))
+        .is_none_or(|last| now.saturating_sub(last) >= interval)
+}
+
+/// 上游正在调用或刚调用过时返回 true, 此时使用活跃刷新间隔.
+fn is_upstream_active(state: &AppState, settings: &UpstreamBalanceAlertSettings) -> bool {
+    let window = Duration::from_secs(settings.active_window_seconds.max(1) as u64);
+    state
+        .activity
+        .is_active(&settings.upstream_id, window)
+}
+
+fn refresh_interval_seconds(settings: &UpstreamBalanceAlertSettings, active: bool) -> i64 {
+    let interval = if active {
+        settings.active_interval_seconds
+    } else {
+        settings.interval_seconds
+    };
+    interval.max(1)
 }
 
 fn is_balance_low(snapshot: &BalanceSnapshot, threshold: f64) -> bool {
@@ -162,7 +182,40 @@ mod tests {
         let mut settings = UpstreamBalanceAlertSettings::new("upstream".to_string());
         settings.interval_seconds = 600;
         settings.last_checked_at = Some(1000);
-        assert!(!is_due(&settings, 1599));
-        assert!(is_due(&settings, 1600));
+        assert!(!is_due(&settings, 1599, false));
+        assert!(is_due(&settings, 1600, false));
+    }
+
+    #[test]
+    fn active_upstream_uses_the_active_interval() {
+        let mut settings = UpstreamBalanceAlertSettings::new("upstream".to_string());
+        settings.interval_seconds = 1800;
+        settings.active_interval_seconds = 120;
+        settings.last_checked_at = Some(1000);
+
+        assert!(!is_due(&settings, 1119, true));
+        assert!(is_due(&settings, 1120, true));
+        assert!(!is_due(&settings, 1120, false));
+        assert!(is_due(&settings, 2800, false));
+    }
+
+    #[test]
+    fn refresh_interval_defaults_to_the_upstream_setting() {
+        let mut settings = UpstreamBalanceAlertSettings::new("upstream".to_string());
+        settings.interval_seconds = 900;
+        settings.active_interval_seconds = 5;
+
+        assert_eq!(refresh_interval_seconds(&settings, false), 900);
+        assert_eq!(refresh_interval_seconds(&settings, true), 5);
+    }
+
+    #[test]
+    fn non_positive_refresh_interval_is_clamped_to_one_second() {
+        let mut settings = UpstreamBalanceAlertSettings::new("upstream".to_string());
+        settings.interval_seconds = 0;
+        settings.active_interval_seconds = -10;
+
+        assert_eq!(refresh_interval_seconds(&settings, false), 1);
+        assert_eq!(refresh_interval_seconds(&settings, true), 1);
     }
 }

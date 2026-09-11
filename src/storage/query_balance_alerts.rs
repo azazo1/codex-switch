@@ -35,19 +35,24 @@ impl Store {
     ) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO upstream_balance_alert_settings (
-                upstream_id, enabled, alert_enabled, threshold, interval_seconds, last_checked_at,
+                upstream_id, enabled, alert_enabled, threshold, interval_seconds,
+                active_interval_seconds, active_window_seconds, last_checked_at,
                 alert_active, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, 0, ?6)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, 0, ?8)
              ON CONFLICT(upstream_id) DO UPDATE SET
                 enabled = excluded.enabled,
                 alert_enabled = excluded.alert_enabled,
                 threshold = excluded.threshold,
                 interval_seconds = excluded.interval_seconds,
+                active_interval_seconds = excluded.active_interval_seconds,
+                active_window_seconds = excluded.active_window_seconds,
                 last_checked_at = CASE
                     WHEN upstream_balance_alert_settings.enabled != excluded.enabled
                       OR upstream_balance_alert_settings.alert_enabled != excluded.alert_enabled
                       OR upstream_balance_alert_settings.threshold != excluded.threshold
                       OR upstream_balance_alert_settings.interval_seconds != excluded.interval_seconds
+                      OR upstream_balance_alert_settings.active_interval_seconds != excluded.active_interval_seconds
+                      OR upstream_balance_alert_settings.active_window_seconds != excluded.active_window_seconds
                     THEN NULL
                     ELSE upstream_balance_alert_settings.last_checked_at
                 END,
@@ -57,6 +62,8 @@ impl Store {
                       OR upstream_balance_alert_settings.alert_enabled != excluded.alert_enabled
                       OR upstream_balance_alert_settings.threshold != excluded.threshold
                       OR upstream_balance_alert_settings.interval_seconds != excluded.interval_seconds
+                      OR upstream_balance_alert_settings.active_interval_seconds != excluded.active_interval_seconds
+                      OR upstream_balance_alert_settings.active_window_seconds != excluded.active_window_seconds
                     THEN 0
                     ELSE upstream_balance_alert_settings.alert_active
                 END,
@@ -66,7 +73,9 @@ impl Store {
         .bind(i64::from(settings.enabled))
         .bind(i64::from(settings.alert_enabled))
         .bind(settings.threshold.max(0.0))
-        .bind(settings.interval_seconds.max(60))
+        .bind(settings.interval_seconds.max(1))
+        .bind(settings.active_interval_seconds.max(1))
+        .bind(settings.active_window_seconds.max(1))
         .bind(Utc::now().to_rfc3339())
         .execute(self.pool())
         .await?;
@@ -101,6 +110,8 @@ fn row_to_settings(row: sqlx::sqlite::SqliteRow) -> UpstreamBalanceAlertSettings
         alert_enabled: row.get::<i64, _>("alert_enabled") != 0,
         threshold: row.get("threshold"),
         interval_seconds: row.get("interval_seconds"),
+        active_interval_seconds: row.get("active_interval_seconds"),
+        active_window_seconds: row.get("active_window_seconds"),
         last_checked_at: row.get("last_checked_at"),
         alert_active: row.get::<i64, _>("alert_active") != 0,
     }
@@ -132,6 +143,8 @@ mod tests {
         settings.alert_enabled = true;
         settings.threshold = 12.5;
         settings.interval_seconds = 600;
+        settings.active_interval_seconds = 90;
+        settings.active_window_seconds = 240;
         store.save_balance_alert_settings(&settings).await.unwrap();
         store
             .mark_balance_alert_checked(&upstream.id, 1234, true)
@@ -143,6 +156,8 @@ mod tests {
         assert!(saved.alert_enabled);
         assert_eq!(saved.threshold, 12.5);
         assert_eq!(saved.interval_seconds, 600);
+        assert_eq!(saved.active_interval_seconds, 90);
+        assert_eq!(saved.active_window_seconds, 240);
         assert_eq!(saved.last_checked_at, Some(1234));
         assert!(saved.alert_active);
 

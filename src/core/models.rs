@@ -807,7 +807,12 @@ pub struct UpstreamBalanceAlertSettings {
     pub enabled: bool,
     pub alert_enabled: bool,
     pub threshold: f64,
+    /// 上游空闲时的刷新间隔.
     pub interval_seconds: i64,
+    /// 上游正在调用或刚调用过时使用的刷新间隔.
+    pub active_interval_seconds: i64,
+    /// 最近一次调用结束后仍按活跃间隔刷新的时长.
+    pub active_window_seconds: i64,
     pub last_checked_at: Option<i64>,
     pub alert_active: bool,
 }
@@ -820,6 +825,8 @@ impl UpstreamBalanceAlertSettings {
             alert_enabled: false,
             threshold: 5.0,
             interval_seconds: 1800,
+            active_interval_seconds: 5,
+            active_window_seconds: 10,
             last_checked_at: None,
             alert_active: false,
         }
