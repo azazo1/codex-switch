@@ -67,7 +67,7 @@ jobs:
           echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
 
       - name: 检出目标提交
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.release_context.outputs.source_ref }}
           fetch-depth: 0
@@ -118,7 +118,7 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 安装 Linux 依赖
         run: |
@@ -186,7 +186,7 @@ jobs:
 
     steps:
       - name: 检出目标提交
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.source_ref }}
           fetch-depth: 0
@@ -329,7 +329,7 @@ jobs:
           bash scripts/dist-macos.sh "target/${{ matrix.target }}/release"
 
       - name: 上传构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: codex-switch-${{ needs.version.outputs.build_version }}-${{ matrix.platform }}-${{ matrix.arch }}
           path: dist/codex-switch-*
@@ -346,7 +346,7 @@ jobs:
 
     steps:
       - name: 检出代码和 tags
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.source_ref }}
           fetch-depth: 0
@@ -395,7 +395,7 @@ jobs:
           fi
 
       - name: 下载 release 产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: codex-switch-${{ needs.version.outputs.build_version }}-*
           path: release-artifacts
