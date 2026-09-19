@@ -100,6 +100,30 @@ impl ErrorRetryPolicy {
     }
 }
 
+/// 并发达到上限后的溢出策略: 直接拒绝请求或挂起等待空位.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConcurrencyOverflowPolicy {
+    #[default]
+    Reject,
+    Hold,
+}
+
+impl ConcurrencyOverflowPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Reject => "reject",
+            Self::Hold => "hold",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "hold" => Self::Hold,
+            _ => Self::Reject,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnknownModalityPolicy {
     TextOnly,
@@ -223,6 +247,12 @@ pub struct Upstream {
     pub strip_multimodal_for_text_models: bool,
     pub unknown_modality_policy: UnknownModalityPolicy,
     pub error_retry_policy: ErrorRetryPolicy,
+    /// 同时转发的上游请求数上限, 0 表示不限制.
+    #[serde(default)]
+    pub concurrency_limit: i64,
+    /// 并发达到上限后的处理策略.
+    #[serde(default)]
+    pub concurrency_overflow: ConcurrencyOverflowPolicy,
     pub price_multiplier: f64,
     pub enabled: bool,
     pub priority: i64,
@@ -262,6 +292,8 @@ impl Upstream {
             strip_multimodal_for_text_models: false,
             unknown_modality_policy: UnknownModalityPolicy::TextOnly,
             error_retry_policy: ErrorRetryPolicy::Off,
+            concurrency_limit: 0,
+            concurrency_overflow: ConcurrencyOverflowPolicy::Reject,
             price_multiplier: 1.0,
             enabled: true,
             priority: 0,
@@ -297,6 +329,8 @@ impl Upstream {
             strip_multimodal_for_text_models: false,
             unknown_modality_policy: UnknownModalityPolicy::TextOnly,
             error_retry_policy: ErrorRetryPolicy::Off,
+            concurrency_limit: 0,
+            concurrency_overflow: ConcurrencyOverflowPolicy::Reject,
             price_multiplier: 1.0,
             enabled: true,
             priority: 10,
@@ -326,6 +360,8 @@ impl Upstream {
             strip_multimodal_for_text_models: false,
             unknown_modality_policy: UnknownModalityPolicy::TextOnly,
             error_retry_policy: ErrorRetryPolicy::Off,
+            concurrency_limit: 0,
+            concurrency_overflow: ConcurrencyOverflowPolicy::Reject,
             price_multiplier: 1.0,
             enabled: true,
             priority: 0,

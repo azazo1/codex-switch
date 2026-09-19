@@ -7,6 +7,7 @@ use crate::live::LiveRequestStore;
 use crate::logging::network::HttpClient;
 use crate::oauth::OAuthAccountService;
 use crate::peer::PeerRuntime;
+use crate::proxy::concurrency::UpstreamConcurrency;
 use crate::scheduler::SchedulerRuntime;
 use crate::storage::{Store, credentials::CredentialStore};
 use anyhow::Context;
@@ -35,6 +36,7 @@ pub struct AppState {
     pub oauth_accounts: OAuthAccountService,
     pub events: AppEvents,
     pub scheduler: SchedulerRuntime,
+    pub upstream_concurrency: UpstreamConcurrency,
     pub live_requests: LiveRequestStore,
     pub activity: UpstreamActivity,
     pub cache_keepalive: CacheKeepaliveRuntime,
@@ -182,6 +184,7 @@ impl AppState {
             oauth_accounts,
             events,
             scheduler: SchedulerRuntime::default(),
+            upstream_concurrency: UpstreamConcurrency::default(),
             live_requests: LiveRequestStore::default(),
             activity,
             cache_keepalive,

@@ -1,7 +1,7 @@
 use super::query_pricing::{UpstreamPricingScript, save_upstream_pricing_script_in_tx};
 use crate::core::models::{
-    ApiKeyAuthScheme, BalanceProvider, ErrorRetryPolicy, UnknownModalityPolicy, Upstream,
-    UpstreamKind, WireApi,
+    ApiKeyAuthScheme, BalanceProvider, ConcurrencyOverflowPolicy, ErrorRetryPolicy,
+    UnknownModalityPolicy, Upstream, UpstreamKind, WireApi,
 };
 use crate::core::upstream_transfer::{
     UPSTREAM_EXPORT_VERSION, UpstreamExport, UpstreamExportItem, UpstreamPricingScriptExport,
@@ -63,10 +63,10 @@ impl Store {
         };
         sqlx::query(
             "INSERT INTO upstreams (
-                id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, strip_multimodal_for_text_models, unknown_modality_policy, error_retry_policy, price_multiplier,
+                id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, strip_multimodal_for_text_models, unknown_modality_policy, error_retry_policy, concurrency_limit, concurrency_overflow, price_multiplier,
                 enabled, priority, weight, proxy_url, balance_provider, chatgpt_account_id, email,
                 plan_type, token_expires_at, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
              ON CONFLICT(id) DO UPDATE SET
                 kind = excluded.kind,
                 name = excluded.name,
@@ -78,6 +78,8 @@ impl Store {
                 strip_multimodal_for_text_models = excluded.strip_multimodal_for_text_models,
                 unknown_modality_policy = excluded.unknown_modality_policy,
                 error_retry_policy = excluded.error_retry_policy,
+                concurrency_limit = excluded.concurrency_limit,
+                concurrency_overflow = excluded.concurrency_overflow,
                 price_multiplier = excluded.price_multiplier,
                 enabled = excluded.enabled,
                 priority = excluded.priority,
@@ -101,6 +103,8 @@ impl Store {
         .bind(i64::from(upstream.strip_multimodal_for_text_models))
         .bind(upstream.unknown_modality_policy.as_str())
         .bind(upstream.error_retry_policy.as_str())
+        .bind(upstream.concurrency_limit)
+        .bind(upstream.concurrency_overflow.as_str())
         .bind(upstream.price_multiplier)
         .bind(i64::from(upstream.enabled))
         .bind(upstream.priority)
@@ -427,10 +431,10 @@ async fn insert_upstream(
 ) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO upstreams (
-            id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, strip_multimodal_for_text_models, unknown_modality_policy, error_retry_policy, price_multiplier,
+            id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, strip_multimodal_for_text_models, unknown_modality_policy, error_retry_policy, concurrency_limit, concurrency_overflow, price_multiplier,
             enabled, priority, weight, proxy_url, balance_provider, chatgpt_account_id, email,
             plan_type, token_expires_at, created_at, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
     )
     .bind(&upstream.id)
     .bind(upstream.kind.as_str())
@@ -443,6 +447,8 @@ async fn insert_upstream(
     .bind(i64::from(upstream.strip_multimodal_for_text_models))
     .bind(upstream.unknown_modality_policy.as_str())
     .bind(upstream.error_retry_policy.as_str())
+    .bind(upstream.concurrency_limit)
+    .bind(upstream.concurrency_overflow.as_str())
     .bind(upstream.price_multiplier)
     .bind(i64::from(upstream.enabled))
     .bind(upstream.priority)
@@ -502,6 +508,10 @@ pub(super) fn row_to_upstream(row: sqlx::sqlite::SqliteRow) -> anyhow::Result<Up
             &row.get::<String, _>("unknown_modality_policy"),
         ),
         error_retry_policy: ErrorRetryPolicy::from_str(&row.get::<String, _>("error_retry_policy")),
+        concurrency_limit: row.get("concurrency_limit"),
+        concurrency_overflow: ConcurrencyOverflowPolicy::from_str(&row.get::<String, _>(
+            "concurrency_overflow",
+        )),
         price_multiplier: row.get::<f64, _>("price_multiplier"),
         enabled: row.get::<i64, _>("enabled") != 0,
         priority: row.get("priority"),
@@ -638,6 +648,34 @@ mod tests {
         assert_eq!(
             saved.unknown_modality_policy,
             UnknownModalityPolicy::Multimodal
+        );
+    }
+
+    #[tokio::test]
+    async fn persists_concurrency_settings() {
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-upstream-concurrency-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let store = Store::open(path).await.unwrap();
+        let mut upstream = Upstream::new_relay(
+            "relay".to_string(),
+            "https://example.com/v1".to_string(),
+            WireApi::Responses,
+            false,
+            BalanceProvider::Unsupported,
+        );
+        assert_eq!(upstream.concurrency_limit, 0);
+        upstream.concurrency_limit = 4;
+        upstream.concurrency_overflow = ConcurrencyOverflowPolicy::Hold;
+
+        store.save_upstream(&upstream).await.unwrap();
+        let saved = store.get_upstream(&upstream.id).await.unwrap().unwrap();
+
+        assert_eq!(saved.concurrency_limit, 4);
+        assert_eq!(
+            saved.concurrency_overflow,
+            ConcurrencyOverflowPolicy::Hold
         );
     }
 

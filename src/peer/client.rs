@@ -253,6 +253,7 @@ mod tests {
             oauth_accounts,
             events,
             scheduler: Default::default(),
+            upstream_concurrency: Default::default(),
             live_requests: Default::default(),
             activity,
             cache_keepalive,

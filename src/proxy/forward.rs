@@ -8,6 +8,7 @@ use crate::live::LiveRequestMeta;
 use crate::proxy::compat::{
     self, PreparedProtocolRequest, ProtocolConversionError, ProtocolSseBridge,
 };
+use crate::proxy::concurrency::{ConcurrencyRejected, UpstreamPermit};
 use crate::proxy::debug;
 use crate::proxy::multimodal;
 use crate::proxy::transform;
@@ -433,6 +434,32 @@ async fn forward_inner(request: ForwardRequest<'_>) -> Result<ForwardResult, For
                 if err.downcast_ref::<ProtocolConversionError>().is_some() {
                     return Err(ForwardFailure::invalid_request(err));
                 }
+                // 并发已满不属于上游故障: 不计入调度失败, 也不切换候选,
+                // 直接把 429 返回给客户端, 让其自行决定重试时机.
+                if err.downcast_ref::<ConcurrencyRejected>().is_some() {
+                    let error_message = err.to_string();
+                    record_attempt_log(AttemptLog {
+                        state: request.state,
+                        started: request.started,
+                        upstream: Some(&upstream),
+                        endpoint: request.endpoint.clone(),
+                        source: request.source,
+                        model: request.model.clone(),
+                        target_model: attempt_target_model.clone(),
+                        reasoning_effort: request.reasoning_effort.clone(),
+                        status: StatusCode::TOO_MANY_REQUESTS,
+                        usage: TokenUsage::default(),
+                        first_token_ms: None,
+                        error: Some(error_message),
+                        temporary_key_id: request.temporary_key_id.clone(),
+                    })
+                    .await;
+                    return Err(ForwardFailure {
+                        source: err,
+                        logged: true,
+                        status: StatusCode::TOO_MANY_REQUESTS,
+                    });
+                }
                 let count = request
                     .state
                     .scheduler
@@ -612,6 +639,21 @@ async fn forward_with_upstream(
         request.request_id.clone(),
         &upstream.id,
     );
+    // 并发许可在向上游发起前获取, 流式响应持有到流结束, 非流式持有到本函数返回.
+    let permit = request
+        .state
+        .upstream_concurrency
+        .acquire(&upstream, &mut terminate_rx)
+        .await?;
+    if let UpstreamPermit::Held(held) = &permit {
+        tracing::debug!(
+            upstream_id = %upstream.id,
+            upstream_name = %upstream.name,
+            limit = upstream.concurrency_limit,
+            available = held.semaphore().available_permits(),
+            "upstream concurrency permit acquired"
+        );
+    }
     let (status, response_headers, _content_type, body, stream) =
         if upstream.kind == UpstreamKind::PeerNode {
             send_peer_upstream(
@@ -696,6 +738,7 @@ async fn forward_with_upstream(
             upstream_stream: stream.expect("streaming response is missing body stream"),
             active_guard,
             terminate_rx,
+            permit,
             temporary_key_id: request.temporary_key_id.clone(),
         });
         let failure_kind = scheduler::classify_response(status, &[]);
@@ -972,6 +1015,7 @@ struct LiveResponseStreamInput<'a> {
     upstream_stream: BoxStream<'static, Result<Bytes, io::Error>>,
     active_guard: ActiveRequestGuard,
     terminate_rx: watch::Receiver<bool>,
+    permit: UpstreamPermit,
     temporary_key_id: Option<String>,
 }
 
@@ -988,6 +1032,7 @@ fn build_live_response_stream(
         mut upstream_stream,
         active_guard,
         mut terminate_rx,
+        permit,
         temporary_key_id,
     } = input;
     let state = request.state.clone();
@@ -1015,6 +1060,8 @@ fn build_live_response_stream(
     let live_guard = LiveRequestGuard::from_active(active_guard, log_draft.clone());
     stream! {
         let mut live_guard = live_guard;
+        // 并发许可持有到流结束或出错返回, Drop 时自动释放.
+        let _permit = permit;
 
         let mut first_token_ms = None;
         let mut usage = TokenUsage::default();

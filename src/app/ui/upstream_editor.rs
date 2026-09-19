@@ -2,8 +2,9 @@ use super::{CodexSwitchApp, token_amount};
 use crate::app::http;
 use crate::balance;
 use crate::core::models::{
-    ApiKeyAuthScheme, BalanceProvider, CacheKeepaliveMode, ErrorRetryPolicy, UnknownModalityPolicy,
-    Upstream, UpstreamBalanceAlertSettings, UpstreamCacheKeepaliveSettings, UpstreamKind, WireApi,
+    ApiKeyAuthScheme, BalanceProvider, CacheKeepaliveMode, ConcurrencyOverflowPolicy,
+    ErrorRetryPolicy, UnknownModalityPolicy, Upstream, UpstreamBalanceAlertSettings,
+    UpstreamCacheKeepaliveSettings, UpstreamKind, WireApi,
 };
 use crate::core::upstream_detection::{self, DetectedKind};
 use eframe::egui;
@@ -198,6 +199,7 @@ impl CodexSwitchApp {
             return;
         }
         upstream.weight = upstream.weight.max(1);
+        upstream.concurrency_limit = upstream.concurrency_limit.max(0);
         if upstream.wire_api == WireApi::AnthropicMessages {
             upstream.supports_compact = false;
         }
@@ -405,6 +407,31 @@ impl UpstreamEditor {
         })
         .response
         .on_hover_text("模型列表和 models.dev 都没有能力信息时, 按此配置决定是否清理多模态输入.");
+        ui.horizontal(|ui| {
+            ui.label("并发限制");
+            ui.add(
+                egui::DragValue::new(&mut self.upstream.concurrency_limit)
+                    .range(0..=i64::MAX)
+                    .speed(1),
+            )
+            .on_hover_text(
+                "同时进行的上游请求数上限, 0 表示不限制. 计数从向上游发起请求开始, 到响应结束 (含流式输出) 为止.",
+            );
+            ui.add_enabled_ui(self.upstream.concurrency_limit > 0, |ui| {
+                ui.radio_value(
+                    &mut self.upstream.concurrency_overflow,
+                    ConcurrencyOverflowPolicy::Reject,
+                    "满时拒绝",
+                )
+                .on_hover_text("并发已满时直接向客户端返回 429 错误, 不切换到其他上游.");
+                ui.radio_value(
+                    &mut self.upstream.concurrency_overflow,
+                    ConcurrencyOverflowPolicy::Hold,
+                    "满时排队",
+                )
+                .on_hover_text("并发已满时挂起请求等待空位, 直到获得许可后再转发.");
+            });
+        });
         ui.horizontal(|ui| {
             ui.label("代理 URL");
             let proxy_url = self.upstream.proxy_url.get_or_insert_with(String::new);

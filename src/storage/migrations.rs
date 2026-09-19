@@ -576,6 +576,14 @@ fn migrations() -> &'static [Migration] {
                 "ALTER TABLE upstream_balance_alert_settings ADD COLUMN active_window_seconds INTEGER NOT NULL DEFAULT 10",
             ],
         },
+        Migration {
+            version: 27,
+            name: "upstream_concurrency_limit",
+            statements: &[
+                "ALTER TABLE upstreams ADD COLUMN concurrency_limit INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE upstreams ADD COLUMN concurrency_overflow TEXT NOT NULL DEFAULT 'reject'",
+            ],
+        },
     ]
 }
 
@@ -596,7 +604,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 26);
+        assert_eq!(rows.len(), 27);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -697,6 +705,11 @@ mod tests {
             rows[25].get::<String, _>("name"),
             "upstream_balance_active_refresh"
         );
+        assert_eq!(rows[26].get::<i64, _>("version"), 27);
+        assert_eq!(
+            rows[26].get::<String, _>("name"),
+            "upstream_concurrency_limit"
+        );
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
             Some("127.0.0.1:15721")
@@ -725,6 +738,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 26);
+        assert_eq!(count, 27);
     }
 }

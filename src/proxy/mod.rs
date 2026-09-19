@@ -1,4 +1,5 @@
 mod compat;
+pub(crate) mod concurrency;
 mod debug;
 pub(crate) mod forward;
 mod multimodal;
