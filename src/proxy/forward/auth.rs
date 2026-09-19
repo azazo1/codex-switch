@@ -21,7 +21,7 @@ pub(super) async fn validate_local_access(
     state: &AppState,
     headers: &HeaderMap,
     anthropic_error: bool,
-) -> Result<LocalAccess, Response> {
+) -> Result<LocalAccess, Box<Response>> {
     if let Some(access) = validate_peer_access(state, headers, anthropic_error).await? {
         return Ok(access);
     }
@@ -35,7 +35,9 @@ pub(super) async fn validate_local_access(
             } else {
                 json!({"error":{"message":message,"type":"proxy_error"}})
             };
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, axum::Json(value)).into_response());
+            return Err(Box::new(
+                (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(value)).into_response(),
+            ));
         }
     };
     let bearer = headers
@@ -122,7 +124,7 @@ async fn validate_peer_access(
     state: &AppState,
     headers: &HeaderMap,
     anthropic_error: bool,
-) -> Result<Option<LocalAccess>, Response> {
+) -> Result<Option<LocalAccess>, Box<Response>> {
     let Some(public_key) = header_value(headers, PEER_PUBLIC_KEY_HEADER) else {
         return Ok(None);
     };
@@ -200,11 +202,11 @@ fn auth_response(
     status: StatusCode,
     message: &str,
     error_type: &str,
-) -> Response {
+) -> Box<Response> {
     let value = if anthropic_error {
         json!({"type":"error","error":{"message":message,"type":error_type}})
     } else {
         json!({"error":{"message":message,"type":error_type}})
     };
-    (status, axum::Json(value)).into_response()
+    Box::new((status, axum::Json(value)).into_response())
 }

@@ -38,8 +38,7 @@ fn base_url_matches(left: &str, right: &str) -> bool {
 }
 
 fn prefix_at_slash_boundary(full: &str, prefix: &str) -> bool {
-    full == prefix
-        || (full.starts_with(prefix) && full.as_bytes().get(prefix.len()) == Some(&b'/'))
+    full == prefix || (full.starts_with(prefix) && full.as_bytes().get(prefix.len()) == Some(&b'/'))
 }
 
 #[cfg(test)]

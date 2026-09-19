@@ -63,28 +63,39 @@ mod tests {
     fn renders_svg_icons_to_non_empty_rgba() {
         let app = render_svg(APP_ICON_SVG, APP_ICON_SIZE).unwrap();
         assert_eq!(app.len(), (APP_ICON_SIZE * APP_ICON_SIZE * 4) as usize);
-        assert!(app.chunks_exact(4).any(|pixel| pixel[3] > 0));
+        assert!(app.as_chunks::<4>().0.iter().any(|pixel| pixel[3] > 0));
 
         let tray = render_svg(TRAY_ICON_SVG, TRAY_ICON_SIZE).unwrap();
         assert_eq!(tray.len(), (TRAY_ICON_SIZE * TRAY_ICON_SIZE * 4) as usize);
-        assert!(tray.chunks_exact(4).any(|pixel| pixel[3] > 0));
+        assert!(tray.as_chunks::<4>().0.iter().any(|pixel| pixel[3] > 0));
 
         let light_tray = render_svg(TRAY_ICON_LIGHT_SVG, TRAY_ICON_SIZE).unwrap();
         assert_eq!(
             light_tray.len(),
             (TRAY_ICON_SIZE * TRAY_ICON_SIZE * 4) as usize
         );
-        assert!(light_tray.chunks_exact(4).any(|pixel| pixel[3] > 0));
+        assert!(
+            light_tray
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[3] > 0)
+        );
     }
 
     #[test]
     fn scaled_tray_icon_fills_canvas() {
         let tray = render_svg(TRAY_ICON_SVG, TRAY_ICON_SIZE).unwrap();
-        let reaches_scaled_region = tray.chunks_exact(4).enumerate().any(|(index, pixel)| {
-            let x = index % TRAY_ICON_SIZE as usize;
-            let y = index / TRAY_ICON_SIZE as usize;
-            pixel[3] > 0 && x >= 48 && y >= 48
-        });
+        let reaches_scaled_region =
+            tray.as_chunks::<4>()
+                .0
+                .iter()
+                .enumerate()
+                .any(|(index, pixel)| {
+                    let x = index % TRAY_ICON_SIZE as usize;
+                    let y = index / TRAY_ICON_SIZE as usize;
+                    pixel[3] > 0 && x >= 48 && y >= 48
+                });
         assert!(
             reaches_scaled_region,
             "svg should be scaled beyond its original 32px bounds"

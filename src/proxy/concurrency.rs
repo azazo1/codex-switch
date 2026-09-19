@@ -140,7 +140,10 @@ mod tests {
         let upstream = relay_upstream(0, ConcurrencyOverflowPolicy::Reject);
         let mut terminate_rx = terminate_channel();
 
-        let permit = concurrency.acquire(&upstream, &mut terminate_rx).await.unwrap();
+        let permit = concurrency
+            .acquire(&upstream, &mut terminate_rx)
+            .await
+            .unwrap();
         assert!(matches!(permit, UpstreamPermit::Unlimited));
     }
 
@@ -150,12 +153,17 @@ mod tests {
         let upstream = relay_upstream(1, ConcurrencyOverflowPolicy::Reject);
         let mut terminate_rx = terminate_channel();
 
-        let permit = concurrency.acquire(&upstream, &mut terminate_rx).await.unwrap();
+        let permit = concurrency
+            .acquire(&upstream, &mut terminate_rx)
+            .await
+            .unwrap();
         assert!(matches!(permit, UpstreamPermit::Held(_)));
         let result = concurrency.acquire(&upstream, &mut terminate_rx).await;
-        assert!(result
-            .err()
-            .is_some_and(|err| err.downcast_ref::<ConcurrencyRejected>().is_some()));
+        assert!(
+            result
+                .err()
+                .is_some_and(|err| err.downcast_ref::<ConcurrencyRejected>().is_some())
+        );
     }
 
     #[tokio::test]
@@ -164,13 +172,19 @@ mod tests {
         let upstream = relay_upstream(1, ConcurrencyOverflowPolicy::Hold);
         let mut terminate_rx = terminate_channel();
 
-        let permit = concurrency.acquire(&upstream, &mut terminate_rx).await.unwrap();
+        let permit = concurrency
+            .acquire(&upstream, &mut terminate_rx)
+            .await
+            .unwrap();
         let wait_task = tokio::spawn({
             let concurrency = concurrency.clone();
             let upstream = upstream.clone();
             async move {
                 let mut terminate_rx = terminate_channel();
-                concurrency.acquire(&upstream, &mut terminate_rx).await.unwrap()
+                concurrency
+                    .acquire(&upstream, &mut terminate_rx)
+                    .await
+                    .unwrap()
             }
         });
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -188,7 +202,10 @@ mod tests {
             let concurrency = concurrency.clone();
             let upstream = upstream.clone();
             let mut terminate_rx = terminate_channel();
-            concurrency.acquire(&upstream, &mut terminate_rx).await.unwrap()
+            concurrency
+                .acquire(&upstream, &mut terminate_rx)
+                .await
+                .unwrap()
         };
         let wait_task = tokio::spawn(async move {
             let (terminate_tx, mut terminate_rx) = watch::channel(false);
@@ -207,18 +224,29 @@ mod tests {
         let mut upstream = relay_upstream(2, ConcurrencyOverflowPolicy::Reject);
         let mut terminate_rx = terminate_channel();
 
-        let first = concurrency.acquire(&upstream, &mut terminate_rx).await.unwrap();
+        let first = concurrency
+            .acquire(&upstream, &mut terminate_rx)
+            .await
+            .unwrap();
         assert!(matches!(first, UpstreamPermit::Held(_)));
-        let second = concurrency.acquire(&upstream, &mut terminate_rx).await.unwrap();
+        let second = concurrency
+            .acquire(&upstream, &mut terminate_rx)
+            .await
+            .unwrap();
         assert!(matches!(second, UpstreamPermit::Held(_)));
         // 旧信号量已满; 调小 limit 后新请求改用重建的信号量, 并被新 limit 约束.
         // 已在途的许可随其请求结束在旧信号量上释放, 存在短暂的过渡窗口.
         upstream.concurrency_limit = 1;
-        let third = concurrency.acquire(&upstream, &mut terminate_rx).await.unwrap();
+        let third = concurrency
+            .acquire(&upstream, &mut terminate_rx)
+            .await
+            .unwrap();
         assert!(matches!(third, UpstreamPermit::Held(_)));
         let result = concurrency.acquire(&upstream, &mut terminate_rx).await;
-        assert!(result
-            .err()
-            .is_some_and(|err| err.downcast_ref::<ConcurrencyRejected>().is_some()));
+        assert!(
+            result
+                .err()
+                .is_some_and(|err| err.downcast_ref::<ConcurrencyRejected>().is_some())
+        );
     }
 }

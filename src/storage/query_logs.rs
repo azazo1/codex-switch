@@ -808,11 +808,25 @@ mod tests {
         assert!((summary.total_usd.unwrap() - 9.30).abs() < 1e-9);
         assert!((summary.today_usd.unwrap() - 0.30).abs() < 1e-9);
         assert!(
-            (summary.by_upstream.get(&today_upstream.id).copied().flatten().unwrap() - 0.30).abs()
+            (summary
+                .by_upstream
+                .get(&today_upstream.id)
+                .copied()
+                .flatten()
+                .unwrap()
+                - 0.30)
+                .abs()
                 < 1e-9
         );
         assert!(
-            (summary.by_upstream.get(&old_upstream.id).copied().flatten().unwrap() - 9.0).abs()
+            (summary
+                .by_upstream
+                .get(&old_upstream.id)
+                .copied()
+                .flatten()
+                .unwrap()
+                - 9.0)
+                .abs()
                 < 1e-9
         );
     }

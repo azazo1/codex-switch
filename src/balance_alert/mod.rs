@@ -132,9 +132,7 @@ fn is_due(settings: &UpstreamBalanceAlertSettings, now: i64, active: bool) -> bo
 /// 上游正在调用或刚调用过时返回 true, 此时使用活跃刷新间隔.
 fn is_upstream_active(state: &AppState, settings: &UpstreamBalanceAlertSettings) -> bool {
     let window = Duration::from_secs(settings.active_window_seconds.max(1) as u64);
-    state
-        .activity
-        .is_active(&settings.upstream_id, window)
+    state.activity.is_active(&settings.upstream_id, window)
 }
 
 fn refresh_interval_seconds(settings: &UpstreamBalanceAlertSettings, active: bool) -> i64 {

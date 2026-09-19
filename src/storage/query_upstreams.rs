@@ -509,9 +509,9 @@ pub(super) fn row_to_upstream(row: sqlx::sqlite::SqliteRow) -> anyhow::Result<Up
         ),
         error_retry_policy: ErrorRetryPolicy::from_str(&row.get::<String, _>("error_retry_policy")),
         concurrency_limit: row.get("concurrency_limit"),
-        concurrency_overflow: ConcurrencyOverflowPolicy::from_str(&row.get::<String, _>(
-            "concurrency_overflow",
-        )),
+        concurrency_overflow: ConcurrencyOverflowPolicy::from_str(
+            &row.get::<String, _>("concurrency_overflow"),
+        ),
         price_multiplier: row.get::<f64, _>("price_multiplier"),
         enabled: row.get::<i64, _>("enabled") != 0,
         priority: row.get("priority"),
@@ -673,10 +673,7 @@ mod tests {
         let saved = store.get_upstream(&upstream.id).await.unwrap().unwrap();
 
         assert_eq!(saved.concurrency_limit, 4);
-        assert_eq!(
-            saved.concurrency_overflow,
-            ConcurrencyOverflowPolicy::Hold
-        );
+        assert_eq!(saved.concurrency_overflow, ConcurrencyOverflowPolicy::Hold);
     }
 
     #[tokio::test]

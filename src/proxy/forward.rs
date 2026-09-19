@@ -109,7 +109,7 @@ pub async fn handle_models(
     let temporary_key_id = match validate_local_access(&state, &headers, anthropic).await {
         Ok(LocalAccess::Primary | LocalAccess::Peer) => None,
         Ok(LocalAccess::Temporary { id }) => Some(id),
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     match models::query_models(&state, &headers, &uri, model_id.as_deref()).await {
         Ok(value) => {
@@ -162,7 +162,7 @@ pub async fn handle_openai(
     {
         Ok(LocalAccess::Primary | LocalAccess::Peer) => None,
         Ok(LocalAccess::Temporary { id }) => Some(id),
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let started = Instant::now();
     let endpoint = endpoint_kind.endpoint(&uri, subpath);

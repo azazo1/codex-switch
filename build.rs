@@ -91,33 +91,26 @@ fn embed_pricing_presets(manifest_dir: &Path) {
             .and_then(|stem| stem.to_str())
             .unwrap_or_else(|| panic!("preset filename is not utf-8: {}", path.display()));
         if !is_safe_stem(stem) {
-            panic!(
-                "preset filename must be [A-Za-z0-9_-]+: {}",
-                path.display()
-            );
+            panic!("preset filename must be [A-Za-z0-9_-]+: {}", path.display());
         }
         let source = fs::read_to_string(path)
             .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
         let (meta, body) = parse_preset_source(&source, stem, path);
         if !seen_ids.insert(meta.id.clone()) {
-            panic!(
-                "duplicate preset id `{}` from {}",
-                meta.id,
-                path.display()
-            );
+            panic!("duplicate preset id `{}` from {}", meta.id, path.display());
         }
         for prefer in &meta.prefer {
             let key = normalize_prefer_url(prefer);
             if !seen_prefers.insert(key) {
-                panic!(
-                    "duplicate @prefer `{prefer}` from {}",
-                    path.display()
-                );
+                panic!("duplicate @prefer `{prefer}` from {}", path.display());
             }
         }
         let out_name = format!("{stem}.rhai");
         fs::write(examples_out.join(&out_name), body).unwrap_or_else(|error| {
-            panic!("failed to write {}: {error}", examples_out.join(&out_name).display());
+            panic!(
+                "failed to write {}: {error}",
+                examples_out.join(&out_name).display()
+            );
         });
         write!(
             rust,
@@ -200,10 +193,7 @@ fn parse_preset_source(source: &str, stem: &str, path: &Path) -> (PresetMeta, St
         panic!("invalid preset id `{id}` from {}", path.display());
     }
     let label = label.unwrap_or_else(|| id.clone());
-    (
-        PresetMeta { id, label, prefer },
-        body,
-    )
+    (PresetMeta { id, label, prefer }, body)
 }
 
 fn parse_directive(directive: &str) -> (&str, &str) {
@@ -224,10 +214,7 @@ fn is_safe_stem(stem: &str) -> bool {
 }
 
 fn is_safe_id(id: &str) -> bool {
-    !id.is_empty()
-        && id
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+    !id.is_empty() && id.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
 }
 
 fn escape_rust_str(value: &str) -> String {
