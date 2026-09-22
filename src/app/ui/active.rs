@@ -298,6 +298,9 @@ fn live_tail_label(
         LiveResponseState::Streaming if item.tail.is_empty() => "等待输出",
         LiveResponseState::Streaming => visible_tail_window(item, scroll, max_chars),
     };
+    // 宽度估算 (`width / 9.0`) 对中文会高估可放下的字符数, 交给 Label 截断就会丢掉最右侧
+    // 也就是最新的字符. 这里按真实字形宽度收缩窗口, 保证右端始终是最新收到的内容.
+    let text = fitted_tail_text(ui, text, width);
     let response = ui.add_sized(
         [width, ui.spacing().interact_size.y],
         egui::Label::new(row_text(ui, text, finished))
@@ -320,6 +323,51 @@ fn live_tail_label(
                 ui.add(egui::Label::new(row_text(ui, hover_text, finished)).wrap());
             });
     });
+}
+
+/// 按真实字形宽度收缩尾部窗口, 返回的子串一定放得进 width, 且右端是最新字符.
+fn fitted_tail_text<'a>(ui: &egui::Ui, text: &'a str, width: f32) -> &'a str {
+    if text.is_empty() || !width.is_finite() || width <= 0.0 {
+        return text;
+    }
+    let font_id = egui::TextStyle::Body.resolve(ui.style());
+    let color = ui.visuals().text_color();
+    let measure = |candidate: &str| -> f32 {
+        ui.painter()
+            .layout_no_wrap(candidate.to_string(), font_id.clone(), color)
+            .size()
+            .x
+    };
+    let full_width = measure(text);
+    if full_width <= width {
+        return text;
+    }
+    let total = text.chars().count();
+    let average = (full_width / total as f32).max(0.1);
+    let mut keep = (((width / average).floor() as usize).max(1)).min(total);
+    loop {
+        let candidate = tail_suffix(text, keep);
+        let candidate_width = measure(candidate);
+        if candidate_width <= width || keep <= 1 {
+            return candidate;
+        }
+        let drop = (((candidate_width - width) / average).ceil() as usize).max(1);
+        keep = keep.saturating_sub(drop);
+    }
+}
+
+fn tail_suffix(text: &str, keep: usize) -> &str {
+    let total = text.chars().count();
+    if keep >= total {
+        return text;
+    }
+    let skip = total - keep;
+    let start = text
+        .char_indices()
+        .nth(skip)
+        .map(|(index, _)| index)
+        .unwrap_or(text.len());
+    &text[start..]
 }
 
 fn output_speed_label(ui: &mut egui::Ui, item: &LiveRequestSnapshot, finished: bool) {

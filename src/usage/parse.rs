@@ -169,6 +169,20 @@ fn sse_text_delta(value: &Value) -> Option<&str> {
                 .and_then(Value::as_str)
                 .filter(|value| !value.is_empty())
         })
+        // deepseek v4.1 这类模型用 reasoning 字段流式输出思考内容; reasoning_details 是
+        // 同一段文本的结构化形式, 只在前者缺失时回退, 否则会把同一段文字记两遍.
+        .or_else(|| {
+            value
+                .pointer("/choices/0/delta/reasoning")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+        })
+        .or_else(|| {
+            value
+                .pointer("/choices/0/delta/reasoning_details/0/text")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+        })
         .or_else(|| {
             value
                 .pointer("/choices/0/delta/refusal")
@@ -260,6 +274,18 @@ mod tests {
             |delta| out.push_str(delta),
         );
         assert_eq!(out, "hello");
+    }
+
+    #[test]
+    fn extracts_deepseek_reasoning_deltas() {
+        let mut out = String::new();
+        for_each_sse_text_delta(
+            "data: {\"choices\":[{\"delta\":{\"reasoning\":\"我们\"}}]}\n\n\
+             data: {\"choices\":[{\"delta\":{\"reasoning\":\"需要\",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"需要\"}]}}]}\n\n\
+             data: {\"choices\":[{\"delta\":{\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"回退\"}]}}]}\n\n",
+            |delta| out.push_str(delta),
+        );
+        assert_eq!(out, "我们需要回退");
     }
 
     #[test]

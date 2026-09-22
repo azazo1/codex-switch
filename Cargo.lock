@@ -1114,6 +1114,7 @@ dependencies = [
  "tower-http 0.7.0",
  "tracing",
  "tracing-appender",
+ "tracing-core",
  "tracing-rolling-file",
  "tracing-subscriber",
  "tray-icon",

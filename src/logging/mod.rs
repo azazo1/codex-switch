@@ -9,11 +9,12 @@ use std::{
     io::{self, BufWriter, Write},
     path::{Path, PathBuf},
     sync::{
-        Mutex, OnceLock,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
 };
 use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
+use tracing_core::callsite::rebuild_interest_cache;
 use tracing_rolling_file::{RollingCondition, RollingConditionBase};
 use tracing_subscriber::{EnvFilter, Registry, fmt, prelude::*, reload};
 
@@ -35,14 +36,64 @@ const SETTING_LOG_MAX_FILES: &str = "log_max_files";
 const DEFAULT_LOG_ROTATION_SIZE_MB: u64 = 20;
 const DEFAULT_LOG_MAX_FILES: usize = 10;
 
+/// 可运行期换文件的共享写入句柄.
+///
+/// 层本身在 subscriber 里终身存活, 轮转设置变化时只替换这里的内芯,
+/// 因此不需要重建层.
+#[derive(Clone)]
+struct SharedLogWriter {
+    inner: Arc<Mutex<NonBlocking>>,
+}
+
+impl SharedLogWriter {
+    fn new(inner: NonBlocking) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(inner)),
+        }
+    }
+
+    /// 换掉底层写入器; 旧的非阻塞写入器在这里丢弃并自行排空队列.
+    fn replace(&self, inner: NonBlocking) {
+        let mut current = self.inner.lock().unwrap_or_else(|err| err.into_inner());
+        *current = inner;
+    }
+}
+
+/// 一次写入持有的非阻塞写入器.
+struct SharedLogWriterGuard<'a>(std::sync::MutexGuard<'a, NonBlocking>);
+
+impl Write for SharedLogWriterGuard<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
+    }
+}
+
+impl<'a> fmt::MakeWriter<'a> for SharedLogWriter {
+    type Writer = SharedLogWriterGuard<'a>;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        SharedLogWriterGuard(self.inner.lock().unwrap_or_else(|err| err.into_inner()))
+    }
+}
+
+/// EnvFilter 单独放进 reload 层, 而不是把整个 Filtered 层包进 reload.
+///
+/// `reload::Layer` 不转发 per-layer filter 的 downcast 标记, 一旦包住 Filtered,
+/// tracing-subscriber 就认为这一栈没有 per-layer filter, 每个文件都会收到全部事件.
+type ReloadFilter = reload::Layer<EnvFilter, Registry>;
+
 type FileLayer = tracing_subscriber::filter::Filtered<
     fmt::Layer<
         Registry,
         fmt::format::DefaultFields,
         fmt::format::Format<fmt::format::Full>,
-        NonBlocking,
+        SharedLogWriter,
     >,
-    EnvFilter,
+    ReloadFilter,
     Registry,
 >;
 
@@ -211,16 +262,13 @@ impl io::Write for RollingLogWriter {
     }
 }
 
-struct FileWriterState {
-    non_blocking: NonBlocking,
-    guard: WorkerGuard,
-}
-
 struct TracingControls {
-    main_layer: reload::Handle<FileLayer, Registry>,
-    main_writer: Mutex<FileWriterState>,
-    proxy_layer: reload::Handle<FileLayer, Registry>,
-    proxy_writer: Mutex<FileWriterState>,
+    main_filter: reload::Handle<EnvFilter, Registry>,
+    main_writer: SharedLogWriter,
+    main_guard: Mutex<WorkerGuard>,
+    proxy_filter: reload::Handle<EnvFilter, Registry>,
+    proxy_writer: SharedLogWriter,
+    proxy_guard: Mutex<WorkerGuard>,
 }
 
 static CONTROLS: OnceLock<TracingControls> = OnceLock::new();
@@ -254,28 +302,16 @@ pub(crate) fn init_tracing(config: LogRotationConfig) -> anyhow::Result<()> {
 
     let log_path = main_log_file_path()?;
     let proxy_log_path = proxy_log_file_path()?;
-    let main_state = build_writer_state(&log_path, config.size_mb, config.max_files)?;
-    let proxy_state = build_writer_state(&proxy_log_path, config.size_mb, config.max_files)?;
-    let main_layer = build_file_layer(
-        main_state.non_blocking.clone(),
-        main_log_filter(config.enabled),
-    )
-    .context("failed to create main log filter")?;
-    let proxy_layer = build_file_layer(
-        proxy_state.non_blocking.clone(),
-        proxy_log_filter(config.enabled),
-    )
-    .context("failed to create proxy log filter")?;
-    let (main_layer, main_handle): (
-        reload::Layer<FileLayer, Registry>,
-        reload::Handle<FileLayer, Registry>,
-    ) = reload::Layer::new(main_layer);
-    let (proxy_layer, proxy_handle): (
-        reload::Layer<FileLayer, Registry>,
-        reload::Handle<FileLayer, Registry>,
-    ) = reload::Layer::new(proxy_layer);
+    let (main_writer, main_guard) = build_writer_state(&log_path, config.size_mb, config.max_files)?;
+    let (proxy_writer, proxy_guard) =
+        build_writer_state(&proxy_log_path, config.size_mb, config.max_files)?;
+    let (main_layer, main_filter) =
+        build_file_layer(main_writer.clone(), main_log_filter(config.enabled))?;
+    let (proxy_layer, proxy_filter) =
+        build_file_layer(proxy_writer.clone(), proxy_log_filter(config.enabled))?;
 
     let subscriber = tracing_subscriber::registry().with(main_layer.and_then(proxy_layer));
+
     #[cfg(not(target_os = "windows"))]
     let subscriber = {
         let stderr = fmt::layer()
@@ -288,10 +324,12 @@ pub(crate) fn init_tracing(config: LogRotationConfig) -> anyhow::Result<()> {
         .context("failed to install tracing subscriber")?;
 
     let controls = TracingControls {
-        main_layer: main_handle,
-        main_writer: Mutex::new(main_state),
-        proxy_layer: proxy_handle,
-        proxy_writer: Mutex::new(proxy_state),
+        main_filter,
+        main_writer,
+        main_guard: Mutex::new(main_guard),
+        proxy_filter,
+        proxy_writer,
+        proxy_guard: Mutex::new(proxy_guard),
     };
     let _ = CONTROLS.set(controls);
     set_body_logging_enabled(config.enabled);
@@ -326,19 +364,18 @@ pub(crate) fn set_debug_log_enabled(enabled: bool) -> anyhow::Result<()> {
     let Some(controls) = CONTROLS.get() else {
         return Ok(());
     };
-    reload_file_layer(
-        &controls.main_layer,
-        &controls.main_writer,
-        main_log_filter(enabled),
-        "main",
-    )?;
-    reload_file_layer(
-        &controls.proxy_layer,
-        &controls.proxy_writer,
-        proxy_log_filter(enabled),
-        "proxy",
-    )?;
+    reload_file_filter(&controls.main_filter, main_log_filter(enabled), "main")?;
+    reload_file_filter(&controls.proxy_filter, proxy_log_filter(enabled), "proxy")?;
     set_body_logging_enabled(enabled);
+    // EnvFilter 的级别变了, 但全局 max level 只在重建 interest 时重算.
+    // 不重建的话, 本进程内已经注册过的 debug/trace 调用点仍然被 level_enabled! 直接跳过.
+    rebuild_interest_cache();
+    tracing::info!(
+        enabled,
+        main_filter = main_log_filter(enabled),
+        proxy_filter = proxy_log_filter(enabled),
+        "debug log filters applied"
+    );
     Ok(())
 }
 
@@ -350,24 +387,19 @@ pub(crate) fn set_rotation_config(size_mb: u64, max_files: usize) -> anyhow::Res
     let controls = CONTROLS
         .get()
         .context("tracing controls are not initialized")?;
-    let enabled = body_logging_enabled();
-    replace_writer_state(
-        &controls.main_layer,
+    replace_writer(
         &controls.main_writer,
+        &controls.main_guard,
         &main_log_file_path()?,
         size_mb,
         max_files,
-        main_log_filter(enabled),
-        "main",
     )?;
-    replace_writer_state(
-        &controls.proxy_layer,
+    replace_writer(
         &controls.proxy_writer,
+        &controls.proxy_guard,
         &proxy_log_file_path()?,
         size_mb,
         max_files,
-        proxy_log_filter(enabled),
-        "proxy",
     )?;
     Ok(())
 }
@@ -431,60 +463,55 @@ fn proxy_log_filter(debug: bool) -> &'static str {
     }
 }
 
-fn build_file_layer(writer: NonBlocking, filter: &'static str) -> anyhow::Result<FileLayer> {
-    Ok(fmt::layer()
-        .with_ansi(false)
-        .with_writer(writer)
-        .with_filter(EnvFilter::try_new(filter)?))
-}
-
-fn reload_file_layer(
-    handle: &reload::Handle<FileLayer, Registry>,
-    state: &Mutex<FileWriterState>,
+fn reload_file_filter(
+    handle: &reload::Handle<EnvFilter, Registry>,
     filter: &'static str,
     label: &'static str,
 ) -> anyhow::Result<()> {
-    let layer = {
-        let writer = state
-            .lock()
-            .map_err(|_| anyhow::anyhow!("failed to lock {label} log writer"))?;
-        build_file_layer(writer.non_blocking.clone(), filter)
-            .with_context(|| format!("failed to create {label} log filter"))?
-    };
+    let filter =
+        EnvFilter::try_new(filter).with_context(|| format!("failed to create {label} log filter"))?;
     handle
-        .reload(layer)
-        .with_context(|| format!("failed to reload {label} log layer"))
+        .reload(filter)
+        .with_context(|| format!("failed to reload {label} log filter"))
+}
+
+fn build_file_layer(
+    writer: SharedLogWriter,
+    filter: &'static str,
+) -> anyhow::Result<(FileLayer, reload::Handle<EnvFilter, Registry>)> {
+    let (filter, handle) = reload::Layer::new(
+        EnvFilter::try_new(filter).context("failed to create file log filter")?,
+    );
+    let layer = fmt::layer()
+        .with_ansi(false)
+        .with_writer(writer)
+        .with_filter(filter);
+    Ok((layer, handle))
 }
 
 fn build_writer_state(
     log_path: &Path,
     size_mb: u64,
     max_files: usize,
-) -> anyhow::Result<FileWriterState> {
+) -> anyhow::Result<(SharedLogWriter, WorkerGuard)> {
     let writer = build_rolling_writer(log_path, size_mb, max_files)?;
     let (non_blocking, guard) = tracing_appender::non_blocking(writer);
-    Ok(FileWriterState {
-        non_blocking,
-        guard,
-    })
+    Ok((SharedLogWriter::new(non_blocking), guard))
 }
 
-fn replace_writer_state(
-    handle: &reload::Handle<FileLayer, Registry>,
-    state: &Mutex<FileWriterState>,
+/// 换掉日志文件: 新写入器装进共享句柄, 旧 guard 在这里被替换并等待旧文件排空.
+fn replace_writer(
+    shared: &SharedLogWriter,
+    guard: &Mutex<WorkerGuard>,
     log_path: &Path,
     size_mb: u64,
     max_files: usize,
-    filter: &'static str,
-    label: &'static str,
 ) -> anyhow::Result<()> {
-    let new_state = build_writer_state(log_path, size_mb, max_files)?;
-    reload_file_layer(handle, state, filter, label)?;
-    let mut writer = state
-        .lock()
-        .map_err(|_| anyhow::anyhow!("failed to lock {label} log writer"))?;
-    writer.non_blocking = new_state.non_blocking;
-    writer.guard = new_state.guard;
+    let rolling = build_rolling_writer(log_path, size_mb, max_files)?;
+    let (non_blocking, new_guard) = tracing_appender::non_blocking(rolling);
+    shared.replace(non_blocking);
+    let mut current = guard.lock().unwrap_or_else(|err| err.into_inner());
+    *current = new_guard;
     Ok(())
 }
 
