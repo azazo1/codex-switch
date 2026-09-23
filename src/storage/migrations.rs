@@ -750,6 +750,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 27);
+        assert_eq!(count, 28);
     }
 }
