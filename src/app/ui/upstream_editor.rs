@@ -4,7 +4,7 @@ use crate::balance;
 use crate::core::models::{
     ApiKeyAuthScheme, BalanceProvider, CacheKeepaliveMode, ConcurrencyOverflowPolicy,
     ErrorRetryPolicy, UnknownModalityPolicy, Upstream, UpstreamBalanceAlertSettings,
-    UpstreamCacheKeepaliveSettings, UpstreamKind, WireApi,
+    UpstreamCacheKeepaliveSettings, UpstreamKind, UsageDisplayMode, WireApi,
 };
 use crate::core::upstream_detection::{self, DetectedKind};
 use eframe::egui;
@@ -555,6 +555,7 @@ impl UpstreamEditor {
             );
         });
         provider_combo(ui, &mut self.upstream.balance_provider);
+        usage_display_combo(ui, &mut self.upstream.usage_display);
         if let Some(provider) = upstream_detection::detect_upstream(&self.upstream.base_url)
             .suggestion
             .balance_provider
@@ -732,6 +733,21 @@ fn provider_combo(ui: &mut egui::Ui, provider: &mut BalanceProvider) {
                 ui.selectable_value(provider, *value, value.as_str());
             }
         });
+}
+
+/// 余额与额度的展示方式: 同一个上游可能既有套餐额度窗口又有金额余额.
+fn usage_display_combo(ui: &mut egui::Ui, mode: &mut UsageDisplayMode) {
+    egui::ComboBox::from_label("余额/额度显示")
+        .selected_text(mode.label())
+        .show_ui(ui, |ui| {
+            for value in UsageDisplayMode::ALL {
+                ui.selectable_value(mode, value, value.label());
+            }
+        })
+        .response
+        .on_hover_text(
+            "同一个上游既有套餐额度窗口又有金额余额时, 决定界面和托盘显示哪一份, 以及用不用百分号. 自动模式优先显示额度窗口, 托盘用紧凑形式 42/49/60, 界面用完整形式 42%/49%/60%.",
+        );
 }
 
 fn uses_newapi_balance(upstream: &Upstream) -> bool {

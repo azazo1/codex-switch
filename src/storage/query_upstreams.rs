@@ -1,7 +1,7 @@
 use super::query_pricing::{UpstreamPricingScript, save_upstream_pricing_script_in_tx};
 use crate::core::models::{
     ApiKeyAuthScheme, BalanceProvider, ConcurrencyOverflowPolicy, ErrorRetryPolicy,
-    UnknownModalityPolicy, Upstream, UpstreamKind, WireApi,
+    UnknownModalityPolicy, Upstream, UpstreamKind, UsageDisplayMode, WireApi,
 };
 use crate::core::upstream_transfer::{
     UPSTREAM_EXPORT_VERSION, UpstreamExport, UpstreamExportItem, UpstreamPricingScriptExport,
@@ -64,9 +64,9 @@ impl Store {
         sqlx::query(
             "INSERT INTO upstreams (
                 id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, strip_multimodal_for_text_models, unknown_modality_policy, error_retry_policy, concurrency_limit, concurrency_overflow, price_multiplier,
-                enabled, priority, weight, proxy_url, balance_provider, chatgpt_account_id, email,
+                enabled, priority, weight, proxy_url, balance_provider, usage_display, chatgpt_account_id, email,
                 plan_type, token_expires_at, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
              ON CONFLICT(id) DO UPDATE SET
                 kind = excluded.kind,
                 name = excluded.name,
@@ -86,6 +86,7 @@ impl Store {
                 weight = excluded.weight,
                 proxy_url = excluded.proxy_url,
                 balance_provider = excluded.balance_provider,
+                usage_display = excluded.usage_display,
                 chatgpt_account_id = excluded.chatgpt_account_id,
                 email = excluded.email,
                 plan_type = excluded.plan_type,
@@ -111,6 +112,7 @@ impl Store {
         .bind(upstream.weight)
         .bind(&upstream.proxy_url)
         .bind(upstream.balance_provider.as_str())
+        .bind(upstream.usage_display.as_str())
         .bind(&upstream.chatgpt_account_id)
         .bind(&upstream.email)
         .bind(&upstream.plan_type)
@@ -432,9 +434,9 @@ async fn insert_upstream(
     sqlx::query(
         "INSERT INTO upstreams (
             id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, strip_multimodal_for_text_models, unknown_modality_policy, error_retry_policy, concurrency_limit, concurrency_overflow, price_multiplier,
-            enabled, priority, weight, proxy_url, balance_provider, chatgpt_account_id, email,
+            enabled, priority, weight, proxy_url, balance_provider, usage_display, chatgpt_account_id, email,
             plan_type, token_expires_at, created_at, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
     )
     .bind(&upstream.id)
     .bind(upstream.kind.as_str())
@@ -455,6 +457,7 @@ async fn insert_upstream(
     .bind(upstream.weight)
     .bind(&upstream.proxy_url)
     .bind(upstream.balance_provider.as_str())
+    .bind(upstream.usage_display.as_str())
     .bind(&upstream.chatgpt_account_id)
     .bind(&upstream.email)
     .bind(&upstream.plan_type)
@@ -518,6 +521,7 @@ pub(super) fn row_to_upstream(row: sqlx::sqlite::SqliteRow) -> anyhow::Result<Up
         weight: row.get("weight"),
         proxy_url: row.get("proxy_url"),
         balance_provider: BalanceProvider::from_str(&row.get::<String, _>("balance_provider")),
+        usage_display: UsageDisplayMode::from_str(&row.get::<String, _>("usage_display")),
         chatgpt_account_id: row.get("chatgpt_account_id"),
         email: row.get("email"),
         plan_type: row.get("plan_type"),
@@ -557,6 +561,29 @@ mod tests {
 
         assert_eq!(saved.error_retry_policy, ErrorRetryPolicy::All);
         assert_eq!(saved.api_key_auth_scheme, ApiKeyAuthScheme::XApiKey);
+    }
+
+    #[tokio::test]
+    async fn persists_usage_display_mode() {
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-upstream-display-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let store = Store::open(path).await.unwrap();
+        let mut upstream = Upstream::new_relay(
+            "zhipu".to_string(),
+            "https://open.bigmodel.cn/api/coding/paas/v4".to_string(),
+            WireApi::Responses,
+            false,
+            BalanceProvider::Zhipu,
+        );
+        assert_eq!(upstream.usage_display, UsageDisplayMode::Auto);
+
+        upstream.usage_display = UsageDisplayMode::QuotaCompact;
+        store.save_upstream(&upstream).await.unwrap();
+        let saved = store.get_upstream(&upstream.id).await.unwrap().unwrap();
+
+        assert_eq!(saved.usage_display, UsageDisplayMode::QuotaCompact);
     }
 
     #[tokio::test]

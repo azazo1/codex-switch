@@ -236,14 +236,17 @@ impl CodexSwitchApp {
                         }
                     }
                     cache_keepalive_label(ui, self.cache_keepalive_settings.get(&item.upstream_id));
-                    balance_snapshot_label(
-                        ui,
-                        balance_snapshot_for(&self.balance_snapshots, &item.upstream_id),
-                    );
                     let upstream = self
                         .upstreams
                         .iter()
                         .find(|upstream| upstream.id == item.upstream_id);
+                    balance_snapshot_label(
+                        ui,
+                        balance_snapshot_for(&self.balance_snapshots, &item.upstream_id),
+                        upstream
+                            .map(|upstream| upstream.usage_display)
+                            .unwrap_or_default(),
+                    );
                     if upstream
                         .map(|upstream| upstream.kind == UpstreamKind::RelayApiKey)
                         .unwrap_or(false)

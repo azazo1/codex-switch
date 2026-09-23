@@ -591,6 +591,13 @@ fn migrations() -> &'static [Migration] {
                 "ALTER TABLE balance_snapshots ADD COLUMN windows TEXT NOT NULL DEFAULT '[]'",
             ],
         },
+        Migration {
+            version: 29,
+            name: "upstream_usage_display",
+            statements: &[
+                "ALTER TABLE upstreams ADD COLUMN usage_display TEXT NOT NULL DEFAULT 'auto'",
+            ],
+        },
     ]
 }
 
@@ -611,7 +618,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 28);
+        assert_eq!(rows.len(), 29);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -722,6 +729,11 @@ mod tests {
             rows[27].get::<String, _>("name"),
             "balance_snapshot_quota_windows"
         );
+        assert_eq!(rows[28].get::<i64, _>("version"), 29);
+        assert_eq!(
+            rows[28].get::<String, _>("name"),
+            "upstream_usage_display"
+        );
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
             Some("127.0.0.1:15721")
@@ -750,6 +762,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 28);
+        assert_eq!(count, 29);
     }
 }

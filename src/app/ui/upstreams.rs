@@ -1,7 +1,7 @@
 use super::{CodexSwitchApp, DeleteAction, text};
 use crate::core::models::{
     ApiKeyAuthScheme, BalanceSnapshot, CacheKeepaliveMode, UpstreamBalanceAlertSettings,
-    UpstreamCacheKeepaliveSettings, UpstreamKind, WireApi,
+    UpstreamCacheKeepaliveSettings, UpstreamKind, UsageDisplayMode, WireApi,
 };
 use crate::core::upstream_detection::{self, DetectedKind};
 use crate::core::upstream_transfer::UpstreamExport;
@@ -232,6 +232,7 @@ impl CodexSwitchApp {
                                         balance_snapshot_label(
                                             ui,
                                             balance_snapshot_for(&balance_snapshots, &upstream.id),
+                                            upstream.usage_display,
                                         );
                                     } else {
                                         ui.label("-");
@@ -491,8 +492,12 @@ pub(super) fn balance_snapshot_for<'a>(
         .and_then(|(_, snapshot)| snapshot.as_ref())
 }
 
-pub(super) fn balance_snapshot_label(ui: &mut egui::Ui, snapshot: Option<&BalanceSnapshot>) {
-    let (balance_text, balance_detail) = format_balance_snapshot(snapshot);
+pub(super) fn balance_snapshot_label(
+    ui: &mut egui::Ui,
+    snapshot: Option<&BalanceSnapshot>,
+    mode: UsageDisplayMode,
+) {
+    let (balance_text, balance_detail) = format_balance_snapshot(snapshot, mode);
     let adjusted = snapshot.is_some_and(|item| item.is_valid && item.remaining_adjusted);
     let response = if adjusted {
         ui.colored_label(ui.visuals().warn_fg_color, balance_text)
@@ -504,7 +509,10 @@ pub(super) fn balance_snapshot_label(ui: &mut egui::Ui, snapshot: Option<&Balanc
     }
 }
 
-fn format_balance_snapshot(snapshot: Option<&BalanceSnapshot>) -> (String, Option<String>) {
+fn format_balance_snapshot(
+    snapshot: Option<&BalanceSnapshot>,
+    mode: UsageDisplayMode,
+) -> (String, Option<String>) {
     let Some(snapshot) = snapshot else {
         return ("未查询".to_string(), None);
     };
@@ -525,8 +533,10 @@ fn format_balance_snapshot(snapshot: Option<&BalanceSnapshot>) -> (String, Optio
     if snapshot.remaining_adjusted {
         detail = Some(append_detail(detail, "本地扣减, 下次查询时覆盖"));
     }
-    // 套餐型上游 (coding plan / token plan) 的余额展示换成额度窗口剩余百分比.
-    if let Some(windows) = crate::quota::windows_title(&snapshot.windows, true) {
+    // 上游设置决定显示额度窗口还是金额余额; 界面空间足够, 自动模式按完整形式显示.
+    if mode.shows_quota()
+        && let Some(windows) = crate::quota::windows_title(&snapshot.windows, !mode.forces_compact())
+    {
         detail = Some(append_detail(
             detail,
             &crate::quota::windows_detail(&snapshot.windows),
@@ -556,5 +566,40 @@ fn format_amount(amount: &str, unit: &str) -> String {
         amount.to_string()
     } else {
         format!("{amount} {unit}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::models::{QuotaWindow, QuotaWindowKind};
+
+    fn plan_snapshot() -> BalanceSnapshot {
+        BalanceSnapshot {
+            upstream_id: "u1".to_string(),
+            provider: "zhipu_plan".to_string(),
+            is_valid: true,
+            windows: vec![
+                QuotaWindow::new(QuotaWindowKind::FiveHour, 58.0),
+                QuotaWindow::new(QuotaWindowKind::Weekly, 51.0),
+            ],
+            ..BalanceSnapshot::default()
+        }
+    }
+
+    #[test]
+    fn balance_label_follows_the_upstream_display_mode() {
+        let snapshot = plan_snapshot();
+
+        let (text, detail) = format_balance_snapshot(Some(&snapshot), UsageDisplayMode::Auto);
+        assert_eq!(text, "42%/49%");
+        assert_eq!(detail.as_deref(), Some("5h 剩余 42%\n1w 剩余 49%"));
+
+        let (compact, _) = format_balance_snapshot(Some(&snapshot), UsageDisplayMode::QuotaCompact);
+        assert_eq!(compact, "42/49");
+
+        // 上游显式选择金额余额时不再显示窗口.
+        let (money, _) = format_balance_snapshot(Some(&snapshot), UsageDisplayMode::Balance);
+        assert_eq!(money, "未知");
     }
 }
