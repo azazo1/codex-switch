@@ -195,63 +195,6 @@ impl BalanceProvider {
     }
 }
 
-/// 上游余额与套餐额度的展示方式.
-///
-/// 同一个上游可能同时有套餐额度窗口和金额余额 (例如智谱), 这里决定界面与托盘显示哪一份.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum UsageDisplayMode {
-    /// 有额度窗口就显示窗口, 否则显示金额余额; 托盘用紧凑形式, 界面用完整形式.
-    #[default]
-    Auto,
-    /// 显示额度窗口, 完整形式 `42%/49%/60%`.
-    QuotaFull,
-    /// 显示额度窗口, 紧凑形式 `42/49/60`.
-    QuotaCompact,
-    /// 显示金额余额, 即使该上游有额度窗口.
-    Balance,
-}
-
-impl UsageDisplayMode {
-    pub const ALL: [Self; 4] = [Self::Auto, Self::QuotaFull, Self::QuotaCompact, Self::Balance];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::QuotaFull => "quota_full",
-            Self::QuotaCompact => "quota_compact",
-            Self::Balance => "balance",
-        }
-    }
-
-    pub fn from_str(value: &str) -> Self {
-        match value {
-            "quota_full" => Self::QuotaFull,
-            "quota_compact" => Self::QuotaCompact,
-            "balance" => Self::Balance,
-            _ => Self::Auto,
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Auto => "自动 (有额度窗口就用窗口)",
-            Self::QuotaFull => "额度窗口 42%/49%/60%",
-            Self::QuotaCompact => "额度窗口 42/49/60",
-            Self::Balance => "金额余额",
-        }
-    }
-
-    /// 是否优先展示额度窗口.
-    pub fn shows_quota(self) -> bool {
-        !matches!(self, Self::Balance)
-    }
-
-    /// 是否强制使用不带百分号的紧凑形式; 自动模式由显示位置自己决定.
-    pub fn forces_compact(self) -> bool {
-        matches!(self, Self::QuotaCompact)
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScheduleMode {
     Random,
@@ -291,6 +234,11 @@ impl ScheduleMode {
     }
 }
 
+/// 上游是否显示额度窗口的默认值: 新建上游默认勾选.
+fn default_show_quota_windows() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Upstream {
     pub id: String,
@@ -316,9 +264,10 @@ pub struct Upstream {
     pub weight: i64,
     pub proxy_url: Option<String>,
     pub balance_provider: BalanceProvider,
-    /// 余额与额度的展示方式, 见 [`UsageDisplayMode`].
-    #[serde(default)]
-    pub usage_display: UsageDisplayMode,
+    /// 是否显示额度窗口. 勾选后只显示额度窗口, 没窗口时显示占位文字, 不再回落到金额余额.
+    /// 识别不出可能的额度窗口时该值被忽略, 见 `quota::shows_quota_windows`.
+    #[serde(default = "default_show_quota_windows")]
+    pub show_quota_windows: bool,
     pub chatgpt_account_id: Option<String>,
     pub email: Option<String>,
     pub plan_type: Option<String>,
@@ -360,7 +309,7 @@ impl Upstream {
             weight: 1,
             proxy_url: None,
             balance_provider,
-            usage_display: UsageDisplayMode::Auto,
+            show_quota_windows: true,
             chatgpt_account_id: None,
             email: None,
             plan_type: None,
@@ -398,7 +347,7 @@ impl Upstream {
             weight: 1,
             proxy_url: None,
             balance_provider: BalanceProvider::Unsupported,
-            usage_display: UsageDisplayMode::Auto,
+            show_quota_windows: true,
             chatgpt_account_id: Some(chatgpt_account_id),
             email,
             plan_type,
@@ -430,7 +379,7 @@ impl Upstream {
             weight: 1,
             proxy_url: None,
             balance_provider: BalanceProvider::Unsupported,
-            usage_display: UsageDisplayMode::Auto,
+            show_quota_windows: true,
             chatgpt_account_id: None,
             email: None,
             plan_type: None,

@@ -20,7 +20,7 @@ use tray_icon::menu::{IsMenuItem, Submenu};
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
-use crate::core::models::{QuotaWindow, UsageDisplayMode};
+use crate::core::models::QuotaWindow;
 use crate::live::LiveRequestSnapshot;
 
 const VERSION_MENU_ID: &str = "codex-switch-version";
@@ -184,9 +184,9 @@ pub struct TrayStats {
     /// 活跃上游的套餐额度窗口, 空表示该上游只有金额余额.
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub current_windows: Vec<QuotaWindow>,
-    /// 活跃上游在设置里选择的余额与额度展示方式.
+    /// 活跃上游是否勾选了显示额度窗口, 勾选后只显示窗口, 不回落到金额余额.
     #[cfg_attr(target_os = "windows", allow(dead_code))]
-    pub current_usage_display: UsageDisplayMode,
+    pub show_quota_windows: bool,
 }
 
 impl TrayStats {
@@ -205,7 +205,8 @@ impl TrayStats {
             keepalive_sessions,
             current_balance: None,
             current_windows: Vec::new(),
-            current_usage_display: UsageDisplayMode::Auto,
+            // 真实取值由界面按活跃上游的开关填入.
+            show_quota_windows: false,
         };
         for item in snapshots.iter().filter(|item| item.finished_at.is_none()) {
             stats.active_connections += 1;
@@ -237,8 +238,11 @@ impl TrayStats {
                 Some(format_badge_count(self.keepalive_sessions as u64))
             }
             TrayBadgeMetric::ActiveUpstreamBalance => {
-                if let Some(text) = self.quota_text() {
-                    return Some(text);
+                if self.show_quota_windows {
+                    return Some(
+                        crate::quota::windows_title(&self.current_windows, false)
+                            .unwrap_or_else(|| crate::quota::NO_QUOTA_WINDOWS.to_string()),
+                    );
                 }
                 Some(
                     self.current_balance
@@ -247,26 +251,6 @@ impl TrayStats {
                 )
             }
         }
-    }
-
-    /// 托盘上的额度窗口文本: 托盘空间有限, 除上游选择完整形式外一律用不带百分号的紧凑形式.
-    #[cfg(not(target_os = "windows"))]
-    fn quota_text(&self) -> Option<String> {
-        if !self.current_usage_display.shows_quota() || !self.has_quota_windows() {
-            return None;
-        }
-        let with_percent = self.current_usage_display == UsageDisplayMode::QuotaFull;
-        crate::quota::windows_title(&self.current_windows, with_percent)
-    }
-
-    /// 是否有可展示的套餐额度窗口.
-    #[cfg(not(target_os = "windows"))]
-    fn has_quota_windows(&self) -> bool {
-        self.current_usage_display.shows_quota()
-            && self
-                .current_windows
-                .iter()
-                .any(|window| window.used_percent.is_finite())
     }
 }
 
@@ -635,9 +619,9 @@ fn format_tooltip(stats: &TrayStats) -> String {
         stats.keepalive_sessions,
         format_current_balance(stats.current_balance),
     );
-    if stats.current_usage_display.shows_quota()
-        && let Some(windows) = crate::quota::windows_inline(&stats.current_windows)
-    {
+    if stats.show_quota_windows {
+        let windows = crate::quota::windows_inline(&stats.current_windows)
+            .unwrap_or_else(|| crate::quota::NO_QUOTA_WINDOWS.to_string());
         text.push_str(&format!("\n额度窗口: {windows}"));
     }
     text
@@ -702,9 +686,9 @@ fn metric_unit(stats: &TrayStats, metric: TrayBadgeMetric) -> &'static str {
         TrayBadgeMetric::TotalCps => "CPS",
         TrayBadgeMetric::TodayRequests => "请求",
         TrayBadgeMetric::KeepaliveSessions => "会话",
-        // 有额度窗口时显示百分比, 不再带货币单位.
+        // 勾选额度窗口时显示百分比, 不再带货币单位.
         TrayBadgeMetric::ActiveUpstreamBalance => {
-            if stats.has_quota_windows() {
+            if stats.show_quota_windows {
                 ""
             } else {
                 stats
@@ -822,7 +806,7 @@ mod tests {
             keepalive_sessions: 5,
             current_balance: None,
             current_windows: Vec::new(),
-            current_usage_display: UsageDisplayMode::Auto,
+            show_quota_windows: false,
         };
 
         assert_eq!(stats.badge_text(TrayBadgeMetric::None), None);
@@ -862,7 +846,7 @@ mod tests {
             keepalive_sessions: 5,
             current_balance: None,
             current_windows: Vec::new(),
-            current_usage_display: UsageDisplayMode::Auto,
+            show_quota_windows: false,
         };
 
         assert_eq!(
@@ -905,10 +889,10 @@ mod tests {
             keepalive_sessions: 0,
             current_balance: None,
             current_windows: windows.clone(),
-            current_usage_display: UsageDisplayMode::Auto,
+            show_quota_windows: true,
         };
 
-        // 托盘空间有限, 单行与双行都用不带百分号的紧凑形式.
+        // 勾选额度窗口时, 托盘空间有限, 单行与双行都用不带百分号的紧凑形式.
         assert_eq!(
             format_title(
                 &stats,
@@ -926,21 +910,6 @@ mod tests {
             )
             .as_deref(),
             Some("3 连接\n42/49/60")
-        );
-
-        // 上游设置成完整形式时托盘也带百分号.
-        let full = TrayStats {
-            current_usage_display: UsageDisplayMode::QuotaFull,
-            ..stats.clone()
-        };
-        assert_eq!(
-            format_title(
-                &full,
-                TrayBadgeMetric::ActiveUpstreamBalance,
-                TrayBadgeMetric::None
-            )
-            .as_deref(),
-            Some("42%/49%/60%")
         );
 
         // 智谱只返回两个窗口时省略第三段.
@@ -961,23 +930,25 @@ mod tests {
             Some("42/49")
         );
 
-        // 上游选择金额余额时不显示窗口; 没有窗口数据时也回落到金额.
-        let money_only = TrayStats {
+        // 勾选了额度窗口但查不到窗口时显示占位文字, 不回落到金额.
+        let empty = TrayStats {
+            current_windows: Vec::new(),
             current_balance: Some((12.5, ConcurrentUnit::Usd)),
-            current_usage_display: UsageDisplayMode::Balance,
             ..stats.clone()
         };
         assert_eq!(
             format_title(
-                &money_only,
+                &empty,
                 TrayBadgeMetric::ActiveUpstreamBalance,
                 TrayBadgeMetric::None
             )
             .as_deref(),
-            Some("12.50 $")
+            Some("无额度窗口")
         );
+
+        // 没有勾选时只显示金额余额, 即使上游有窗口数据.
         let money = TrayStats {
-            current_windows: Vec::new(),
+            show_quota_windows: false,
             current_balance: Some((12.5, ConcurrentUnit::Usd)),
             ..stats
         };

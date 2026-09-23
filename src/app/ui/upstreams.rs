@@ -1,7 +1,7 @@
 use super::{CodexSwitchApp, DeleteAction, text};
 use crate::core::models::{
     ApiKeyAuthScheme, BalanceSnapshot, CacheKeepaliveMode, UpstreamBalanceAlertSettings,
-    UpstreamCacheKeepaliveSettings, UpstreamKind, UsageDisplayMode, WireApi,
+    UpstreamCacheKeepaliveSettings, UpstreamKind, WireApi,
 };
 use crate::core::upstream_detection::{self, DetectedKind};
 use crate::core::upstream_transfer::UpstreamExport;
@@ -232,7 +232,7 @@ impl CodexSwitchApp {
                                         balance_snapshot_label(
                                             ui,
                                             balance_snapshot_for(&balance_snapshots, &upstream.id),
-                                            upstream.usage_display,
+                                            crate::quota::shows_quota_windows(upstream),
                                         );
                                     } else {
                                         ui.label("-");
@@ -495,9 +495,9 @@ pub(super) fn balance_snapshot_for<'a>(
 pub(super) fn balance_snapshot_label(
     ui: &mut egui::Ui,
     snapshot: Option<&BalanceSnapshot>,
-    mode: UsageDisplayMode,
+    show_quota_windows: bool,
 ) {
-    let (balance_text, balance_detail) = format_balance_snapshot(snapshot, mode);
+    let (balance_text, balance_detail) = format_balance_snapshot(snapshot, show_quota_windows);
     let adjusted = snapshot.is_some_and(|item| item.is_valid && item.remaining_adjusted);
     let response = if adjusted {
         ui.colored_label(ui.visuals().warn_fg_color, balance_text)
@@ -511,7 +511,7 @@ pub(super) fn balance_snapshot_label(
 
 fn format_balance_snapshot(
     snapshot: Option<&BalanceSnapshot>,
-    mode: UsageDisplayMode,
+    show_quota_windows: bool,
 ) -> (String, Option<String>) {
     let Some(snapshot) = snapshot else {
         return ("未查询".to_string(), None);
@@ -525,27 +525,27 @@ fn format_balance_snapshot(
                 .map(|message| format!("失败: {message}")),
         );
     }
-    let unit = snapshot.unit.as_deref().unwrap_or("");
-    let mut detail = snapshot
+    let message = snapshot
         .message
         .clone()
         .filter(|message| !message.is_empty());
+    // 勾选了额度窗口就只显示窗口, 界面空间足够, 因此用带百分号的完整形式;
+    // 查询不到窗口时显示占位文字, 不回落到金额余额.
+    if show_quota_windows {
+        let text = crate::quota::windows_title(&snapshot.windows, true)
+            .unwrap_or_else(|| crate::quota::NO_QUOTA_WINDOWS.to_string());
+        let detail = crate::quota::windows_detail(&snapshot.windows);
+        let detail = if detail.is_empty() {
+            message
+        } else {
+            Some(append_detail(message, &detail))
+        };
+        return (text, detail);
+    }
+    let unit = snapshot.unit.as_deref().unwrap_or("");
+    let mut detail = message;
     if snapshot.remaining_adjusted {
         detail = Some(append_detail(detail, "本地扣减, 下次查询时覆盖"));
-    }
-    // 上游设置决定显示额度窗口还是金额余额; 界面空间足够, 自动模式按完整形式显示.
-    if mode.shows_quota()
-        && let Some(windows) = crate::quota::windows_title(&snapshot.windows, !mode.forces_compact())
-    {
-        detail = Some(append_detail(
-            detail,
-            &crate::quota::windows_detail(&snapshot.windows),
-        ));
-        if let Some(remaining) = snapshot.remaining {
-            let amount = format_amount(&format!("{remaining:.4}"), unit);
-            detail = Some(append_detail(detail, &format!("余额: {amount}")));
-        }
-        return (windows, detail);
     }
     let amount = snapshot
         .remaining
@@ -588,18 +588,25 @@ mod tests {
     }
 
     #[test]
-    fn balance_label_follows_the_upstream_display_mode() {
+    fn balance_label_follows_the_quota_window_switch() {
         let snapshot = plan_snapshot();
 
-        let (text, detail) = format_balance_snapshot(Some(&snapshot), UsageDisplayMode::Auto);
+        let (text, detail) = format_balance_snapshot(Some(&snapshot), true);
         assert_eq!(text, "42%/49%");
         assert_eq!(detail.as_deref(), Some("5h 剩余 42%\n1w 剩余 49%"));
 
-        let (compact, _) = format_balance_snapshot(Some(&snapshot), UsageDisplayMode::QuotaCompact);
-        assert_eq!(compact, "42/49");
+        // 勾选了额度窗口但没有窗口数据时显示占位文字, 不回落到金额.
+        let empty = BalanceSnapshot {
+            windows: Vec::new(),
+            remaining: Some(12.5),
+            unit: Some("CNY".to_string()),
+            ..snapshot.clone()
+        };
+        let (placeholder, _) = format_balance_snapshot(Some(&empty), true);
+        assert_eq!(placeholder, "无额度窗口");
 
-        // 上游显式选择金额余额时不再显示窗口.
-        let (money, _) = format_balance_snapshot(Some(&snapshot), UsageDisplayMode::Balance);
+        // 没有勾选时只显示金额余额, 即使快照里有窗口数据.
+        let (money, _) = format_balance_snapshot(Some(&snapshot), false);
         assert_eq!(money, "未知");
     }
 }

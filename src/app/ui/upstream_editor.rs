@@ -4,7 +4,7 @@ use crate::balance;
 use crate::core::models::{
     ApiKeyAuthScheme, BalanceProvider, CacheKeepaliveMode, ConcurrencyOverflowPolicy,
     ErrorRetryPolicy, UnknownModalityPolicy, Upstream, UpstreamBalanceAlertSettings,
-    UpstreamCacheKeepaliveSettings, UpstreamKind, UsageDisplayMode, WireApi,
+    UpstreamCacheKeepaliveSettings, UpstreamKind, WireApi,
 };
 use crate::core::upstream_detection::{self, DetectedKind};
 use eframe::egui;
@@ -554,8 +554,10 @@ impl UpstreamEditor {
                 },
             );
         });
-        provider_combo(ui, &mut self.upstream.balance_provider);
-        usage_display_combo(ui, &mut self.upstream.usage_display);
+        ui.horizontal(|ui| {
+            provider_combo(ui, &mut self.upstream.balance_provider);
+            quota_windows_checkbox(ui, &mut self.upstream);
+        });
         if let Some(provider) = upstream_detection::detect_upstream(&self.upstream.base_url)
             .suggestion
             .balance_provider
@@ -597,6 +599,7 @@ impl UpstreamEditor {
             ui.label("套餐");
             ui.label(self.upstream.plan_type.as_deref().unwrap_or(""));
         });
+        quota_windows_checkbox(ui, &mut self.upstream);
         ui.separator();
         ui.label("缓存保持仅支持 Relay API Key 上游");
     }
@@ -735,19 +738,21 @@ fn provider_combo(ui: &mut egui::Ui, provider: &mut BalanceProvider) {
         });
 }
 
-/// 余额与额度的展示方式: 同一个上游可能既有套餐额度窗口又有金额余额.
-fn usage_display_combo(ui: &mut egui::Ui, mode: &mut UsageDisplayMode) {
-    egui::ComboBox::from_label("余额/额度显示")
-        .selected_text(mode.label())
-        .show_ui(ui, |ui| {
-            for value in UsageDisplayMode::ALL {
-                ui.selectable_value(mode, value, value.label());
-            }
-        })
-        .response
-        .on_hover_text(
-            "同一个上游既有套餐额度窗口又有金额余额时, 决定界面和托盘显示哪一份, 以及用不用百分号. 自动模式优先显示额度窗口, 托盘用紧凑形式 42/49/60, 界面用完整形式 42%/49%/60%.",
-        );
+/// 余额与额度的展示开关.
+///
+/// 勾选后只显示额度窗口, 没窗口时显示占位文字. 识别不出可能的额度窗口时置灰并强制显示未勾,
+/// 但不动数据库里已有的值, 运行时也会忽略它.
+fn quota_windows_checkbox(ui: &mut egui::Ui, upstream: &mut Upstream) {
+    if crate::quota::upstream_supports_windows(upstream) {
+        ui.checkbox(&mut upstream.show_quota_windows, "显示额度窗口")
+            .on_hover_text(
+                "上游有额度窗口时显示剩余百分比, 不再显示金额余额; 查询不到窗口时显示占位文字. 托盘用 42/49/60, 上游列表和仪表盘用 42%/49%/60%.",
+            );
+    } else {
+        let mut unchecked = false;
+        ui.add_enabled(false, egui::Checkbox::new(&mut unchecked, "显示额度窗口"))
+            .on_hover_text("未识别到套餐额度接口, 无法显示额度窗口, 仍按金额余额显示");
+    }
 }
 
 fn uses_newapi_balance(upstream: &Upstream) -> bool {

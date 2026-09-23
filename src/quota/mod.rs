@@ -3,7 +3,24 @@ pub mod plan;
 
 pub use codex::{query_and_store, snapshot_from_headers};
 
-use crate::core::models::{QuotaSnapshot, QuotaWindow, QuotaWindowKind};
+use crate::core::models::{QuotaSnapshot, QuotaWindow, QuotaWindowKind, Upstream, UpstreamKind};
+
+/// 该上游是否可能带额度窗口: 已支持的套餐 Base URL, 或 Codex OAuth 的 5h / 7d 额度.
+///
+/// 识别不出来时上游编辑器会把开关置灰, 这里也是运行时回落金额余额的依据.
+pub fn upstream_supports_windows(upstream: &Upstream) -> bool {
+    upstream.kind == UpstreamKind::CodexOauth || plan::detect(&upstream.base_url).is_some()
+}
+
+/// 该上游当前是否展示额度窗口.
+///
+/// 数据库里被强行勾上但识别不出接口时返回 false, 调用方因此显示金额余额而不是崩溃.
+pub fn shows_quota_windows(upstream: &Upstream) -> bool {
+    upstream.show_quota_windows && upstream_supports_windows(upstream)
+}
+
+/// 勾选了额度窗口但没有窗口数据时的占位文字.
+pub const NO_QUOTA_WINDOWS: &str = "无额度窗口";
 
 /// Codex OAuth 的 5h / 7d 额度快照, 转成通用的窗口表示.
 pub fn codex_windows(snapshot: &QuotaSnapshot) -> Vec<QuotaWindow> {

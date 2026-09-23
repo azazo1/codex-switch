@@ -593,9 +593,9 @@ fn migrations() -> &'static [Migration] {
         },
         Migration {
             version: 29,
-            name: "upstream_usage_display",
+            name: "upstream_show_quota_windows",
             statements: &[
-                "ALTER TABLE upstreams ADD COLUMN usage_display TEXT NOT NULL DEFAULT 'auto'",
+                "ALTER TABLE upstreams ADD COLUMN show_quota_windows INTEGER NOT NULL DEFAULT 1",
             ],
         },
     ]
@@ -732,7 +732,7 @@ mod tests {
         assert_eq!(rows[28].get::<i64, _>("version"), 29);
         assert_eq!(
             rows[28].get::<String, _>("name"),
-            "upstream_usage_display"
+            "upstream_show_quota_windows"
         );
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),

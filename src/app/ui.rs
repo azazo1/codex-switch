@@ -1158,12 +1158,11 @@ impl CodexSwitchApp {
             .as_deref()
             .map(|id| self.active_upstream_windows(id))
             .unwrap_or_default();
-        stats.current_usage_display = active_upstream_id
+        stats.show_quota_windows = active_upstream_id
             .as_deref()
             .and_then(|id| self.upstreams.iter().find(|upstream| upstream.id == id))
-            .map(|upstream| upstream.usage_display)
-            .unwrap_or_default();
-        stats.current_balance = current_balance.map(|x| (x.0, x.1.parse().unwrap()));
+            .map(quota_api::shows_quota_windows)
+            .unwrap_or(false);        stats.current_balance = current_balance.map(|x| (x.0, x.1.parse().unwrap()));
         if let Some(tray) = &mut self.tray {
             tray.set_stats(stats);
         }

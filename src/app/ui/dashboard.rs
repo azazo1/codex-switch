@@ -244,8 +244,8 @@ impl CodexSwitchApp {
                         ui,
                         balance_snapshot_for(&self.balance_snapshots, &item.upstream_id),
                         upstream
-                            .map(|upstream| upstream.usage_display)
-                            .unwrap_or_default(),
+                            .map(crate::quota::shows_quota_windows)
+                            .unwrap_or(false),
                     );
                     if upstream
                         .map(|upstream| upstream.kind == UpstreamKind::RelayApiKey)
