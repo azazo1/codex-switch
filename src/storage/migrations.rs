@@ -584,6 +584,13 @@ fn migrations() -> &'static [Migration] {
                 "ALTER TABLE upstreams ADD COLUMN concurrency_overflow TEXT NOT NULL DEFAULT 'reject'",
             ],
         },
+        Migration {
+            version: 28,
+            name: "balance_snapshot_quota_windows",
+            statements: &[
+                "ALTER TABLE balance_snapshots ADD COLUMN windows TEXT NOT NULL DEFAULT '[]'",
+            ],
+        },
     ]
 }
 
@@ -604,7 +611,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 27);
+        assert_eq!(rows.len(), 28);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -709,6 +716,11 @@ mod tests {
         assert_eq!(
             rows[26].get::<String, _>("name"),
             "upstream_concurrency_limit"
+        );
+        assert_eq!(rows[27].get::<i64, _>("version"), 28);
+        assert_eq!(
+            rows[27].get::<String, _>("name"),
+            "balance_snapshot_quota_windows"
         );
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),

@@ -63,6 +63,8 @@ OAuth 上游会显示 `5h` 和 `7d` 已用百分比. 点击 `查 Codex 额度` �
 
 当前界面不显示重置时间, 也没有额度不足通知. 查询失败不会清空旧快照, 因此页面中的数值可能来自较早一次成功请求.
 
+OAuth 上游活跃时, 托盘的 `活跃上游余额/额度` 指标会按剩余百分比显示这两个窗口, 见[界面说明](app-guide.md).
+
 ## 凭据安全
 
 access token, refresh token 和 id token 当前以明文保存在 SQLite `credentials` 表中. 项目没有系统钥匙串或数据库加密. 导入结果界面不会显示 token 内容, tracing 日志也不会记录 token 或凭据文件内容.

@@ -517,26 +517,44 @@ fn format_balance_snapshot(snapshot: Option<&BalanceSnapshot>) -> (String, Optio
                 .map(|message| format!("失败: {message}")),
         );
     }
-    let amount = snapshot
-        .remaining
-        .map(|value| format!("{value:.4}"))
-        .unwrap_or_else(|| "未知".to_string());
     let unit = snapshot.unit.as_deref().unwrap_or("");
-    let text = if unit.is_empty() {
-        amount
-    } else {
-        format!("{amount} {unit}")
-    };
     let mut detail = snapshot
         .message
         .clone()
         .filter(|message| !message.is_empty());
     if snapshot.remaining_adjusted {
-        let hint = "本地扣减, 下次查询时覆盖";
-        detail = Some(match detail {
-            Some(message) => format!("{message}\n{hint}"),
-            None => hint.to_string(),
-        });
+        detail = Some(append_detail(detail, "本地扣减, 下次查询时覆盖"));
     }
-    (text, detail)
+    // 套餐型上游 (coding plan / token plan) 的余额展示换成额度窗口剩余百分比.
+    if let Some(windows) = crate::quota::windows_title(&snapshot.windows, true) {
+        detail = Some(append_detail(
+            detail,
+            &crate::quota::windows_detail(&snapshot.windows),
+        ));
+        if let Some(remaining) = snapshot.remaining {
+            let amount = format_amount(&format!("{remaining:.4}"), unit);
+            detail = Some(append_detail(detail, &format!("余额: {amount}")));
+        }
+        return (windows, detail);
+    }
+    let amount = snapshot
+        .remaining
+        .map(|value| format!("{value:.4}"))
+        .unwrap_or_else(|| "未知".to_string());
+    (format_amount(&amount, unit), detail)
+}
+
+fn append_detail(detail: Option<String>, line: &str) -> String {
+    match detail {
+        Some(text) if !text.is_empty() => format!("{text}\n{line}"),
+        _ => line.to_string(),
+    }
+}
+
+fn format_amount(amount: &str, unit: &str) -> String {
+    if unit.is_empty() {
+        amount.to_string()
+    } else {
+        format!("{amount} {unit}")
+    }
 }

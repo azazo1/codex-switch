@@ -6,7 +6,7 @@ use crate::cache_keepalive::CacheKeepaliveSessionSnapshot;
 use crate::core::model_capabilities::ModelCapabilityCache;
 use crate::core::models::{
     ApiKeyAuthScheme, BalanceProvider, BalanceSnapshot, DashboardStats, DatabaseInfo, NodePeer,
-    PeerPairingRequest, ProviderStats, QuotaSnapshot, RequestLog, ScheduleGroup,
+    PeerPairingRequest, ProviderStats, QuotaSnapshot, QuotaWindow, RequestLog, ScheduleGroup,
     ScheduleGroupChild, ScheduleGroupMember, ScheduleRouteRule, TemporaryAccessKey, Upstream,
     UpstreamBalanceAlertSettings, UpstreamCacheKeepaliveSettings, WireApi,
 };
@@ -503,6 +503,8 @@ pub struct CodexSwitchApp {
     last_live_output_rate_refresh_at: Instant,
     last_seen_cache_keepalive_version: u64,
     last_seen_balance_snapshot_version: u64,
+    /// 托盘专用的快照版本, 隐藏窗口时用它单独重载余额与额度快照.
+    tray_snapshot_version: u64,
     last_seen_peer_version: u64,
     last_cache_keepalive_refresh_at: Instant,
     price_fetch_started: bool,
@@ -739,6 +741,7 @@ impl CodexSwitchApp {
             last_live_output_rate_refresh_at: Instant::now(),
             last_seen_cache_keepalive_version,
             last_seen_balance_snapshot_version,
+            tray_snapshot_version: last_seen_balance_snapshot_version,
             last_seen_peer_version,
             last_cache_keepalive_refresh_at: Instant::now(),
             price_fetch_started: false,
@@ -1139,10 +1142,10 @@ impl CodexSwitchApp {
             })
             .or_else(|| self.logs.first().and_then(|log| log.upstream_id.clone()));
 
-        let current_balance = active_upstream_id.and_then(|id| {
+        let current_balance = active_upstream_id.as_deref().and_then(|id| {
             self.balance_snapshots
                 .iter()
-                .find(|(uid, _)| uid == &id)
+                .find(|(uid, _)| uid == id)
                 .and_then(|(_, snap)| snap.as_ref())
                 .filter(|snap| snap.is_valid)
                 .and_then(|snap| {
@@ -1151,10 +1154,35 @@ impl CodexSwitchApp {
                 })
         });
 
+        stats.current_windows = active_upstream_id
+            .as_deref()
+            .map(|id| self.active_upstream_windows(id))
+            .unwrap_or_default();
         stats.current_balance = current_balance.map(|x| (x.0, x.1.parse().unwrap()));
         if let Some(tray) = &mut self.tray {
             tray.set_stats(stats);
         }
+    }
+
+    /// 活跃上游的额度窗口: 优先用余额快照里的套餐窗口, 其次是 Codex OAuth 的额度快照.
+    fn active_upstream_windows(&self, upstream_id: &str) -> Vec<QuotaWindow> {
+        let plan_windows = self
+            .balance_snapshots
+            .iter()
+            .find(|(id, _)| id == upstream_id)
+            .and_then(|(_, snapshot)| snapshot.as_ref())
+            .filter(|snapshot| snapshot.is_valid)
+            .map(|snapshot| snapshot.windows.clone())
+            .unwrap_or_default();
+        if !plan_windows.is_empty() {
+            return plan_windows;
+        }
+        self.quota_snapshots
+            .iter()
+            .find(|(id, _)| id == upstream_id)
+            .and_then(|(_, snapshot)| snapshot.as_ref())
+            .map(quota_api::codex_windows)
+            .unwrap_or_default()
     }
 
     fn drain_task_events(&mut self, ctx: &egui::Context) {
@@ -1654,8 +1682,45 @@ impl eframe::App for CodexSwitchApp {
         // 全屏恢复放在显隐处理之后, 保证窗口已真正可见才开始切换.
         self.restore_deferred_fullscreen(ctx);
         self.maybe_auto_refresh(ctx);
+        self.refresh_tray_snapshots();
         self.sync_tray_stats();
         self.drain_task_events(ctx);
+    }
+
+    /// 隐藏到托盘时界面数据不会重载, 但托盘上的余额与额度窗口要保持最新,
+    /// 所以这里按事件版本单独重载快照.
+    fn refresh_tray_snapshots(&mut self) {
+        if !self.window_hidden_to_tray {
+            return;
+        }
+        let version = self.state.events.balance_snapshot_version();
+        if version == self.tray_snapshot_version {
+            return;
+        }
+        self.tray_snapshot_version = version;
+        let upstream_ids = self
+            .upstreams
+            .iter()
+            .map(|upstream| upstream.id.clone())
+            .collect::<Vec<_>>();
+        let mut balance_snapshots = Vec::with_capacity(upstream_ids.len());
+        let mut quota_snapshots = Vec::with_capacity(upstream_ids.len());
+        for upstream_id in upstream_ids {
+            let balance = self
+                .runtime
+                .block_on(self.state.store.get_balance_snapshot(&upstream_id))
+                .ok()
+                .flatten();
+            let quota = self
+                .runtime
+                .block_on(self.state.store.get_quota_snapshot(&upstream_id))
+                .ok()
+                .flatten();
+            balance_snapshots.push((upstream_id.clone(), balance));
+            quota_snapshots.push((upstream_id, quota));
+        }
+        self.balance_snapshots = balance_snapshots;
+        self.quota_snapshots = quota_snapshots;
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

@@ -20,6 +20,7 @@ use tray_icon::menu::{IsMenuItem, Submenu};
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
+use crate::core::models::QuotaWindow;
 use crate::live::LiveRequestSnapshot;
 
 const VERSION_MENU_ID: &str = "codex-switch-version";
@@ -82,7 +83,7 @@ impl TrayBadgeMetric {
             Self::TotalCps => "总字符速率",
             Self::TodayRequests => "今日请求数",
             Self::KeepaliveSessions => "缓存保持会话数",
-            Self::ActiveUpstreamBalance => "活跃上游余额",
+            Self::ActiveUpstreamBalance => "活跃上游余额/额度",
         }
     }
 }
@@ -171,7 +172,7 @@ fn metric_items(
         .collect()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TrayStats {
     pub server_running: bool,
     pub active_connections: usize,
@@ -180,6 +181,9 @@ pub struct TrayStats {
     pub today_requests: i64,
     pub keepalive_sessions: usize,
     pub current_balance: Option<(f64, ConcurrentUnit)>,
+    /// 活跃上游的套餐额度窗口, 空表示该上游只有金额余额.
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    pub current_windows: Vec<QuotaWindow>,
 }
 
 impl TrayStats {
@@ -197,6 +201,7 @@ impl TrayStats {
             today_requests,
             keepalive_sessions,
             current_balance: None,
+            current_windows: Vec::new(),
         };
         for item in snapshots.iter().filter(|item| item.finished_at.is_none()) {
             stats.active_connections += 1;
@@ -209,7 +214,7 @@ impl TrayStats {
     }
 
     #[cfg(not(target_os = "windows"))]
-    pub fn badge_text(self, metric: TrayBadgeMetric) -> Option<String> {
+    pub fn badge_text(&self, metric: TrayBadgeMetric) -> Option<String> {
         match metric {
             TrayBadgeMetric::None => None,
             TrayBadgeMetric::Connections => {
@@ -227,11 +232,37 @@ impl TrayStats {
             TrayBadgeMetric::KeepaliveSessions => {
                 Some(format_badge_count(self.keepalive_sessions as u64))
             }
-            TrayBadgeMetric::ActiveUpstreamBalance => self
-                .current_balance
-                .map(|(val, _)| format!("{:.2}", val))
-                .or_else(|| Some("-".to_string())),
+            TrayBadgeMetric::ActiveUpstreamBalance => {
+                if self.has_quota_windows() {
+                    return crate::quota::windows_title(&self.current_windows, true);
+                }
+                Some(
+                    self.current_balance
+                        .map(|(val, _)| format!("{val:.2}"))
+                        .unwrap_or_else(|| "-".to_string()),
+                )
+            }
         }
+    }
+
+    /// 紧凑形式, 只对套餐额度窗口有区别: 两行标题同时启用时省掉百分号.
+    #[cfg(not(target_os = "windows"))]
+    pub fn compact_badge_text(&self, metric: TrayBadgeMetric) -> Option<String> {
+        if metric == TrayBadgeMetric::ActiveUpstreamBalance
+            && self.has_quota_windows()
+            && let Some(text) = crate::quota::windows_title(&self.current_windows, false)
+        {
+            return Some(text);
+        }
+        self.badge_text(metric)
+    }
+
+    /// 是否有可展示的套餐额度窗口.
+    #[cfg(not(target_os = "windows"))]
+    fn has_quota_windows(&self) -> bool {
+        self.current_windows
+            .iter()
+            .any(|window| window.used_percent.is_finite())
     }
 }
 
@@ -435,9 +466,10 @@ impl TrayController {
 
     #[cfg(not(target_os = "windows"))]
     fn refresh_title_if_needed(&mut self) {
-        if let Some(stats) = self.last_stats {
-            self.update_title(&stats);
-        }
+        let Some(stats) = self.last_stats.clone() else {
+            return;
+        };
+        self.update_title(&stats);
     }
 
     pub fn set_stats(&mut self, stats: TrayStats) {
@@ -472,8 +504,7 @@ impl TrayController {
 
     #[cfg(target_os = "macos")]
     fn update_title(&mut self, stats: &TrayStats) {
-        let first = metric_line(stats, self.badge_metric);
-        let second = metric_line(stats, self.secondary_badge_metric);
+        let (first, second) = title_lines(stats, self.badge_metric, self.secondary_badge_metric);
         if let Some(view) = &self.tray_title_view {
             view.update(first.as_deref(), second.as_deref());
         }
@@ -590,7 +621,7 @@ fn format_tooltip(stats: &TrayStats) -> String {
     } else {
         "已停止"
     };
-    format!(
+    let mut text = format!(
         "Codex Switch\n服务: {service}\n活跃连接: {}\n总 TPS: {}\n总字符速率: {}\n今日请求: {}\n缓存保持会话: {}\n活跃上游余额: {}",
         stats.active_connections,
         format_tps(stats.total_tps),
@@ -598,7 +629,11 @@ fn format_tooltip(stats: &TrayStats) -> String {
         stats.today_requests,
         stats.keepalive_sessions,
         format_current_balance(stats.current_balance),
-    )
+    );
+    if let Some(windows) = crate::quota::windows_inline(&stats.current_windows) {
+        text.push_str(&format!("\n额度窗口: {windows}"));
+    }
+    text
 }
 
 fn format_current_balance(balance: Option<(f64, ConcurrentUnit)>) -> String {
@@ -634,17 +669,43 @@ fn format_title(
     first: TrayBadgeMetric,
     second: TrayBadgeMetric,
 ) -> Option<String> {
+    let (first, second) = title_lines(stats, first, second);
     let lines = [first, second]
         .into_iter()
-        .filter_map(|metric| metric_line(stats, metric))
+        .flatten()
         .collect::<Vec<_>>();
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
+/// 两行标题的最终文本. 两行同时启用时用紧凑形式 (省掉百分号), 只启用一行时用完整形式.
 #[cfg(not(target_os = "windows"))]
-fn metric_line(stats: &TrayStats, metric: TrayBadgeMetric) -> Option<String> {
-    let text = stats.badge_text(metric)?;
-    Some(format!("{text} {}", metric_unit(stats, metric)))
+fn title_lines(
+    stats: &TrayStats,
+    first: TrayBadgeMetric,
+    second: TrayBadgeMetric,
+) -> (Option<String>, Option<String>) {
+    let first_full = metric_line(stats, first, false);
+    let second_full = metric_line(stats, second, false);
+    if first_full.is_some() && second_full.is_some() {
+        (metric_line(stats, first, true), metric_line(stats, second, true))
+    } else {
+        (first_full, second_full)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn metric_line(stats: &TrayStats, metric: TrayBadgeMetric, compact: bool) -> Option<String> {
+    let text = if compact {
+        stats.compact_badge_text(metric)
+    } else {
+        stats.badge_text(metric)
+    }?;
+    let unit = metric_unit(stats, metric);
+    Some(if unit.is_empty() {
+        text
+    } else {
+        format!("{text} {unit}")
+    })
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -655,10 +716,17 @@ fn metric_unit(stats: &TrayStats, metric: TrayBadgeMetric) -> &'static str {
         TrayBadgeMetric::TotalCps => "CPS",
         TrayBadgeMetric::TodayRequests => "请求",
         TrayBadgeMetric::KeepaliveSessions => "会话",
-        TrayBadgeMetric::ActiveUpstreamBalance => stats
-            .current_balance
-            .map_or(Default::default(), |x| x.1)
-            .to_str(),
+        // 有额度窗口时显示百分比, 不再带货币单位.
+        TrayBadgeMetric::ActiveUpstreamBalance => {
+            if stats.has_quota_windows() {
+                ""
+            } else {
+                stats
+                    .current_balance
+                    .map_or(Default::default(), |x| x.1)
+                    .to_str()
+            }
+        }
         TrayBadgeMetric::None => "",
     }
 }
@@ -688,6 +756,7 @@ fn format_compact_count(value: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::models::QuotaWindowKind;
     use crate::live::{LiveOutputRate, LiveResponseState};
     use chrono::Utc;
 
@@ -766,6 +835,7 @@ mod tests {
             today_requests: 1_234,
             keepalive_sessions: 5,
             current_balance: None,
+            current_windows: Vec::new(),
         };
 
         assert_eq!(stats.badge_text(TrayBadgeMetric::None), None);
@@ -804,6 +874,7 @@ mod tests {
             today_requests: 1_234,
             keepalive_sessions: 5,
             current_balance: None,
+            current_windows: Vec::new(),
         };
 
         assert_eq!(
@@ -826,6 +897,81 @@ mod tests {
         assert_eq!(
             format_title(&stats, TrayBadgeMetric::TotalTps, TrayBadgeMetric::TotalCps).as_deref(),
             Some("12 TPS\n46 CPS")
+        );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn title_shows_quota_windows_in_both_forms() {
+        let windows = vec![
+            QuotaWindow::new(QuotaWindowKind::FiveHour, 58.0),
+            QuotaWindow::new(QuotaWindowKind::Weekly, 51.0),
+            QuotaWindow::new(QuotaWindowKind::Monthly, 40.0),
+        ];
+        let stats = TrayStats {
+            server_running: true,
+            active_connections: 3,
+            total_tps: 0.0,
+            total_cps: 0.0,
+            today_requests: 0,
+            keepalive_sessions: 0,
+            current_balance: None,
+            current_windows: windows.clone(),
+        };
+
+        // 只启用一行时用完整形式.
+        assert_eq!(
+            format_title(
+                &stats,
+                TrayBadgeMetric::ActiveUpstreamBalance,
+                TrayBadgeMetric::None
+            )
+            .as_deref(),
+            Some("42%/49%/60%")
+        );
+        // 两行同时启用时改用紧凑形式, 且不带货币单位.
+        assert_eq!(
+            format_title(
+                &stats,
+                TrayBadgeMetric::Connections,
+                TrayBadgeMetric::ActiveUpstreamBalance
+            )
+            .as_deref(),
+            Some("3 连接\n42/49/60")
+        );
+
+        // 智谱只返回两个窗口时省略第三段.
+        let zhipu = TrayStats {
+            current_windows: vec![
+                QuotaWindow::new(QuotaWindowKind::FiveHour, 58.0),
+                QuotaWindow::new(QuotaWindowKind::Weekly, 51.0),
+            ],
+            ..stats.clone()
+        };
+        assert_eq!(
+            format_title(
+                &zhipu,
+                TrayBadgeMetric::ActiveUpstreamBalance,
+                TrayBadgeMetric::None
+            )
+            .as_deref(),
+            Some("42%/49%")
+        );
+
+        // 没有窗口时回落到金额余额, 失败时显示占位符.
+        let money = TrayStats {
+            current_windows: Vec::new(),
+            current_balance: Some((12.5, ConcurrentUnit::Usd)),
+            ..stats
+        };
+        assert_eq!(
+            format_title(
+                &money,
+                TrayBadgeMetric::ActiveUpstreamBalance,
+                TrayBadgeMetric::None
+            )
+            .as_deref(),
+            Some("12.50 $")
         );
     }
 

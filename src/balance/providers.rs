@@ -1,5 +1,5 @@
 use crate::app::AppState;
-use crate::core::models::{BalanceProvider, BalanceSnapshot, UpstreamKind};
+use crate::core::models::{BalanceProvider, BalanceSnapshot, Upstream, UpstreamKind};
 use crate::logging::network::HttpClient;
 use anyhow::{Context, anyhow};
 use reqwest::StatusCode;
@@ -114,9 +114,33 @@ pub async fn query_and_store(
         newapi_user_id,
     };
     let http = state.http_for_upstream(&upstream)?;
-    let snapshot = match upstream.balance_provider {
-        BalanceProvider::Auto => {
-            if let Some(provider) = detect_provider(&upstream.base_url) {
+    // 套餐型上游 (Command Code / 智谱) 刷新的是额度窗口, 不是金额余额.
+    let snapshot = match query_plan_quota(&http, &upstream, &credentials.api_key).await {
+        Some(snapshot) => snapshot,
+        None => match upstream.balance_provider {
+            BalanceProvider::Auto => {
+                if let Some(provider) = detect_provider(&upstream.base_url) {
+                    query_balance(
+                        &http,
+                        &upstream.id,
+                        provider,
+                        &upstream.base_url,
+                        &credentials,
+                    )
+                    .await?
+                } else {
+                    query_common_panel(
+                        &http,
+                        &upstream.id,
+                        BalanceProvider::Auto,
+                        &upstream.base_url,
+                        credentials.common_auth(BalanceProvider::Auto)?,
+                    )
+                    .await?
+                }
+            }
+            BalanceProvider::Unsupported => return Err(anyhow!("unsupported balance provider")),
+            provider => {
                 query_balance(
                     &http,
                     &upstream.id,
@@ -125,32 +149,90 @@ pub async fn query_and_store(
                     &credentials,
                 )
                 .await?
-            } else {
-                query_common_panel(
-                    &http,
-                    &upstream.id,
-                    BalanceProvider::Auto,
-                    &upstream.base_url,
-                    credentials.common_auth(BalanceProvider::Auto)?,
-                )
-                .await?
             }
-        }
-        BalanceProvider::Unsupported => return Err(anyhow!("unsupported balance provider")),
-        provider => {
-            query_balance(
-                &http,
-                &upstream.id,
-                provider,
-                &upstream.base_url,
-                &credentials,
-            )
-            .await?
-        }
+        },
     };
     state.store.save_balance_snapshot(&snapshot).await?;
     state.events.bump_balance_snapshots();
     Ok(snapshot)
+}
+
+/// 套餐型上游的额度窗口查询.
+///
+/// 返回 `Some` 表示本次刷新按套餐额度处理, `None` 表示回落到原有的金额余额查询
+/// (智谱的按量付费 key 没有窗口, 但金额端点仍可用).
+async fn query_plan_quota(
+    http: &HttpClient,
+    upstream: &Upstream,
+    api_key: &str,
+) -> Option<BalanceSnapshot> {
+    // 用户显式把 provider 标记为不支持时不查套餐额度.
+    if upstream.balance_provider == BalanceProvider::Unsupported {
+        return None;
+    }
+    let provider = crate::quota::plan::detect(&upstream.base_url)?;
+    match provider.query(http, api_key, &upstream.base_url).await {
+        Ok(plan) if plan.has_windows() || plan.has_money() => {
+            tracing::info!(
+                upstream_id = %upstream.id,
+                upstream_name = %upstream.name,
+                provider = plan.provider,
+                windows = plan.windows.len(),
+                "upstream plan quota refreshed"
+            );
+            Some(plan_snapshot(upstream, plan))
+        }
+        Ok(_) => {
+            tracing::debug!(
+                upstream_id = %upstream.id,
+                provider = provider.key(),
+                "plan quota response has no usable window"
+            );
+            plan_fallback(upstream, provider, "上游未返回额度窗口")
+        }
+        Err(err) => {
+            tracing::warn!(
+                upstream_id = %upstream.id,
+                upstream_name = %upstream.name,
+                provider = provider.key(),
+                error = %err,
+                "failed to query upstream plan quota"
+            );
+            plan_fallback(upstream, provider, &err.to_string())
+        }
+    }
+}
+
+/// 没有窗口时: 智谱回落金额余额, Command Code 记录一次失败快照.
+fn plan_fallback(
+    upstream: &Upstream,
+    provider: crate::quota::plan::PlanQuotaProvider,
+    message: &str,
+) -> Option<BalanceSnapshot> {
+    if provider.money_fallback() {
+        return None;
+    }
+    Some(invalid_snapshot(
+        upstream.id.as_str(),
+        provider.key(),
+        message.to_string(),
+    ))
+}
+
+fn plan_snapshot(upstream: &Upstream, plan: crate::quota::plan::PlanQuota) -> BalanceSnapshot {
+    BalanceSnapshot {
+        upstream_id: upstream.id.clone(),
+        provider: plan.provider.to_string(),
+        remaining: plan.remaining,
+        total: plan.total,
+        used: plan.used,
+        unit: plan.unit,
+        is_valid: true,
+        message: plan.message,
+        fetched_at: chrono::Utc::now().timestamp(),
+        windows: plan.windows,
+        ..BalanceSnapshot::default()
+    }
 }
 
 async fn query_balance(
@@ -338,7 +420,7 @@ async fn query_common_panel(
             }
             return Ok(invalid_snapshot(
                 upstream_id,
-                provider,
+                provider.as_str(),
                 format!("HTTP {status}: {body_text}"),
             ));
         }
@@ -360,7 +442,7 @@ async fn query_common_panel(
     }
     Ok(invalid_snapshot(
         upstream_id,
-        provider,
+        provider.as_str(),
         last_error.unwrap_or_else(|| "unsupported balance provider".to_string()),
     ))
 }
@@ -671,7 +753,7 @@ fn parse_common_invalid(
     let message = string_any(data, &["message", "error", "invalid_message"])
         .or_else(|| string_any(body, &["message", "error", "invalid_message"]))
         .unwrap_or_else(|| "balance query failed".to_string());
-    Some(invalid_snapshot(upstream_id, provider, message))
+    Some(invalid_snapshot(upstream_id, provider.as_str(), message))
 }
 
 fn default_common_unit(_provider: BalanceProvider, _data: &Value) -> &'static str {
@@ -682,14 +764,10 @@ fn newapi_quota_to_usd(value: f64) -> f64 {
     value / NEWAPI_QUOTA_PER_USD
 }
 
-fn invalid_snapshot(
-    upstream_id: &str,
-    provider: BalanceProvider,
-    message: String,
-) -> BalanceSnapshot {
+fn invalid_snapshot(upstream_id: &str, provider: &str, message: String) -> BalanceSnapshot {
     BalanceSnapshot {
         upstream_id: upstream_id.to_string(),
-        provider: provider.as_str().to_string(),
+        provider: provider.to_string(),
         is_valid: false,
         message: Some(message),
         fetched_at: chrono::Utc::now().timestamp(),

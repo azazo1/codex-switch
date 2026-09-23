@@ -821,6 +821,43 @@ pub struct QuotaSnapshot {
     pub fetched_at: i64,
 }
 
+/// 套餐额度窗口的周期类型.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QuotaWindowKind {
+    FiveHour,
+    Weekly,
+    Monthly,
+}
+
+impl QuotaWindowKind {
+    /// 窗口展示顺序, 与套餐页面的 5h / 1w / 1month 一致.
+    pub const ORDER: [Self; 3] = [Self::FiveHour, Self::Weekly, Self::Monthly];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::FiveHour => "5h",
+            Self::Weekly => "1w",
+            Self::Monthly => "1mo",
+        }
+    }
+}
+
+/// 一个套餐额度窗口的用量, 百分比语义与上游一致: 已用比例.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct QuotaWindow {
+    pub kind: QuotaWindowKind,
+    pub used_percent: f64,
+}
+
+impl QuotaWindow {
+    pub fn new(kind: QuotaWindowKind, used_percent: f64) -> Self {
+        Self {
+            kind,
+            used_percent,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BalanceSnapshot {
     pub upstream_id: String,
@@ -835,6 +872,9 @@ pub struct BalanceSnapshot {
     /// 最近一次 remaining 是否由计价脚本 charge 扣减, 查询成功后清零.
     #[serde(default)]
     pub remaining_adjusted: bool,
+    /// 套餐型上游的额度窗口, 例如 Command Code 与智谱的 5h / 1w / 1month.
+    #[serde(default)]
+    pub windows: Vec<QuotaWindow>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

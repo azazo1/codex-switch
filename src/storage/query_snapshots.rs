@@ -1,4 +1,4 @@
-use crate::core::models::{BalanceSnapshot, QuotaSnapshot};
+use crate::core::models::{BalanceSnapshot, QuotaSnapshot, QuotaWindow};
 use crate::storage::Store;
 use sqlx::Row;
 
@@ -55,8 +55,8 @@ impl Store {
         sqlx::query(
             "INSERT INTO balance_snapshots (
                 upstream_id, provider, remaining, total, used, unit, is_valid, message, fetched_at,
-                remaining_adjusted
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                remaining_adjusted, windows
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(upstream_id) DO UPDATE SET
                 provider = excluded.provider,
                 remaining = excluded.remaining,
@@ -66,7 +66,8 @@ impl Store {
                 is_valid = excluded.is_valid,
                 message = excluded.message,
                 fetched_at = excluded.fetched_at,
-                remaining_adjusted = excluded.remaining_adjusted",
+                remaining_adjusted = excluded.remaining_adjusted,
+                windows = excluded.windows",
         )
         .bind(&snapshot.upstream_id)
         .bind(&snapshot.provider)
@@ -78,6 +79,7 @@ impl Store {
         .bind(&snapshot.message)
         .bind(snapshot.fetched_at)
         .bind(i64::from(snapshot.remaining_adjusted))
+        .bind(encode_windows(&snapshot.windows))
         .execute(self.pool())
         .await?;
         Ok(())
@@ -130,6 +132,16 @@ impl Store {
             message: row.get("message"),
             fetched_at: row.get("fetched_at"),
             remaining_adjusted: row.get::<i64, _>("remaining_adjusted") != 0,
+            windows: decode_windows(&row.get::<String, _>("windows")),
         }))
     }
+}
+
+fn encode_windows(windows: &[QuotaWindow]) -> String {
+    serde_json::to_string(windows).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// 解析失败时按空窗口处理, 旧行或手工改过的行不应让余额查询整体失败.
+fn decode_windows(value: &str) -> Vec<QuotaWindow> {
+    serde_json::from_str(value).unwrap_or_default()
 }
