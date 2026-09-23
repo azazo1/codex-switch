@@ -71,8 +71,15 @@ impl PlanQuota {
 }
 
 /// 命中的套餐提供方.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct PlanQuotaProvider(&'static PlanQuotaSpec);
+
+impl std::fmt::Debug for PlanQuotaProvider {
+    /// 只打印 provider 键, 描述表本身不实现 Debug (里面是函数指针).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("PlanQuotaProvider").field(&self.key()).finish()
+    }
+}
 
 impl PlanQuotaProvider {
     /// 写入快照的 provider 键.

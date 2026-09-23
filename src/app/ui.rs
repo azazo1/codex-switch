@@ -1663,29 +1663,6 @@ impl CodexSwitchApp {
             }
         }
     }
-}
-
-impl eframe::App for CodexSwitchApp {
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        self.last_good_window =
-            window_state::sanitize_on_save(storage, self.last_good_window.as_ref());
-    }
-
-    // Tray 命令必须在 logic 中处理, 因为隐藏窗口不会调用 ui.
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        platform::install_window_shortcuts();
-        self.handle_app_events(ctx);
-        self.ensure_tray(ctx);
-        self.handle_close_request(ctx);
-        self.handle_dock_reopen(ctx);
-        self.handle_update_handoff(ctx);
-        // 全屏恢复放在显隐处理之后, 保证窗口已真正可见才开始切换.
-        self.restore_deferred_fullscreen(ctx);
-        self.maybe_auto_refresh(ctx);
-        self.refresh_tray_snapshots();
-        self.sync_tray_stats();
-        self.drain_task_events(ctx);
-    }
 
     /// 隐藏到托盘时界面数据不会重载, 但托盘上的余额与额度窗口要保持最新,
     /// 所以这里按事件版本单独重载快照.
@@ -1721,6 +1698,29 @@ impl eframe::App for CodexSwitchApp {
         }
         self.balance_snapshots = balance_snapshots;
         self.quota_snapshots = quota_snapshots;
+    }
+}
+
+impl eframe::App for CodexSwitchApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.last_good_window =
+            window_state::sanitize_on_save(storage, self.last_good_window.as_ref());
+    }
+
+    // Tray 命令必须在 logic 中处理, 因为隐藏窗口不会调用 ui.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        platform::install_window_shortcuts();
+        self.handle_app_events(ctx);
+        self.ensure_tray(ctx);
+        self.handle_close_request(ctx);
+        self.handle_dock_reopen(ctx);
+        self.handle_update_handoff(ctx);
+        // 全屏恢复放在显隐处理之后, 保证窗口已真正可见才开始切换.
+        self.restore_deferred_fullscreen(ctx);
+        self.maybe_auto_refresh(ctx);
+        self.refresh_tray_snapshots();
+        self.sync_tray_stats();
+        self.drain_task_events(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

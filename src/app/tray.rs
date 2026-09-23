@@ -473,7 +473,6 @@ impl TrayController {
     }
 
     pub fn set_stats(&mut self, stats: TrayStats) {
-        self.last_stats = Some(stats);
         let tooltip = format_tooltip(&stats);
         if tooltip != self.last_tooltip {
             self.last_tooltip = tooltip.clone();
@@ -483,6 +482,7 @@ impl TrayController {
         }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         self.update_title(&stats);
+        self.last_stats = Some(stats);
     }
 
     fn update_icon(&self) -> anyhow::Result<()> {
