@@ -1,12 +1,15 @@
 //! 智谱 GLM Coding Plan 的额度窗口.
 //!
 //! `GET {host}/api/monitor/usage/quota/limit`, 请求头 `Authorization: <key>`
-//! (智谱不加 Bearer 前缀), 响应:
-//! `{success, msg, data: {level, limits: [{type, unit, number, percentage, nextResetTime}]}}`
+//! (智谱不加 Bearer 前缀; 实测加不加前缀都能通), 响应:
+//! `{success, msg, data: {level, limits: [{type, unit, number, usage, currentValue, remaining, percentage, nextResetTime}]}}`
 //!
 //! `limits` 里 `percentage` 是已用百分比; `unit=3` 是 5 小时滚动窗口, `unit=6`
 //! 是每周窗口. 官方套餐只有这两个窗口, 没有月度额度, 因此不产出月度分段.
 //! 国内站 `open.bigmodel.cn` 与国际站 `api.z.ai` 共用同一后端与字段.
+//!
+//! 额度类型随套餐版本变化: 新套餐 (按积分计量) 返回 `CREDIT_LIMIT`, 老套餐返回
+//! `TOKENS_LIMIT`, 两者都按 `unit` 归类; `unit` 缺失时才按重置时间兜底。
 
 use super::{AuthScheme, PlanFuture, PlanQuota, PlanQuotaSpec, get_json, number};
 use crate::core::models::{QuotaWindow, QuotaWindowKind};
@@ -68,24 +71,24 @@ fn parse_windows(data: &Value) -> Vec<QuotaWindow> {
 
     if let Some(limits) = data.get("limits").and_then(Value::as_array) {
         for item in limits {
-            let limit_type = item.get("type").and_then(Value::as_str).unwrap_or("");
-            // 上游若把类型改成小写或驼峰仍然识别.
-            if !limit_type.eq_ignore_ascii_case("TOKENS_LIMIT") {
+            if !is_quota_limit(item) {
                 continue;
             }
-            let used_percent = number(item, "percentage").unwrap_or(0.0);
+            let used_percent = window_used_percent(item);
             let reset_at = item.get("nextResetTime").and_then(Value::as_i64);
             let entry = (reset_at, used_percent);
             match item.get("unit").and_then(Value::as_i64) {
                 Some(FIVE_HOUR_UNIT) if five_hour.is_none() => five_hour = Some(entry),
                 Some(WEEKLY_UNIT) if weekly.is_none() => weekly = Some(entry),
-                _ => unclassified.push(entry),
+                // 只有 `unit` 完全缺失时才交给重置时间兜底, 其它周期 (例如日额度) 不占 5h / 1w 的位置.
+                None => unclassified.push(entry),
+                Some(_) => {}
             }
         }
     }
 
-    // `unit` 缺失或取值不认识时按重置时间兜底: 没有重置时间的先归 5 小时窗口,
-    // 其余按重置时间升序填坑. 不能只按时间排序, 周期末尾每周窗口可能先重置.
+    // 没有重置时间的先归 5 小时窗口, 其余按重置时间升序填坑.
+    // 不能只按时间排序, 周期末尾每周窗口可能先重置.
     unclassified.sort_by_key(|(reset_at, _)| (reset_at.is_some(), reset_at.unwrap_or(i64::MIN)));
     for entry in unclassified {
         if five_hour.is_none() {
@@ -103,6 +106,29 @@ fn parse_windows(data: &Value) -> Vec<QuotaWindow> {
         windows.push(QuotaWindow::new(QuotaWindowKind::Weekly, used_percent));
     }
     windows
+}
+
+/// 该条目是不是额度窗口.
+///
+/// 新套餐按积分计量返回 `CREDIT_LIMIT`, 老套餐返回 `TOKENS_LIMIT`, 大小写不敏感;
+/// 其它类型 (例如 `TIME_LIMIT`) 与窗口无关, 直接跳过.
+fn is_quota_limit(item: &Value) -> bool {
+    let limit_type = item.get("type").and_then(Value::as_str).unwrap_or("");
+    ["CREDIT_LIMIT", "TOKENS_LIMIT"]
+        .iter()
+        .any(|known| limit_type.eq_ignore_ascii_case(known))
+}
+
+/// 已用比例: 优先用上游给的 `percentage`, 缺失时按 `currentValue / usage` 换算.
+fn window_used_percent(item: &Value) -> f64 {
+    if let Some(percentage) = number(item, "percentage") {
+        return percentage;
+    }
+    let used = number(item, "currentValue").unwrap_or(0.0);
+    match number(item, "usage") {
+        Some(cap) if cap > 0.0 => used / cap * 100.0,
+        _ => 0.0,
+    }
 }
 
 #[cfg(test)]
@@ -157,6 +183,63 @@ mod tests {
             "limits": [
                 {"type": "tokens_limit", "unit": 3, "percentage": 5.0},
                 {"type": "TIME_LIMIT", "unit": 6, "percentage": 90.0}
+            ]
+        });
+        assert_eq!(
+            parse_windows(&data),
+            vec![QuotaWindow::new(QuotaWindowKind::FiveHour, 5.0)]
+        );
+    }
+
+    /// 2026-09-23 实测 open.bigmodel.cn 的 lite 套餐响应, 新套餐按积分计量用 CREDIT_LIMIT.
+    #[test]
+    fn credit_limit_plan_returns_both_windows() {
+        let data = json!({
+            "limits": [
+                {
+                    "type": "CREDIT_LIMIT", "unit": 3, "number": 5,
+                    "usage": 2000, "currentValue": 0, "remaining": 2000, "percentage": 0
+                },
+                {
+                    "type": "CREDIT_LIMIT", "unit": 6, "number": 1,
+                    "usage": 10000, "currentValue": 1876, "remaining": 8123,
+                    "percentage": 18, "nextResetTime": 1_790_530_553_994i64
+                }
+            ],
+            "level": "lite"
+        });
+        assert_eq!(
+            parse_windows(&data),
+            vec![
+                QuotaWindow::new(QuotaWindowKind::FiveHour, 0.0),
+                QuotaWindow::new(QuotaWindowKind::Weekly, 18.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_percentage_falls_back_to_current_value_over_usage() {
+        let data = json!({
+            "limits": [
+                {"type": "CREDIT_LIMIT", "unit": 3, "usage": 2000, "currentValue": 500},
+                {"type": "CREDIT_LIMIT", "unit": 6, "usage": 0, "currentValue": 500}
+            ]
+        });
+        assert_eq!(
+            parse_windows(&data),
+            vec![
+                QuotaWindow::new(QuotaWindowKind::FiveHour, 25.0),
+                QuotaWindow::new(QuotaWindowKind::Weekly, 0.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn unknown_units_do_not_take_the_five_hour_slot() {
+        let data = json!({
+            "limits": [
+                {"type": "CREDIT_LIMIT", "unit": 1, "percentage": 90.0},
+                {"type": "CREDIT_LIMIT", "unit": 3, "percentage": 5.0}
             ]
         });
         assert_eq!(
