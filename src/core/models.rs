@@ -249,6 +249,14 @@ pub struct Upstream {
     pub api_key_auth_scheme: ApiKeyAuthScheme,
     pub supports_compact: bool,
     pub filter_chat_server_tools: bool,
+    /// 转发前把 reasoning 项里的思维链文本还原成 `content[].reasoning_text`.
+    ///
+    /// DeepSeek 官方 Responses 接口在思考模式下, 对不是它自己发出的工具调用会要求把
+    /// 思维链随请求传回来, 只放在 `summary` 里会被 400 拒绝, 且它不把 `summary` 计入
+    /// 输入. 打开后代理会把 `summary` (或代理自存的思维链编码) 写回 `content`, 不再
+    /// 清空 `content`. 详见 `proxy::compat::responses::normalize_responses_request`.
+    #[serde(default)]
+    pub restore_reasoning_text: bool,
     pub strip_multimodal_for_text_models: bool,
     pub unknown_modality_policy: UnknownModalityPolicy,
     pub error_retry_policy: ErrorRetryPolicy,
@@ -298,6 +306,7 @@ impl Upstream {
             },
             supports_compact,
             filter_chat_server_tools: false,
+            restore_reasoning_text: false,
             strip_multimodal_for_text_models: false,
             unknown_modality_policy: UnknownModalityPolicy::TextOnly,
             error_retry_policy: ErrorRetryPolicy::Off,
@@ -336,6 +345,7 @@ impl Upstream {
             api_key_auth_scheme: ApiKeyAuthScheme::Bearer,
             supports_compact: true,
             filter_chat_server_tools: false,
+            restore_reasoning_text: false,
             strip_multimodal_for_text_models: false,
             unknown_modality_policy: UnknownModalityPolicy::TextOnly,
             error_retry_policy: ErrorRetryPolicy::Off,
@@ -368,6 +378,7 @@ impl Upstream {
             api_key_auth_scheme: ApiKeyAuthScheme::Bearer,
             supports_compact: true,
             filter_chat_server_tools: false,
+            restore_reasoning_text: false,
             strip_multimodal_for_text_models: false,
             unknown_modality_policy: UnknownModalityPolicy::TextOnly,
             error_retry_policy: ErrorRetryPolicy::Off,

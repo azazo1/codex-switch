@@ -553,6 +553,21 @@ impl UpstreamEditor {
                     );
                 },
             );
+            ui.add_enabled_ui(
+                self.upstream.wire_api == WireApi::Responses
+                    && self.upstream.kind == UpstreamKind::RelayApiKey,
+                |ui| {
+                    ui.checkbox(
+                        &mut self.upstream.restore_reasoning_text,
+                        "还原 reasoning_text",
+                    )
+                    .on_hover_text(
+                        "把 reasoning 项里的思维链还原到 content[].reasoning_text, 并保留已有的 content.\n\
+                         适合 DeepSeek 官方这类要求把思维链传回来的 Responses 上游, 否则会返回 400.\n\
+                         代价是这段文本会开始计入输入 token (官方不把 summary 计入).",
+                    );
+                },
+            );
         });
         ui.horizontal(|ui| {
             provider_combo(ui, &mut self.upstream.balance_provider);

@@ -60,6 +60,18 @@ Anthropic 上游默认使用 `x-api-key`, 并发送 `anthropic-version: 2023-06-
 
 Chat Completions 上游可以额外开启 `过滤 server_tool`. 开启后, Codex Switch 会丢弃 `web_search` 和 `web_search_preview` 等非 function 工具, 并清理引用已删除工具的 `tool_choice`. 这个选项适合 OpenCode Go 等只接受 function 工具的兼容端点. 默认关闭, 以保留支持 server tool 的 Chat 上游原有行为.
 
+## 还原 reasoning_text
+
+DeepSeek 官方 Responses 接口在思考模式下要求把思维链随请求传回: 只要历史里存在它认不出的工具调用 (例如这段历史是别的上游产出的), 整个 `input` 里的 `reasoning` 项都必须带非空的 `content[].reasoning_text`, 只放在 `summary` 里会被拒绝, 返回 `400 The reasoning_text in the thinking mode must be passed back to the API`. 官方同时不把 `summary` 计入输入.
+
+中转类 Responses 上游可以在上游编辑器里开启 `还原 reasoning_text` (新增表单里没有这一项). 开启后 Codex Switch 会:
+
+- 保留 `reasoning` 项里已有的 `content`, 不再清空;
+- 没有 `content` 时, 依次用代理自存的思维链编码和 `summary` 文本写回 `content[].reasoning_text`, 并丢掉 `summary`;
+- 整段历史一个 `reasoning` 项都没有但存在工具调用时, 为每个调用步补一个占位项.
+
+代价是这段文本会开始计入输入 token (未开启时它在 `summary` 里, 官方不读也不计费). 默认关闭, 因为 OpenAI 系上游以 `summary` 为正规载体. 该开关只对中转类上游生效, Codex OAuth 和节点上游始终走 `summary` 形态.
+
 ## 接入 OpenCode Go
 
 OpenCode Go 提供 OpenAI Chat Completions 兼容接口, 可作为普通 Relay API Key 上游接入:

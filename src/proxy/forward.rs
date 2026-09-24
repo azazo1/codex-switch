@@ -593,7 +593,27 @@ async fn forward_with_upstream(
         target_body = prepared.body.clone();
     }
     if upstream_wire_api == WireApi::Responses {
-        target_body = compat::normalize_responses_request(&target_body)?;
+        // 只有中转类上游才把思维链还原成 reasoning_text: 官方上游要这种形态,
+        // 而 Codex OAuth / 节点上游走的是 summary 形态. 数据库里残留的勾选值在运行时不生效.
+        let reasoning_normalize = if upstream.restore_reasoning_text
+            && upstream.kind == UpstreamKind::RelayApiKey
+        {
+            compat::ReasoningNormalize::ReasoningText
+        } else {
+            compat::ReasoningNormalize::Summary
+        };
+        let (normalized, stats) =
+            compat::normalize_responses_request(&target_body, reasoning_normalize)?;
+        target_body = normalized;
+        if stats.restored > 0 || stats.synthesized > 0 {
+            tracing::info!(
+                upstream_id = %upstream.id,
+                upstream_name = %upstream.name,
+                restored = stats.restored,
+                synthesized = stats.synthesized,
+                "restored reasoning text for upstream"
+            );
+        }
     }
     if upstream.kind == UpstreamKind::CodexOauth && !request.endpoint_kind.is_count_tokens() {
         target_body = transform::normalize_oauth_body(&target_body, request.compact)?;
