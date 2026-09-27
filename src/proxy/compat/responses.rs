@@ -105,15 +105,16 @@ fn restore_reasoning_text(item: &mut Value) -> bool {
     true
 }
 
-/// 整段历史一个 reasoning 项都没有, 但存在工具调用时, 为每个调用步补一个占位项, 返回补了几个.
+/// 为每个前面没有紧邻 reasoning 项的调用步补一条占位项, 返回补了几条.
+///
+/// 只看调用步自己前面有没有 reasoning 项, 不看历史别处有没有: 一段历史里往往只有最新那一回合
+/// 带思维链 (客户端只保住了它), 而更早的工具调用回合来自别的上游, 官方会要求把那轮的思维链
+/// 也传回来, 缺了就返回 `400 The reasoning_text in the thinking mode must be passed back to the API`.
 fn synthesize_missing_reasoning(input: &mut Vec<Value>) -> usize {
-    let has_reasoning = input
-        .iter()
-        .any(|item| item.get("type").and_then(Value::as_str) == Some("reasoning"));
     let has_function_call = input
         .iter()
         .any(|item| item.get("type").and_then(Value::as_str) == Some("function_call"));
-    if has_reasoning || !has_function_call {
+    if !has_function_call {
         return 0;
     }
     let mut rebuilt: Vec<Value> = Vec::with_capacity(input.len());
@@ -537,6 +538,48 @@ mod tests {
 
         assert_eq!(input.len(), 4);
         assert_eq!(input[1]["type"], json!("reasoning"));
+    }
+
+    #[test]
+    fn reasoning_text_mode_synthesizes_for_turns_without_reasoning() {
+        // 最新一回合带思维链, 更早那个回合的工具调用来自别的上游, 只补后者.
+        let body = json!({
+            "model":"deepseek-flash",
+            "input":[
+                {"role":"user","content":"跑一下"},
+                {"type":"function_call","call_id":"call_old","name":"bash","arguments":"{}"},
+                {"type":"function_call_output","call_id":"call_old","output":"ok"},
+                {"role":"user","content":"继续"},
+                {
+                    "type":"reasoning",
+                    "id":"rs_new",
+                    "content":[{"type":"reasoning_text","text":"这一段是模型自己的思维链"}]
+                },
+                {"type":"function_call","call_id":"call_new","name":"bash","arguments":"{}"},
+                {"type":"function_call_output","call_id":"call_new","output":"ok"}
+            ]
+        });
+
+        let (value, stats) = normalize_with_stats(&body, ReasoningNormalize::ReasoningText);
+        let input = value["input"].as_array().unwrap();
+
+        assert_eq!(stats.synthesized, 1);
+        assert_eq!(stats.restored, 0);
+        assert_eq!(input.len(), 8);
+        assert_eq!(input[1]["type"], json!("reasoning"));
+        assert_eq!(
+            input[1]["content"][0],
+            json!({"type":"reasoning_text","text":SYNTHETIC_REASONING_TEXT})
+        );
+        assert_eq!(input[2]["call_id"], json!("call_old"));
+        // 已经有思维链的那一回合不补项, 而且它的 reasoning_text 原样保留.
+        assert_eq!(input[5]["type"], json!("reasoning"));
+        assert_eq!(input[5]["id"], json!("rs_new"));
+        assert_eq!(
+            input[5]["content"][0],
+            json!({"type":"reasoning_text","text":"这一段是模型自己的思维链"})
+        );
+        assert_eq!(input[6]["call_id"], json!("call_new"));
     }
 
     #[test]
