@@ -614,6 +614,20 @@ async fn forward_with_upstream(
                 "restored reasoning text for upstream"
             );
         }
+        // 同理, 只有中转类上游需要把工具输出紧贴到它自己的调用后面: Codex OAuth 与节点上游
+        // 按 call_id 配对, 不受相邻性影响.
+        if upstream.reorder_tool_outputs && upstream.kind == UpstreamKind::RelayApiKey {
+            let (reordered, moved) = compat::attach_tool_outputs_to_calls(&target_body)?;
+            target_body = reordered;
+            if moved > 0 {
+                tracing::info!(
+                    upstream_id = %upstream.id,
+                    upstream_name = %upstream.name,
+                    moved,
+                    "attached tool outputs to their calls for upstream"
+                );
+            }
+        }
     }
     if upstream.kind == UpstreamKind::CodexOauth && !request.endpoint_kind.is_count_tokens() {
         target_body = transform::normalize_oauth_body(&target_body, request.compact)?;

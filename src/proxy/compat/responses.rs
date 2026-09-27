@@ -165,6 +165,65 @@ fn summary_reasoning_text(item: &Value) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+fn tool_call_id(item: &Value) -> Option<&str> {
+    match item.get("type").and_then(Value::as_str)? {
+        "function_call" | "custom_tool_call" | "tool_search_call" => {
+            item.get("call_id").and_then(Value::as_str)
+        }
+        _ => None,
+    }
+}
+
+fn tool_output_call_id(item: &Value) -> Option<&str> {
+    match item.get("type").and_then(Value::as_str)? {
+        "function_call_output" | "custom_tool_call_output" | "tool_search_output" => {
+            item.get("call_id").and_then(Value::as_str)
+        }
+        _ => None,
+    }
+}
+
+/// 把每个工具输出挪到它自己的工具调用后面, 返回被移动的输出项数.
+///
+/// 只按相邻项配对的上游 (DeepSeek 官方 `/v1/responses`) 要求输出紧跟调用: 中间夹了另一个调用,
+/// developer 消息或 reasoning 项都会被 400 拒绝 (`No tool output found for tool call ...`),
+/// 而这段历史之后每轮都会原样重放, 会话再也接不下去. 客户端习惯把并行调用排成
+/// `call, call, output, output`, 所以转发前先交错一次. 已经在正确位置的项不动, 没有输出的调用
+/// 也不会凭空补齐; 没有改动时原样返回入参字节.
+pub(crate) fn attach_tool_outputs_to_calls(body: &[u8]) -> anyhow::Result<(Vec<u8>, usize)> {
+    let mut value: Value = serde_json::from_slice(body)?;
+    let Some(input) = value.get_mut("input").and_then(Value::as_array_mut) else {
+        return Ok((body.to_vec(), 0));
+    };
+    let mut moved = 0;
+    let mut index = 0;
+    while index < input.len() {
+        let Some(call_id) = tool_call_id(&input[index]).map(str::to_string) else {
+            index += 1;
+            continue;
+        };
+        let adjacent = input
+            .get(index + 1)
+            .and_then(tool_output_call_id)
+            .is_some_and(|id| id == call_id.as_str());
+        if !adjacent
+            && let Some(found) = (index + 1..input.len())
+                .find(|&candidate| tool_output_call_id(&input[candidate]) == Some(call_id.as_str()))
+        {
+            let output = input.remove(found);
+            input.insert(index + 1, output);
+            moved += 1;
+            index += 2;
+            continue;
+        }
+        index += 1;
+    }
+    if moved == 0 {
+        return Ok((body.to_vec(), 0));
+    }
+    Ok((serde_json::to_vec(&value)?, moved))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,6 +241,113 @@ mod tests {
         let (normalized, stats) =
             normalize_responses_request(&serde_json::to_vec(body).unwrap(), mode).unwrap();
         (serde_json::from_slice(&normalized).unwrap(), stats)
+    }
+
+    fn reorder(body: &Value) -> (Value, usize) {
+        let (value, moved) =
+            attach_tool_outputs_to_calls(&serde_json::to_vec(body).unwrap()).unwrap();
+        (serde_json::from_slice(&value).unwrap(), moved)
+    }
+
+    fn item_types(value: &Value) -> Vec<&str> {
+        value["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["type"].as_str().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn attaches_parallel_tool_outputs_to_their_calls() {
+        let body = json!({
+            "model":"deepseek-flash",
+            "input":[
+                {"type":"message","role":"assistant","content":[]},
+                {"type":"function_call","call_id":"call_00","name":"skill","arguments":"{}"},
+                {"type":"function_call","call_id":"call_01","name":"bash","arguments":"{}"},
+                {"type":"function_call_output","call_id":"call_00","output":"skill ok"},
+                {"type":"function_call_output","call_id":"call_01","output":"bash ok"}
+            ]
+        });
+
+        let (value, moved) = reorder(&body);
+
+        // 把 call_00 的输出搬到它后面之后, call_01 正好接上自己的输出, 所以只搬一次.
+        assert_eq!(moved, 1);
+        assert_eq!(
+            item_types(&value),
+            vec![
+                "message",
+                "function_call",
+                "function_call_output",
+                "function_call",
+                "function_call_output"
+            ]
+        );
+        assert_eq!(value["input"][2]["call_id"], "call_00");
+        assert_eq!(value["input"][2]["output"], "skill ok");
+        assert_eq!(value["input"][4]["call_id"], "call_01");
+    }
+
+    #[test]
+    fn attaches_tool_output_across_intervening_items() {
+        let body = json!({
+            "model":"deepseek-flash",
+            "input":[
+                {"type":"function_call","call_id":"call_1","name":"bash","arguments":"{}"},
+                {"type":"developer","content":"补充说明"},
+                {"type":"function_call_output","call_id":"call_1","output":"ok"}
+            ]
+        });
+
+        let (value, moved) = reorder(&body);
+
+        assert_eq!(moved, 1);
+        assert_eq!(
+            item_types(&value),
+            vec!["function_call", "function_call_output", "developer"]
+        );
+        assert_eq!(value["input"][2]["content"], "补充说明");
+    }
+
+    #[test]
+    fn leaves_adjacent_tool_history_untouched() {
+        let body = json!({
+            "model":"deepseek-flash",
+            "input":[
+                {"type":"function_call","call_id":"call_1","name":"bash","arguments":"{}"},
+                {"type":"function_call_output","call_id":"call_1","output":"ok"}
+            ]
+        });
+
+        let (value, moved) = reorder(&body);
+
+        assert_eq!(moved, 0);
+        assert_eq!(value, body);
+    }
+
+    #[test]
+    fn keeps_unanswered_tool_call_without_synthesizing_output() {
+        let body = json!({
+            "model":"deepseek-flash",
+            "input":[
+                {"type":"function_call","call_id":"call_1","name":"bash","arguments":"{}"},
+                {"type":"function_call","call_id":"call_2","name":"read","arguments":"{}"},
+                {"type":"function_call_output","call_id":"call_1","output":"ok"}
+            ]
+        });
+
+        let (value, moved) = reorder(&body);
+
+        assert_eq!(moved, 1);
+        assert_eq!(
+            item_types(&value),
+            vec!["function_call", "function_call_output", "function_call"]
+        );
+        assert_eq!(value["input"][0]["call_id"], "call_1");
+        assert_eq!(value["input"][1]["call_id"], "call_1");
+        assert_eq!(value["input"][2]["call_id"], "call_2");
     }
 
     #[test]

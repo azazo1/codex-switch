@@ -72,6 +72,16 @@ DeepSeek 官方 Responses 接口在思考模式下要求把思维链随请求传
 
 代价是这段文本会开始计入输入 token (未开启时它在 `summary` 里, 官方不读也不计费). 默认关闭, 因为 OpenAI 系上游以 `summary` 为正规载体. 该开关只对中转类上游生效, Codex OAuth 和节点上游始终走 `summary` 形态.
 
+## 工具输出紧跟调用
+
+DeepSeek 官方 Responses 接口只按相邻项配对工具调用: `function_call_output` 必须紧跟在它自己的 `function_call` 后面. 客户端把并行工具调用排成 `call, call, output, output` 时, 第一个调用后面跟着的是另一个调用, 上游会判定它没有输出, 返回 `400 No tool output found for tool call ...`. 这段历史之后每轮都会被原样重放, 同一个 `call_id` 每次都失败, 会话接不下去, 只能新建.
+
+中转类 Responses 上游可以在上游编辑器里开启 `工具输出紧跟调用` (新增表单里没有这一项). 开启后 Codex Switch 在转发前把每个输出移到它自己的调用之后, 原本夹在中间的 developer 消息或 reasoning 项顺延到输出后面; 已经在正确位置的项不动, 没有输出的调用也不会凭空补齐.
+
+OpenAI 语义本来就按 `call_id` 配对, 顺序不影响结果, 所以这个开关只是把请求改成两边都接受的形态. 默认关闭, 只对中转类上游生效, Codex OAuth 和节点上游不受影响.
+
+调试时打开 `完整调试日志`, `codex-switch-proxy.log` 里 `stage="client_request"` 是入站 body, `stage="upstream_request"` 是转发前的 body, 可以直接对照 `function_call` 与 `function_call_output` 的先后.
+
 ## 接入 OpenCode Go
 
 OpenCode Go 提供 OpenAI Chat Completions 兼容接口, 可作为普通 Relay API Key 上游接入:

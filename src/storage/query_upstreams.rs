@@ -65,8 +65,8 @@ impl Store {
             "INSERT INTO upstreams (
                 id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, strip_multimodal_for_text_models, unknown_modality_policy, error_retry_policy, concurrency_limit, concurrency_overflow, price_multiplier,
                 enabled, priority, weight, proxy_url, balance_provider, show_quota_windows, chatgpt_account_id, email,
-                plan_type, token_expires_at, created_at, updated_at, restore_reasoning_text
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)
+                plan_type, token_expires_at, created_at, updated_at, restore_reasoning_text, reorder_tool_outputs
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)
              ON CONFLICT(id) DO UPDATE SET
                 kind = excluded.kind,
                 name = excluded.name,
@@ -88,6 +88,7 @@ impl Store {
                 balance_provider = excluded.balance_provider,
                 show_quota_windows = excluded.show_quota_windows,
                 restore_reasoning_text = excluded.restore_reasoning_text,
+                reorder_tool_outputs = excluded.reorder_tool_outputs,
                 chatgpt_account_id = excluded.chatgpt_account_id,
                 email = excluded.email,
                 plan_type = excluded.plan_type,
@@ -121,6 +122,7 @@ impl Store {
         .bind(upstream.created_at.to_rfc3339())
         .bind(Utc::now().to_rfc3339())
         .bind(i64::from(upstream.restore_reasoning_text))
+        .bind(i64::from(upstream.reorder_tool_outputs))
         .execute(self.pool())
         .await?;
         if upstream.kind == UpstreamKind::PeerNode {
@@ -437,8 +439,8 @@ async fn insert_upstream(
         "INSERT INTO upstreams (
             id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact, filter_chat_server_tools, strip_multimodal_for_text_models, unknown_modality_policy, error_retry_policy, concurrency_limit, concurrency_overflow, price_multiplier,
             enabled, priority, weight, proxy_url, balance_provider, show_quota_windows, chatgpt_account_id, email,
-            plan_type, token_expires_at, created_at, updated_at, restore_reasoning_text
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)",
+            plan_type, token_expires_at, created_at, updated_at, restore_reasoning_text, reorder_tool_outputs
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)",
     )
     .bind(&upstream.id)
     .bind(upstream.kind.as_str())
@@ -467,6 +469,7 @@ async fn insert_upstream(
     .bind(upstream.created_at.to_rfc3339())
     .bind(upstream.updated_at.to_rfc3339())
     .bind(i64::from(upstream.restore_reasoning_text))
+    .bind(i64::from(upstream.reorder_tool_outputs))
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -526,6 +529,7 @@ pub(super) fn row_to_upstream(row: sqlx::sqlite::SqliteRow) -> anyhow::Result<Up
         balance_provider: BalanceProvider::from_str(&row.get::<String, _>("balance_provider")),
         show_quota_windows: row.get::<i64, _>("show_quota_windows") != 0,
         restore_reasoning_text: row.get::<i64, _>("restore_reasoning_text") != 0,
+        reorder_tool_outputs: row.get::<i64, _>("reorder_tool_outputs") != 0,
         chatgpt_account_id: row.get("chatgpt_account_id"),
         email: row.get("email"),
         plan_type: row.get("plan_type"),

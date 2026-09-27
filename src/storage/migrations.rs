@@ -605,6 +605,13 @@ fn migrations() -> &'static [Migration] {
                 "ALTER TABLE upstreams ADD COLUMN restore_reasoning_text INTEGER NOT NULL DEFAULT 0",
             ],
         },
+        Migration {
+            version: 31,
+            name: "upstream_reorder_tool_outputs",
+            statements: &[
+                "ALTER TABLE upstreams ADD COLUMN reorder_tool_outputs INTEGER NOT NULL DEFAULT 0",
+            ],
+        },
     ]
 }
 
@@ -625,7 +632,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 30);
+        assert_eq!(rows.len(), 31);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -746,6 +753,11 @@ mod tests {
             rows[29].get::<String, _>("name"),
             "upstream_restore_reasoning_text"
         );
+        assert_eq!(rows[30].get::<i64, _>("version"), 31);
+        assert_eq!(
+            rows[30].get::<String, _>("name"),
+            "upstream_reorder_tool_outputs"
+        );
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
             Some("127.0.0.1:15721")
@@ -774,6 +786,6 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 30);
+        assert_eq!(count, 31);
     }
 }

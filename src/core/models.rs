@@ -257,6 +257,16 @@ pub struct Upstream {
     /// 清空 `content`. 详见 `proxy::compat::responses::normalize_responses_request`.
     #[serde(default)]
     pub restore_reasoning_text: bool,
+    /// 转发前把每个工具输出挪到它自己的工具调用后面.
+    ///
+    /// DeepSeek 官方 Responses 接口只按相邻项配对: 客户端把并行工具调用排成
+    /// `call, call, output, output` 时, 第一个调用后面紧跟的是另一个调用, 上游会判定它没有
+    /// 输出并返回 400 (`No tool output found for tool call ...`), 而这段历史之后每轮都会被
+    /// 原样重放, 会话再也接不下去. 打开后代理会把输出紧贴到对应调用之后 (OpenAI 语义本来就
+    /// 按 `call_id` 配对, 不受影响). 详见
+    /// `proxy::compat::responses::attach_tool_outputs_to_calls`.
+    #[serde(default)]
+    pub reorder_tool_outputs: bool,
     pub strip_multimodal_for_text_models: bool,
     pub unknown_modality_policy: UnknownModalityPolicy,
     pub error_retry_policy: ErrorRetryPolicy,
@@ -307,6 +317,7 @@ impl Upstream {
             supports_compact,
             filter_chat_server_tools: false,
             restore_reasoning_text: false,
+            reorder_tool_outputs: false,
             strip_multimodal_for_text_models: false,
             unknown_modality_policy: UnknownModalityPolicy::TextOnly,
             error_retry_policy: ErrorRetryPolicy::Off,
@@ -346,6 +357,7 @@ impl Upstream {
             supports_compact: true,
             filter_chat_server_tools: false,
             restore_reasoning_text: false,
+            reorder_tool_outputs: false,
             strip_multimodal_for_text_models: false,
             unknown_modality_policy: UnknownModalityPolicy::TextOnly,
             error_retry_policy: ErrorRetryPolicy::Off,
@@ -379,6 +391,7 @@ impl Upstream {
             supports_compact: true,
             filter_chat_server_tools: false,
             restore_reasoning_text: false,
+            reorder_tool_outputs: false,
             strip_multimodal_for_text_models: false,
             unknown_modality_policy: UnknownModalityPolicy::TextOnly,
             error_retry_policy: ErrorRetryPolicy::Off,

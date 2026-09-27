@@ -15,4 +15,6 @@ pub(crate) use chat_completions::{
     chat_to_responses_request_json, decode_reasoning, filter_chat_server_tools,
     normalize_chat_request_json, responses_response_to_chat_json, responses_to_chat_json,
 };
-pub(crate) use responses::{ReasoningNormalize, normalize_responses_request};
+pub(crate) use responses::{
+    ReasoningNormalize, attach_tool_outputs_to_calls, normalize_responses_request,
+};
