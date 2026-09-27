@@ -179,7 +179,7 @@ impl CodexSwitchApp {
                     .max_scroll_height(max_height)
                     .column(Column::auto())
                     .column(Column::auto())
-                    .column(Column::remainder().at_least(80.0).clip(true))
+                    .column(Column::auto().at_least(80.0).at_most(480.0).clip(true))
                     .column(Column::auto())
                     .column(Column::auto())
                     .column(Column::auto())

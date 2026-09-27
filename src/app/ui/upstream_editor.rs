@@ -98,12 +98,24 @@ impl CodexSwitchApp {
         };
         let mut open = true;
         let mut action = EditorAction::None;
+        // 窗口不能超出应用窗口自身的可见区域: 窄的时候靠表单里的自动换行收起, 矮的时候靠下面的滚动区收起.
+        let viewport = ctx.viewport_rect().size() - egui::vec2(32.0, 32.0);
         egui::Window::new("编辑上游")
             .collapsible(false)
             .resizable(true)
+            .default_width(620.0)
+            .default_height(560.0)
+            .max_width(viewport.x.max(360.0))
+            .max_height(viewport.y.max(240.0))
             .open(&mut open)
             .show(ctx, |ui| {
-                editor.form_ui(ui);
+                // 按钮行和分隔线固定在底部, 不随内容滚动; 多留一点高度, 宁可滚动区矮一些.
+                let footer_height = ui.spacing().interact_size.y + 24.0;
+                egui::ScrollArea::vertical()
+                    .id_salt("upstream_editor_form")
+                    .auto_shrink([false, false])
+                    .max_height((ui.available_height() - footer_height).max(120.0))
+                    .show(ui, |ui| editor.form_ui(ui));
                 ui.separator();
                 ui.horizontal(|ui| {
                     if ui.button("保存").clicked() {
@@ -535,6 +547,9 @@ impl UpstreamEditor {
                 ApiKeyAuthScheme::XApiKey,
                 "x-api-key",
             );
+        });
+        // 开关单独一行并允许换行, 免得四个开关挤在认证方式那一行里把窗口撑宽.
+        ui.horizontal_wrapped(|ui| {
             ui.add_enabled_ui(
                 self.upstream.wire_api != WireApi::AnthropicMessages,
                 |ui| {
