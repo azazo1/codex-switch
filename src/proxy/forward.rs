@@ -106,14 +106,29 @@ pub async fn handle_models(
     model_id: Option<String>,
 ) -> Response {
     let anthropic = headers.contains_key("anthropic-version");
-    let temporary_key_id = match validate_local_access(&state, &headers, anthropic).await {
+    let temporary_key = match validate_local_access(&state, &headers, anthropic).await {
         Ok(LocalAccess::Primary | LocalAccess::Peer) => None,
-        Ok(LocalAccess::Temporary { id }) => Some(id),
+        Ok(LocalAccess::Temporary {
+            id,
+            model_patterns,
+        }) => Some((id, model_patterns)),
         Err(response) => return *response,
     };
-    match models::query_models(&state, &headers, &uri, model_id.as_deref()).await {
+    let model_patterns = temporary_key
+        .as_ref()
+        .map(|(_, patterns)| patterns.as_slice())
+        .unwrap_or(&[]);
+    match models::query_models(
+        &state,
+        &headers,
+        &uri,
+        model_id.as_deref(),
+        model_patterns,
+    )
+    .await
+    {
         Ok(value) => {
-            if let Some(id) = temporary_key_id
+            if let Some((id, _)) = temporary_key
                 && let Err(err) = state
                     .store
                     .record_temporary_access_key_success(&id, &TokenUsage::default())
@@ -153,15 +168,18 @@ pub async fn handle_openai(
     subpath: Option<String>,
     endpoint_kind: OpenAiEndpoint,
 ) -> Response {
-    let temporary_key_id = match validate_local_access(
+    let (temporary_key_id, model_patterns) = match validate_local_access(
         &state,
         &headers,
         endpoint_kind.client_wire_api() == Some(WireApi::AnthropicMessages),
     )
     .await
     {
-        Ok(LocalAccess::Primary | LocalAccess::Peer) => None,
-        Ok(LocalAccess::Temporary { id }) => Some(id),
+        Ok(LocalAccess::Primary | LocalAccess::Peer) => (None, Vec::new()),
+        Ok(LocalAccess::Temporary {
+            id,
+            model_patterns,
+        }) => (Some(id), model_patterns),
         Err(response) => return *response,
     };
     let started = Instant::now();
@@ -182,6 +200,40 @@ pub async fn handle_openai(
         None
     };
     let model = usage::extract_model(&body);
+    // 带模型限制的临时 key 需要在转发前校验请求模型, 防止越权消耗上游额度.
+    let model_rejected = temporary_key_id.is_some()
+        && !model_patterns.is_empty()
+        && !model
+            .as_deref()
+            .is_some_and(|model| crate::core::models::model_pattern_allows(&model_patterns, model));
+    if model_rejected {
+        let model_name = model.as_deref().unwrap_or("<missing>");
+        record_attempt_log(AttemptLog {
+            state: &state,
+            started,
+            upstream: None,
+            endpoint: endpoint.clone(),
+            source,
+            model: model.clone(),
+            target_model: None,
+            reasoning_effort: None,
+            status: StatusCode::FORBIDDEN,
+            usage: TokenUsage::default(),
+            first_token_ms: None,
+            error: Some("temporary access key model restriction".to_string()),
+            temporary_key_id: temporary_key_id.clone(),
+        })
+        .await;
+        return (
+            StatusCode::FORBIDDEN,
+            axum::Json(internal_error_value(
+                endpoint_kind.client_wire_api(),
+                StatusCode::FORBIDDEN,
+                &format!("temporary access key does not allow model: {model_name}"),
+            )),
+        )
+            .into_response();
+    }
     let reasoning_effort = usage::extract_reasoning_effort(&body);
     let compact = endpoint.starts_with("/responses/compact");
     let request_id = uuid::Uuid::new_v4().to_string();

@@ -16,6 +16,8 @@ pub(super) struct TempKeysUiState {
     token_limit_input: String,
     limit_time: bool,
     duration_input: String,
+    limit_models: bool,
+    model_patterns_input: String,
     copied_key_id: Option<String>,
     copied_at: Option<Instant>,
     editor: Option<TempKeyEditorState>,
@@ -31,6 +33,8 @@ struct TempKeyEditorState {
     token_limit_input: String,
     limit_time: bool,
     duration_input: String,
+    limit_models: bool,
+    model_patterns_input: String,
 }
 
 impl CodexSwitchApp {
@@ -94,6 +98,18 @@ impl CodexSwitchApp {
                         .on_hover_text("支持 d/h/m/s, 如 1d2h30m 或 1天2小时30分钟");
                     }
                 });
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.temp_keys_ui.limit_models, "限制模型");
+                    if self.temp_keys_ui.limit_models {
+                        ui.label("范围");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.temp_keys_ui.model_patterns_input)
+                                .desired_width(320.0)
+                                .hint_text("如 glm-*, gpt-5*, qwen3-coder"),
+                        )
+                        .on_hover_text("逗号分隔的 glob 模式, 仅允许请求匹配的模型");
+                    }
+                });
                 if ui.button("创建").clicked() {
                     create_requested = true;
                 }
@@ -108,7 +124,7 @@ impl CodexSwitchApp {
                 } else {
                     egui::Grid::new("temp_keys_grid")
                         .striped(true)
-                        .num_columns(8)
+                        .num_columns(9)
                         .spacing([14.0, 8.0])
                         .show(ui, |ui| {
                             ui.strong("启用");
@@ -117,6 +133,7 @@ impl CodexSwitchApp {
                             ui.strong("状态");
                             ui.strong("次数");
                             ui.strong("Token");
+                            ui.strong("模型");
                             ui.strong("过期时间");
                             ui.strong("操作");
                             ui.end_row();
@@ -163,6 +180,7 @@ impl CodexSwitchApp {
                                         tokens::token_number(ui, &mut token_display_mode, limit);
                                     }
                                 });
+                                ui.label(model_patterns_text(key));
                                 ui.label(format_expires_at(key.expires_at));
                                 ui.horizontal(|ui| {
                                     if ui.button("编辑").clicked() {
@@ -242,6 +260,16 @@ impl CodexSwitchApp {
                 return;
             }
         };
+        let model_patterns = match parse_model_patterns(
+            self.temp_keys_ui.limit_models,
+            &self.temp_keys_ui.model_patterns_input,
+        ) {
+            Ok(value) => value,
+            Err(message) => {
+                self.status = message;
+                return;
+            }
+        };
         let id = uuid::Uuid::new_v4().to_string();
         let key_value = self.temp_keys_ui.new_key_value.trim().to_string();
         let key_value = if key_value.is_empty() {
@@ -249,8 +277,15 @@ impl CodexSwitchApp {
         } else {
             key_value
         };
-        let key =
-            TemporaryAccessKey::new(id, name, key_value, request_limit, token_limit, expires_at);
+        let key = TemporaryAccessKey::new(
+            id,
+            name,
+            key_value,
+            request_limit,
+            token_limit,
+            expires_at,
+            model_patterns,
+        );
         match self
             .runtime
             .block_on(self.state.store.create_temporary_access_key(&key))
@@ -262,9 +297,11 @@ impl CodexSwitchApp {
                 self.temp_keys_ui.request_limit_input.clear();
                 self.temp_keys_ui.token_limit_input.clear();
                 self.temp_keys_ui.duration_input.clear();
+                self.temp_keys_ui.model_patterns_input.clear();
                 self.temp_keys_ui.limit_requests = false;
                 self.temp_keys_ui.limit_tokens = false;
                 self.temp_keys_ui.limit_time = false;
+                self.temp_keys_ui.limit_models = false;
                 self.refresh_temporary_access_keys();
             }
             Err(err) => {
@@ -395,6 +432,8 @@ impl CodexSwitchApp {
                 .unwrap_or_default(),
             limit_time: key.expires_at.is_some(),
             duration_input: remaining.map(format_duration_seconds).unwrap_or_default(),
+            limit_models: !key.model_patterns.is_empty(),
+            model_patterns_input: key.model_patterns.join(", "),
         });
     }
 
@@ -452,6 +491,17 @@ impl CodexSwitchApp {
                             egui::TextEdit::singleline(&mut editor.duration_input)
                                 .desired_width(180.0)
                                 .hint_text("如 1d2h30m10s"),
+                        );
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut editor.limit_models, "限制模型");
+                    if editor.limit_models {
+                        ui.label("范围");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut editor.model_patterns_input)
+                                .desired_width(320.0)
+                                .hint_text("如 glm-*, gpt-5*, qwen3-coder"),
                         );
                     }
                 });
@@ -520,6 +570,16 @@ impl CodexSwitchApp {
         } else {
             None
         };
+        let model_patterns = match parse_model_patterns(
+            editor.limit_models,
+            &editor.model_patterns_input,
+        ) {
+            Ok(value) => value,
+            Err(message) => {
+                self.status = message;
+                return;
+            }
+        };
         match self
             .runtime
             .block_on(self.state.store.update_temporary_access_key(
@@ -529,6 +589,7 @@ impl CodexSwitchApp {
                 request_limit,
                 token_limit,
                 expires_at,
+                &model_patterns,
             )) {
             Ok(()) => {
                 self.status = "临时 Key 已更新".to_string();
@@ -539,6 +600,34 @@ impl CodexSwitchApp {
                 self.status = format!("更新临时 Key 失败: {err}");
             }
         }
+    }
+}
+
+fn parse_model_patterns(enabled: bool, input: &str) -> Result<Vec<String>, String> {
+    if !enabled {
+        return Ok(Vec::new());
+    }
+    let mut patterns = Vec::new();
+    for pattern in input
+        .split(|ch: char| ch == ',' || ch == ';' || ch.is_whitespace())
+        .map(str::trim)
+        .filter(|pattern| !pattern.is_empty())
+    {
+        if !patterns.iter().any(|item| item == pattern) {
+            patterns.push(pattern.to_string());
+        }
+    }
+    if patterns.is_empty() {
+        return Err("模型限制需要填写至少一个模型或通配符".to_string());
+    }
+    Ok(patterns)
+}
+
+fn model_patterns_text(key: &TemporaryAccessKey) -> String {
+    if key.model_patterns.is_empty() {
+        "-".to_string()
+    } else {
+        key.model_patterns.join(", ")
     }
 }
 

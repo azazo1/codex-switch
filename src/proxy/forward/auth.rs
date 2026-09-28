@@ -13,7 +13,10 @@ pub(crate) const PEER_FINGERPRINT_HEADER: &str = "x-codex-switch-peer-fp";
 #[derive(Debug, Clone)]
 pub(super) enum LocalAccess {
     Primary,
-    Temporary { id: String },
+    Temporary {
+        id: String,
+        model_patterns: Vec<String>,
+    },
     Peer,
 }
 
@@ -107,7 +110,10 @@ pub(super) async fn validate_local_access(
                 "rate_limit_error",
             ));
         }
-        return Ok(LocalAccess::Temporary { id: key.id });
+        return Ok(LocalAccess::Temporary {
+            id: key.id,
+            model_patterns: key.model_patterns,
+        });
     }
     if expected.is_empty() {
         return Ok(LocalAccess::Primary);

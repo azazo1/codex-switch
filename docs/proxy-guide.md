@@ -53,6 +53,7 @@ x-api-key: <仪表盘本地访问 key>
 - 成功请求次数上限: 只统计成功返回 `2xx` 的请求, 失败和重试不消耗次数.
 - 总 token 用量上限: 按 input, output, cache_read 和 cache_creation token 总和计算.
 - 固定时长过期: 创建时输入数字并选择分钟, 小时或天, 从创建时刻开始倒计时.
+- 模型范围限制: 输入一个或多个模型 glob 模式, 例如 `gpt-*` 或 `qwen3-coder`, 临时 key 只能请求匹配的模型, `/v1/models` 也只返回匹配项.
 
 无效, 禁用或过期的临时 key 返回 `401` 和 `authentication_error`. 达到次数或 token 上限的 key 返回 `429` 和 `rate_limit_error`. 在页面中重置用量后, 该 key 立即可以再次使用, 限额, key 值和过期时间保持不变. 临时 key 与主 key 一样可以通过 Bearer 或 `x-api-key` 发送, 且不会被转发给上游.
 

@@ -11,8 +11,8 @@ impl Store {
         sqlx::query(
             "INSERT INTO temporary_access_keys (
                 id, name, key_value, enabled, request_limit, token_limit, expires_at,
-                requests_used, tokens_used, last_used_at, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                model_patterns, requests_used, tokens_used, last_used_at, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         )
         .bind(&key.id)
         .bind(&key.name)
@@ -21,6 +21,7 @@ impl Store {
         .bind(key.request_limit)
         .bind(key.token_limit)
         .bind(key.expires_at)
+        .bind(encode_model_patterns(&key.model_patterns))
         .bind(key.requests_used)
         .bind(key.tokens_used)
         .bind(key.last_used_at)
@@ -78,11 +79,12 @@ impl Store {
         request_limit: Option<i64>,
         token_limit: Option<i64>,
         expires_at: Option<i64>,
+        model_patterns: &[String],
     ) -> anyhow::Result<()> {
         sqlx::query(
             "UPDATE temporary_access_keys
              SET name = ?2, key_value = ?3, request_limit = ?4, token_limit = ?5,
-                 expires_at = ?6, updated_at = ?7
+                 expires_at = ?6, model_patterns = ?7, updated_at = ?8
              WHERE id = ?1",
         )
         .bind(id)
@@ -91,6 +93,7 @@ impl Store {
         .bind(request_limit)
         .bind(token_limit)
         .bind(expires_at)
+        .bind(encode_model_patterns(model_patterns))
         .bind(Utc::now().to_rfc3339())
         .execute(self.pool())
         .await?;
@@ -148,6 +151,7 @@ impl Store {
 fn temporary_access_key_from_row(row: sqlx::sqlite::SqliteRow) -> TemporaryAccessKey {
     let created_at: String = row.get("created_at");
     let updated_at: String = row.get("updated_at");
+    let model_patterns: String = row.get("model_patterns");
     TemporaryAccessKey {
         id: row.get("id"),
         name: row.get("name"),
@@ -156,6 +160,7 @@ fn temporary_access_key_from_row(row: sqlx::sqlite::SqliteRow) -> TemporaryAcces
         request_limit: row.get("request_limit"),
         token_limit: row.get("token_limit"),
         expires_at: row.get("expires_at"),
+        model_patterns: decode_model_patterns(&model_patterns),
         requests_used: row.get("requests_used"),
         tokens_used: row.get("tokens_used"),
         last_used_at: row.get("last_used_at"),
@@ -166,6 +171,15 @@ fn temporary_access_key_from_row(row: sqlx::sqlite::SqliteRow) -> TemporaryAcces
             .map(|value| value.with_timezone(&Utc))
             .unwrap_or_else(|_| Utc::now()),
     }
+}
+
+/// 模式列表以 JSON 数组形式存储在单列中, 便于迁移和读取.
+fn encode_model_patterns(patterns: &[String]) -> String {
+    serde_json::to_string(patterns).unwrap_or_else(|_| "[]".to_string())
+}
+
+fn decode_model_patterns(value: &str) -> Vec<String> {
+    serde_json::from_str(value).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -186,6 +200,7 @@ mod tests {
             Some(3),
             Some(1000),
             Some(Utc::now().timestamp() + 60),
+            vec!["glm-*".to_string(), "gpt-5*".to_string()],
         );
 
         store.create_temporary_access_key(&key).await.unwrap();
@@ -203,6 +218,10 @@ mod tests {
         assert!(found.enabled);
         assert_eq!(found.request_limit, Some(3));
         assert_eq!(found.token_limit, Some(1000));
+        assert_eq!(
+            found.model_patterns,
+            vec!["glm-*".to_string(), "gpt-5*".to_string()]
+        );
     }
 
     #[tokio::test]
@@ -219,6 +238,7 @@ mod tests {
             None,
             None,
             None,
+            Vec::new(),
         );
         store.create_temporary_access_key(&key).await.unwrap();
 
@@ -281,6 +301,7 @@ mod tests {
             Some(1),
             Some(100),
             Some(Utc::now().timestamp() + 60),
+            Vec::new(),
         );
         store.create_temporary_access_key(&key).await.unwrap();
 
@@ -292,6 +313,7 @@ mod tests {
                 Some(5),
                 Some(500),
                 Some(Utc::now().timestamp() + 3600),
+                &["qwen-*".to_string()],
             )
             .await
             .unwrap();
@@ -305,6 +327,7 @@ mod tests {
         assert_eq!(updated.key_value, "cs-tmp-renamed");
         assert_eq!(updated.request_limit, Some(5));
         assert_eq!(updated.token_limit, Some(500));
+        assert_eq!(updated.model_patterns, vec!["qwen-*".to_string()]);
         assert!(updated.enabled);
 
         let old = store
@@ -329,6 +352,7 @@ mod tests {
             Some(3),
             Some(1000),
             Some(expires_at),
+            Vec::new(),
         );
         store.create_temporary_access_key(&key).await.unwrap();
         store

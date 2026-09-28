@@ -705,6 +705,8 @@ pub struct TemporaryAccessKey {
     pub request_limit: Option<i64>,
     pub token_limit: Option<i64>,
     pub expires_at: Option<i64>,
+    /// 模型限制范围, glob 模式列表, 空列表表示不限制.
+    pub model_patterns: Vec<String>,
     pub requests_used: i64,
     pub tokens_used: i64,
     pub last_used_at: Option<i64>,
@@ -720,6 +722,7 @@ impl TemporaryAccessKey {
         request_limit: Option<i64>,
         token_limit: Option<i64>,
         expires_at: Option<i64>,
+        model_patterns: Vec<String>,
     ) -> Self {
         let now = Utc::now();
         Self {
@@ -730,6 +733,7 @@ impl TemporaryAccessKey {
             request_limit,
             token_limit,
             expires_at,
+            model_patterns,
             requests_used: 0,
             tokens_used: 0,
             last_used_at: None,
@@ -737,6 +741,14 @@ impl TemporaryAccessKey {
             updated_at: now,
         }
     }
+}
+
+/// 判断模型是否命中任一 glob 模式, 模式语法与调度路由规则一致, 空列表不限制.
+pub fn model_pattern_allows(patterns: &[String], model: &str) -> bool {
+    patterns.is_empty()
+        || patterns
+            .iter()
+            .any(|pattern| crate::scheduler::glob_captures(pattern, model).is_some())
 }
 
 #[derive(Debug, Clone, Default)]

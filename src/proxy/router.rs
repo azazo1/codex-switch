@@ -312,6 +312,7 @@ mod tests {
                 Some(1),
                 Some(1000),
                 None,
+                Vec::new(),
             ))
             .await
             .unwrap();
@@ -363,6 +364,7 @@ mod tests {
                 None,
                 Some(4),
                 None,
+                Vec::new(),
             ))
             .await
             .unwrap();
@@ -413,6 +415,7 @@ mod tests {
                 None,
                 None,
                 None,
+                Vec::new(),
             ))
             .await
             .unwrap();
@@ -425,6 +428,7 @@ mod tests {
                 None,
                 None,
                 Some(chrono::Utc::now().timestamp() - 10),
+                Vec::new(),
             ))
             .await
             .unwrap();
@@ -464,6 +468,7 @@ mod tests {
                 Some(1),
                 Some(10),
                 None,
+                Vec::new(),
             ))
             .await
             .unwrap();
@@ -502,6 +507,7 @@ mod tests {
                 Some(1),
                 None,
                 None,
+                Vec::new(),
             ))
             .await
             .unwrap();
@@ -525,6 +531,107 @@ mod tests {
         assert_eq!(stored.tokens_used, 0);
     }
 
+    #[tokio::test]
+    async fn temporary_key_model_patterns_restrict_requests() {
+        let (mock_base, hits) = spawn_mock(MockMode::ResponsesJson).await;
+        let state = test_state(&mock_base, WireApi::Responses).await;
+        state
+            .store
+            .create_temporary_access_key(&TemporaryAccessKey::new(
+                "temp-model-scope".to_string(),
+                String::new(),
+                "cs-tmp-model-scope".to_string(),
+                None,
+                None,
+                None,
+                vec!["gpt-*".to_string()],
+            ))
+            .await
+            .unwrap();
+        let proxy_base = spawn_proxy(state).await;
+        let client = reqwest::Client::new();
+
+        let denied = client
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("cs-tmp-model-scope")
+            .json(&json!({"model":"glm-4.5","input":"hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            denied.json::<Value>().await.unwrap()["error"]["message"],
+            "temporary access key does not allow model: glm-4.5"
+        );
+
+        let allowed = client
+            .post(format!("{proxy_base}/v1/responses"))
+            .bearer_auth("cs-tmp-model-scope")
+            .json(&json!({"model":"gpt-5","input":"hello"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(allowed.status(), StatusCode::OK);
+        assert_eq!(hits.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn temporary_key_model_patterns_filter_models() {
+        let (mock_base, _) = spawn_mock(MockMode::ModelsJson).await;
+        let state = test_state(&mock_base, WireApi::Responses).await;
+        state
+            .store
+            .create_temporary_access_key(&TemporaryAccessKey::new(
+                "temp-model-list".to_string(),
+                String::new(),
+                "cs-tmp-model-list".to_string(),
+                None,
+                None,
+                None,
+                vec!["gpt-*".to_string()],
+            ))
+            .await
+            .unwrap();
+        let proxy_base = spawn_proxy(state).await;
+        let response = reqwest::Client::new()
+            .get(format!("{proxy_base}/v1/models"))
+            .bearer_auth("cs-tmp-model-list")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = response.json::<Value>().await.unwrap();
+        assert_eq!(value["data"][0]["id"], "gpt-mock");
+    }
+
+    #[tokio::test]
+    async fn temporary_key_model_list_can_hide_all_models() {
+        let (mock_base, _) = spawn_mock(MockMode::ModelsJson).await;
+        let state = test_state(&mock_base, WireApi::Responses).await;
+        state
+            .store
+            .create_temporary_access_key(&TemporaryAccessKey::new(
+                "temp-empty-model-list".to_string(),
+                String::new(),
+                "cs-tmp-empty-model-list".to_string(),
+                None,
+                None,
+                None,
+                vec!["glm-*".to_string()],
+            ))
+            .await
+            .unwrap();
+        let proxy_base = spawn_proxy(state).await;
+        let response = reqwest::Client::new()
+            .get(format!("{proxy_base}/v1/models"))
+            .bearer_auth("cs-tmp-empty-model-list")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = response.json::<Value>().await.unwrap();
+        assert!(value["data"].as_array().unwrap().is_empty());
+    }
     #[tokio::test]
     async fn responses_routes_keep_subpaths() {
         let (mock_base, hits) = spawn_mock(MockMode::ResponsesJson).await;

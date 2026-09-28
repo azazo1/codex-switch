@@ -1,6 +1,7 @@
 use crate::app::AppState;
 use crate::core::models::{
-    ScheduleGroup, ScheduleMode, ScheduleRouteRule, ScheduleRouteTargetKind, Upstream, UpstreamKind,
+    model_pattern_allows, ScheduleGroup, ScheduleMode, ScheduleRouteRule, ScheduleRouteTargetKind,
+    Upstream, UpstreamKind,
 };
 use crate::core::upstream_detection::{self, DetectedUpstream};
 use crate::proxy::transform;
@@ -22,6 +23,7 @@ pub(super) async fn query_models(
     headers: &HeaderMap,
     uri: &axum::http::Uri,
     model_id: Option<&str>,
+    allowed_patterns: &[String],
 ) -> anyhow::Result<Value> {
     let group = state.store.current_schedule_group().await?;
     let max_hops = state.store.scheduler_route_max_hops().await?;
@@ -64,6 +66,15 @@ pub(super) async fn query_models(
             "failed to query models from all upstreams: {}",
             errors.join("; ")
         );
+    }
+
+    if !allowed_patterns.is_empty() {
+        models.retain(|model| {
+            model
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| model_pattern_allows(allowed_patterns, id))
+        });
     }
 
     let anthropic = headers.contains_key("anthropic-version");
