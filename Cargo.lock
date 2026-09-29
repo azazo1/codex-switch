@@ -1064,7 +1064,7 @@ dependencies = [
 
 [[package]]
 name = "codex-switch"
-version = "0.16.6"
+version = "0.16.7"
 dependencies = [
  "anyhow",
  "async-stream",
