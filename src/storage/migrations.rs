@@ -619,6 +619,11 @@ fn migrations() -> &'static [Migration] {
                 "ALTER TABLE temporary_access_keys ADD COLUMN model_patterns TEXT NOT NULL DEFAULT '[]'",
             ],
         },
+        Migration {
+            version: 33,
+            name: "drop_upstream_reorder_tool_outputs",
+            statements: &["ALTER TABLE upstreams DROP COLUMN reorder_tool_outputs"],
+        },
     ]
 }
 
@@ -639,7 +644,7 @@ mod tests {
             .fetch_all(store.pool())
             .await
             .unwrap();
-        assert_eq!(rows.len(), 32);
+        assert_eq!(rows.len(), 33);
         assert_eq!(rows[0].get::<i64, _>("version"), 1);
         assert_eq!(rows[0].get::<String, _>("name"), "initial_schema");
         assert_eq!(rows[1].get::<i64, _>("version"), 2);
@@ -770,6 +775,11 @@ mod tests {
             rows[31].get::<String, _>("name"),
             "temporary_access_key_model_patterns"
         );
+        assert_eq!(rows[32].get::<i64, _>("version"), 33);
+        assert_eq!(
+            rows[32].get::<String, _>("name"),
+            "drop_upstream_reorder_tool_outputs"
+        );
         assert_eq!(
             store.get_setting("bind_addr").await.unwrap().as_deref(),
             Some("127.0.0.1:15721")
@@ -798,6 +808,69 @@ mod tests {
             .await
             .unwrap()
             .get::<i64, _>("count");
-        assert_eq!(count, 32);
+        assert_eq!(count, 33);
+    }
+
+    /// 已发版的库升级到 33 号迁移时要能删掉 reorder_tool_outputs 列, 且不动上游数据.
+    #[tokio::test]
+    async fn drops_reorder_tool_outputs_column_when_upgrading_existing_database() {
+        let path = std::env::temp_dir().join(format!(
+            "codex-switch-migrate-drop-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let store = Store::open(&path).await.unwrap();
+
+        // 还原成升级前的样子: 列还在, 33 号迁移还没记录.
+        sqlx::query("ALTER TABLE upstreams ADD COLUMN reorder_tool_outputs INTEGER NOT NULL DEFAULT 0")
+            .execute(store.pool())
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM schema_migrations WHERE version = 33")
+            .execute(store.pool())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO upstreams (
+                id, kind, name, base_url, wire_api, api_key_auth_scheme, supports_compact,
+                filter_chat_server_tools, strip_multimodal_for_text_models, unknown_modality_policy,
+                error_retry_policy, concurrency_limit, concurrency_overflow, price_multiplier,
+                enabled, priority, weight, proxy_url, balance_provider, show_quota_windows,
+                chatgpt_account_id, email, plan_type, token_expires_at, created_at, updated_at,
+                restore_reasoning_text, reorder_tool_outputs
+             ) VALUES (
+                'upstream-keep', 'relay_api_key', '保留下来的上游', 'https://example.invalid/v1',
+                'responses', 'bearer', 1, 0, 0, 'text_only', 'off', 0, 'reject', 1.0,
+                1, 0, 1, NULL, 'unsupported', 1,
+                NULL, NULL, NULL, NULL, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00',
+                1, 1
+             )",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
+
+        drop(store);
+        let store = Store::open(&path).await.unwrap();
+
+        let columns: Vec<String> = sqlx::query("PRAGMA table_info(upstreams)")
+            .fetch_all(store.pool())
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| row.get::<String, _>("name"))
+            .collect();
+        assert!(
+            !columns.iter().any(|column| column == "reorder_tool_outputs"),
+            "升级后不应再有 reorder_tool_outputs 列: {columns:?}"
+        );
+
+        let upstreams = store.list_upstreams().await.unwrap();
+        assert_eq!(upstreams.len(), 1);
+        assert_eq!(upstreams[0].id, "upstream-keep");
+        assert_eq!(upstreams[0].name, "保留下来的上游");
+        assert!(upstreams[0].restore_reasoning_text);
+
+        drop(store);
+        let _ = std::fs::remove_file(&path);
     }
 }

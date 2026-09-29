@@ -62,23 +62,28 @@ Chat Completions 上游可以额外开启 `过滤 server_tool`. 开启后, Codex
 
 ## 还原 reasoning_text
 
-DeepSeek 官方 Responses 接口在思考模式下要求把思维链随请求传回: 只要历史里存在它认不出的工具调用 (例如这段历史是别的上游产出的), 整个 `input` 里的 `reasoning` 项都必须带非空的 `content[].reasoning_text`, 只放在 `summary` 里会被拒绝, 返回 `400 The reasoning_text in the thinking mode must be passed back to the API`. 官方同时不把 `summary` 计入输入.
+Responses 格式里思维链文本有两个载体: `reasoning` 项的 `content[].reasoning_text` 和 `summary[].summary_text`. 两派上游各认一边: DeepSeek 官方把纯文本 `content` 并进相邻的助手消息 (官方 Thinking Mode 文档在带 `tools` 的请求里要求把思维链传回), 而 `summary` 与 `encrypted_content` 它不认, 不读也不计费; OpenAI 系上游反过来以 `summary` 为正规载体.
 
-中转类 Responses 上游可以在上游编辑器里开启 `还原 reasoning_text` (新增表单里没有这一项). 开启后 Codex Switch 会:
+中转类 Responses 上游可以在上游编辑器里开关 `还原 reasoning_text` (新增表单里没有这一项). 开启后 Codex Switch 会:
 
 - 保留 `reasoning` 项里已有的 `content`, 不再清空;
-- 没有 `content` 时, 依次用代理自存的思维链编码和 `summary` 文本写回 `content[].reasoning_text`, 并丢掉 `summary`;
-- 整段历史一个 `reasoning` 项都没有但存在工具调用时, 为每个调用步补一个占位项.
+- 没有 `content` 时, 依次用代理自存的思维链编码和 `summary` 文本写回 `content[].reasoning_text`, 并丢掉 `summary`.
 
-代价是这段文本会开始计入输入 token (未开启时它在 `summary` 里, 官方不读也不计费). 默认关闭, 因为 OpenAI 系上游以 `summary` 为正规载体. 该开关只对中转类上游生效, Codex OAuth 和节点上游始终走 `summary` 形态.
+关掉时代理走另一条路径: 思维链文本被搬进 `summary`, `content` 被清空, `encrypted_content` 被删掉. 对 DeepSeek 官方而言这等于把思维链从上下文里丢掉.
 
-## 工具输出紧跟调用
+所以这个开关的实质是取舍: 开着思维链留在上下文里, 代价是它开始计入输入 token (一段长会话里约占四成输入); 关掉省下这笔 token, 但模型看不到之前的思维链. 默认关闭.
 
-DeepSeek 官方 Responses 接口只按相邻项配对工具调用: `function_call_output` 必须紧跟在它自己的 `function_call` 后面. 客户端把并行工具调用排成 `call, call, output, output` 时, 第一个调用后面跟着的是另一个调用, 上游会判定它没有输出, 返回 `400 No tool output found for tool call ...`. 这段历史之后每轮都会被原样重放, 同一个 `call_id` 每次都失败, 会话接不下去, 只能新建.
+它不修 `400 The reasoning_text in the thinking mode must be passed back to the API`. 实测这条报错的触发条件是工具调用的出身: 历史里出现上游没签发的 `call_id` (例如那段历史来自另一个上游), 或出现来自不思考回合的工具调用时, 无论思维链放在 `content` 还是 `summary`, 补不补占位项, 都返回同样的 `400`. 唯一的解法是让那个回合离开请求的最新位置 (后面跟一条新的用户消息), 或不要在同一段会话里换上游.
 
-中转类 Responses 上游可以在上游编辑器里开启 `工具输出紧跟调用` (新增表单里没有这一项). 开启后 Codex Switch 在转发前把每个输出移到它自己的调用之后, 原本夹在中间的 developer 消息或 reasoning 项顺延到输出后面; 已经在正确位置的项不动, 没有输出的调用也不会凭空补齐.
+同样的历史打到不同后端未必同时失败: 聚合网关会把请求分派给不同来源的后端, 各家对历史里工具调用出身的校验并不一致.
 
-OpenAI 语义本来就按 `call_id` 配对, 顺序不影响结果, 所以这个开关只是把请求改成两边都接受的形态. 默认关闭, 只对中转类上游生效, Codex OAuth 和节点上游不受影响.
+该开关只对中转类上游生效, Codex OAuth 和节点上游始终走 `summary` 形态.
+
+## 工具调用与工具输出的配对
+
+官方按 `reasoning` 项切分回合: 一条 `reasoning` 出现就关掉上一回合, 而一回合里的输出必须能找到同一回合的调用. 因此中间插进一条 `reasoning` 会让前一个调用所属的回合被提前关掉, 它的输出落到回合外, 上游返回 `400 No tool output found for tool call ...`.
+
+客户端把并行调用排成 `call, call, output, output` 是安全的, 输出前夹一条 developer 消息也安全, 不需要重排. 只有真的插进 `reasoning` 项才会触发上面那条报错.
 
 调试时打开 `完整调试日志`, `codex-switch-proxy.log` 里 `stage="client_request"` 是入站 body, `stage="upstream_request"` 是转发前的 body, 可以直接对照 `function_call` 与 `function_call_output` 的先后.
 

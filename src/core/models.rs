@@ -251,22 +251,15 @@ pub struct Upstream {
     pub filter_chat_server_tools: bool,
     /// 转发前把 reasoning 项里的思维链文本还原成 `content[].reasoning_text`.
     ///
-    /// DeepSeek 官方 Responses 接口在思考模式下, 对不是它自己发出的工具调用会要求把
-    /// 思维链随请求传回来, 只放在 `summary` 里会被 400 拒绝, 且它不把 `summary` 计入
-    /// 输入. 打开后代理会把 `summary` (或代理自存的思维链编码) 写回 `content`, 不再
-    /// 清空 `content`. 详见 `proxy::compat::responses::normalize_responses_request`.
+    /// 关掉时代理走 `summary` 形态: 思维链文本被搬进 `summary`, `content` 被清空, 而
+    /// DeepSeek 官方 Responses 接口不认 `summary`, 等于把思维链从上下文里丢掉 (省下这笔输入
+    /// token). 打开时代理保留 `content`, 官方会把它并进相邻的助手消息, 思维链留在上下文里,
+    /// 但这段文本开始计入输入 token. 该开关只做还原, 不会凭空虚造思维链, 也不能修
+    /// `400 The reasoning_text in the thinking mode must be passed back to the API`:
+    /// 实测那条报错取决于工具调用是不是上游自己签发的, 与思维链形态无关. 详见
+    /// `proxy::compat::responses::normalize_responses_request`.
     #[serde(default)]
     pub restore_reasoning_text: bool,
-    /// 转发前把每个工具输出挪到它自己的工具调用后面.
-    ///
-    /// DeepSeek 官方 Responses 接口只按相邻项配对: 客户端把并行工具调用排成
-    /// `call, call, output, output` 时, 第一个调用后面紧跟的是另一个调用, 上游会判定它没有
-    /// 输出并返回 400 (`No tool output found for tool call ...`), 而这段历史之后每轮都会被
-    /// 原样重放, 会话再也接不下去. 打开后代理会把输出紧贴到对应调用之后 (OpenAI 语义本来就
-    /// 按 `call_id` 配对, 不受影响). 详见
-    /// `proxy::compat::responses::attach_tool_outputs_to_calls`.
-    #[serde(default)]
-    pub reorder_tool_outputs: bool,
     pub strip_multimodal_for_text_models: bool,
     pub unknown_modality_policy: UnknownModalityPolicy,
     pub error_retry_policy: ErrorRetryPolicy,
@@ -317,7 +310,6 @@ impl Upstream {
             supports_compact,
             filter_chat_server_tools: false,
             restore_reasoning_text: false,
-            reorder_tool_outputs: false,
             strip_multimodal_for_text_models: false,
             unknown_modality_policy: UnknownModalityPolicy::TextOnly,
             error_retry_policy: ErrorRetryPolicy::Off,
@@ -357,7 +349,6 @@ impl Upstream {
             supports_compact: true,
             filter_chat_server_tools: false,
             restore_reasoning_text: false,
-            reorder_tool_outputs: false,
             strip_multimodal_for_text_models: false,
             unknown_modality_policy: UnknownModalityPolicy::TextOnly,
             error_retry_policy: ErrorRetryPolicy::Off,
@@ -391,7 +382,6 @@ impl Upstream {
             supports_compact: true,
             filter_chat_server_tools: false,
             restore_reasoning_text: false,
-            reorder_tool_outputs: false,
             strip_multimodal_for_text_models: false,
             unknown_modality_policy: UnknownModalityPolicy::TextOnly,
             error_retry_policy: ErrorRetryPolicy::Off,

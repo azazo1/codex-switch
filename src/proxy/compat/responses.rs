@@ -1,8 +1,5 @@
 use serde_json::{Value, json};
 
-/// 历史里完全没有思维链时, 补进去的占位文本. 官方只要求非空.
-const SYNTHETIC_REASONING_TEXT: &str = "(reasoning not recorded)";
-
 /// reasoning 项在转发前的归一化形态.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReasoningNormalize {
@@ -10,10 +7,8 @@ pub(crate) enum ReasoningNormalize {
     Summary,
     /// 把思维链文本还原进 `content[].reasoning_text`, 并保留已有的 `content`.
     ///
-    /// DeepSeek 官方 Responses 接口在思考模式下要求把它认不出的工具调用所属轮次的
-    /// 思维链随请求传回 (见官方 Thinking Mode 文档的 Tool Calls 一节), 只给 `summary`
-    /// 会被 400 拒绝, 而且它不把 `summary` 计入输入. 该形态下还会在整段历史一个
-    /// reasoning 项都没有时补占位项, 因为"没有思维链"同样会被拒绝.
+    /// DeepSeek 官方 Responses 接口在思考模式下要求把思维链随请求传回 (见官方 Thinking Mode
+    /// 文档的 Tool Calls 一节), 只给 `summary` 会被 400 拒绝, 而且它不把 `summary` 计入输入.
     ReasoningText,
 }
 
@@ -22,8 +17,6 @@ pub(crate) enum ReasoningNormalize {
 pub(crate) struct ReasoningNormalizeStats {
     /// 被写回 `content[].reasoning_text` 的 reasoning 项数.
     pub(crate) restored: usize,
-    /// 合成的占位 reasoning 项数.
-    pub(crate) synthesized: usize,
 }
 
 pub(crate) fn normalize_responses_request(
@@ -45,7 +38,6 @@ pub(crate) fn normalize_responses_request(
                         stats.restored += 1;
                     }
                 }
-                stats.synthesized = synthesize_missing_reasoning(input);
             }
         }
     }
@@ -105,40 +97,6 @@ fn restore_reasoning_text(item: &mut Value) -> bool {
     true
 }
 
-/// 为每个前面没有紧邻 reasoning 项的调用步补一条占位项, 返回补了几条.
-///
-/// 只看调用步自己前面有没有 reasoning 项, 不看历史别处有没有: 一段历史里往往只有最新那一回合
-/// 带思维链 (客户端只保住了它), 而更早的工具调用回合来自别的上游, 官方会要求把那轮的思维链
-/// 也传回来, 缺了就返回 `400 The reasoning_text in the thinking mode must be passed back to the API`.
-fn synthesize_missing_reasoning(input: &mut Vec<Value>) -> usize {
-    let has_function_call = input
-        .iter()
-        .any(|item| item.get("type").and_then(Value::as_str) == Some("function_call"));
-    if !has_function_call {
-        return 0;
-    }
-    let mut rebuilt: Vec<Value> = Vec::with_capacity(input.len());
-    let mut synthesized = 0;
-    for item in input.drain(..) {
-        let is_function_call = item.get("type").and_then(Value::as_str) == Some("function_call");
-        let previous_is_reasoning = rebuilt.last().is_some_and(|previous: &Value| {
-            previous.get("type").and_then(Value::as_str) == Some("reasoning")
-        });
-        if is_function_call && !previous_is_reasoning {
-            rebuilt.push(json!({
-                "type": "reasoning",
-                "id": format!("codex-switch-synthetic-{synthesized}"),
-                "status": "completed",
-                "content": [{"type": "reasoning_text", "text": SYNTHETIC_REASONING_TEXT}],
-            }));
-            synthesized += 1;
-        }
-        rebuilt.push(item);
-    }
-    *input = rebuilt;
-    synthesized
-}
-
 fn content_reasoning_text(item: &Value) -> Option<String> {
     match item.get("content") {
         Some(Value::String(text)) if !text.is_empty() => Some(text.clone()),
@@ -166,65 +124,6 @@ fn summary_reasoning_text(item: &Value) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
-fn tool_call_id(item: &Value) -> Option<&str> {
-    match item.get("type").and_then(Value::as_str)? {
-        "function_call" | "custom_tool_call" | "tool_search_call" => {
-            item.get("call_id").and_then(Value::as_str)
-        }
-        _ => None,
-    }
-}
-
-fn tool_output_call_id(item: &Value) -> Option<&str> {
-    match item.get("type").and_then(Value::as_str)? {
-        "function_call_output" | "custom_tool_call_output" | "tool_search_output" => {
-            item.get("call_id").and_then(Value::as_str)
-        }
-        _ => None,
-    }
-}
-
-/// 把每个工具输出挪到它自己的工具调用后面, 返回被移动的输出项数.
-///
-/// 只按相邻项配对的上游 (DeepSeek 官方 `/v1/responses`) 要求输出紧跟调用: 中间夹了另一个调用,
-/// developer 消息或 reasoning 项都会被 400 拒绝 (`No tool output found for tool call ...`),
-/// 而这段历史之后每轮都会原样重放, 会话再也接不下去. 客户端习惯把并行调用排成
-/// `call, call, output, output`, 所以转发前先交错一次. 已经在正确位置的项不动, 没有输出的调用
-/// 也不会凭空补齐; 没有改动时原样返回入参字节.
-pub(crate) fn attach_tool_outputs_to_calls(body: &[u8]) -> anyhow::Result<(Vec<u8>, usize)> {
-    let mut value: Value = serde_json::from_slice(body)?;
-    let Some(input) = value.get_mut("input").and_then(Value::as_array_mut) else {
-        return Ok((body.to_vec(), 0));
-    };
-    let mut moved = 0;
-    let mut index = 0;
-    while index < input.len() {
-        let Some(call_id) = tool_call_id(&input[index]).map(str::to_string) else {
-            index += 1;
-            continue;
-        };
-        let adjacent = input
-            .get(index + 1)
-            .and_then(tool_output_call_id)
-            .is_some_and(|id| id == call_id.as_str());
-        if !adjacent
-            && let Some(found) = (index + 1..input.len())
-                .find(|&candidate| tool_output_call_id(&input[candidate]) == Some(call_id.as_str()))
-        {
-            let output = input.remove(found);
-            input.insert(index + 1, output);
-            moved += 1;
-            index += 2;
-            continue;
-        }
-        index += 1;
-    }
-    if moved == 0 {
-        return Ok((body.to_vec(), 0));
-    }
-    Ok((serde_json::to_vec(&value)?, moved))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,112 +143,7 @@ mod tests {
         (serde_json::from_slice(&normalized).unwrap(), stats)
     }
 
-    fn reorder(body: &Value) -> (Value, usize) {
-        let (value, moved) =
-            attach_tool_outputs_to_calls(&serde_json::to_vec(body).unwrap()).unwrap();
-        (serde_json::from_slice(&value).unwrap(), moved)
-    }
 
-    fn item_types(value: &Value) -> Vec<&str> {
-        value["input"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|item| item["type"].as_str().unwrap())
-            .collect()
-    }
-
-    #[test]
-    fn attaches_parallel_tool_outputs_to_their_calls() {
-        let body = json!({
-            "model":"deepseek-flash",
-            "input":[
-                {"type":"message","role":"assistant","content":[]},
-                {"type":"function_call","call_id":"call_00","name":"skill","arguments":"{}"},
-                {"type":"function_call","call_id":"call_01","name":"bash","arguments":"{}"},
-                {"type":"function_call_output","call_id":"call_00","output":"skill ok"},
-                {"type":"function_call_output","call_id":"call_01","output":"bash ok"}
-            ]
-        });
-
-        let (value, moved) = reorder(&body);
-
-        // 把 call_00 的输出搬到它后面之后, call_01 正好接上自己的输出, 所以只搬一次.
-        assert_eq!(moved, 1);
-        assert_eq!(
-            item_types(&value),
-            vec![
-                "message",
-                "function_call",
-                "function_call_output",
-                "function_call",
-                "function_call_output"
-            ]
-        );
-        assert_eq!(value["input"][2]["call_id"], "call_00");
-        assert_eq!(value["input"][2]["output"], "skill ok");
-        assert_eq!(value["input"][4]["call_id"], "call_01");
-    }
-
-    #[test]
-    fn attaches_tool_output_across_intervening_items() {
-        let body = json!({
-            "model":"deepseek-flash",
-            "input":[
-                {"type":"function_call","call_id":"call_1","name":"bash","arguments":"{}"},
-                {"type":"developer","content":"补充说明"},
-                {"type":"function_call_output","call_id":"call_1","output":"ok"}
-            ]
-        });
-
-        let (value, moved) = reorder(&body);
-
-        assert_eq!(moved, 1);
-        assert_eq!(
-            item_types(&value),
-            vec!["function_call", "function_call_output", "developer"]
-        );
-        assert_eq!(value["input"][2]["content"], "补充说明");
-    }
-
-    #[test]
-    fn leaves_adjacent_tool_history_untouched() {
-        let body = json!({
-            "model":"deepseek-flash",
-            "input":[
-                {"type":"function_call","call_id":"call_1","name":"bash","arguments":"{}"},
-                {"type":"function_call_output","call_id":"call_1","output":"ok"}
-            ]
-        });
-
-        let (value, moved) = reorder(&body);
-
-        assert_eq!(moved, 0);
-        assert_eq!(value, body);
-    }
-
-    #[test]
-    fn keeps_unanswered_tool_call_without_synthesizing_output() {
-        let body = json!({
-            "model":"deepseek-flash",
-            "input":[
-                {"type":"function_call","call_id":"call_1","name":"bash","arguments":"{}"},
-                {"type":"function_call","call_id":"call_2","name":"read","arguments":"{}"},
-                {"type":"function_call_output","call_id":"call_1","output":"ok"}
-            ]
-        });
-
-        let (value, moved) = reorder(&body);
-
-        assert_eq!(moved, 1);
-        assert_eq!(
-            item_types(&value),
-            vec!["function_call", "function_call_output", "function_call"]
-        );
-        assert_eq!(value["input"][0]["call_id"], "call_1");
-        assert_eq!(value["input"][1]["call_id"], "call_1");
-        assert_eq!(value["input"][2]["call_id"], "call_2");
-    }
 
     #[test]
     fn restores_internal_reasoning_as_summary_text() {
@@ -500,91 +294,8 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_text_mode_synthesizes_when_history_has_none() {
+    fn reasoning_text_mode_reports_restored_count() {
         let body = json!({
-            "model":"deepseek-flash",
-            "input":[
-                {"role":"user","content":"跑一下"},
-                {"type":"function_call","call_id":"call_1","name":"bash","arguments":"{}"},
-                {"type":"function_call_output","call_id":"call_1","output":"ok"}
-            ]
-        });
-
-        let value = normalize(&body, ReasoningNormalize::ReasoningText);
-        let input = value["input"].as_array().unwrap();
-
-        assert_eq!(input.len(), 4);
-        assert_eq!(input[1]["type"], json!("reasoning"));
-        assert_eq!(
-            input[1]["content"][0],
-            json!({"type":"reasoning_text","text":SYNTHETIC_REASONING_TEXT})
-        );
-    }
-
-    #[test]
-    fn reasoning_text_mode_skips_synthesis_when_reasoning_exists() {
-        let body = json!({
-            "model":"deepseek-flash",
-            "input":[
-                {"role":"user","content":"跑一下"},
-                {"type":"reasoning","id":"rs_1","summary":[]},
-                {"type":"function_call","call_id":"call_1","name":"bash","arguments":"{}"},
-                {"type":"function_call_output","call_id":"call_1","output":"ok"}
-            ]
-        });
-
-        let value = normalize(&body, ReasoningNormalize::ReasoningText);
-        let input = value["input"].as_array().unwrap();
-
-        assert_eq!(input.len(), 4);
-        assert_eq!(input[1]["type"], json!("reasoning"));
-    }
-
-    #[test]
-    fn reasoning_text_mode_synthesizes_for_turns_without_reasoning() {
-        // 最新一回合带思维链, 更早那个回合的工具调用来自别的上游, 只补后者.
-        let body = json!({
-            "model":"deepseek-flash",
-            "input":[
-                {"role":"user","content":"跑一下"},
-                {"type":"function_call","call_id":"call_old","name":"bash","arguments":"{}"},
-                {"type":"function_call_output","call_id":"call_old","output":"ok"},
-                {"role":"user","content":"继续"},
-                {
-                    "type":"reasoning",
-                    "id":"rs_new",
-                    "content":[{"type":"reasoning_text","text":"这一段是模型自己的思维链"}]
-                },
-                {"type":"function_call","call_id":"call_new","name":"bash","arguments":"{}"},
-                {"type":"function_call_output","call_id":"call_new","output":"ok"}
-            ]
-        });
-
-        let (value, stats) = normalize_with_stats(&body, ReasoningNormalize::ReasoningText);
-        let input = value["input"].as_array().unwrap();
-
-        assert_eq!(stats.synthesized, 1);
-        assert_eq!(stats.restored, 0);
-        assert_eq!(input.len(), 8);
-        assert_eq!(input[1]["type"], json!("reasoning"));
-        assert_eq!(
-            input[1]["content"][0],
-            json!({"type":"reasoning_text","text":SYNTHETIC_REASONING_TEXT})
-        );
-        assert_eq!(input[2]["call_id"], json!("call_old"));
-        // 已经有思维链的那一回合不补项, 而且它的 reasoning_text 原样保留.
-        assert_eq!(input[5]["type"], json!("reasoning"));
-        assert_eq!(input[5]["id"], json!("rs_new"));
-        assert_eq!(
-            input[5]["content"][0],
-            json!({"type":"reasoning_text","text":"这一段是模型自己的思维链"})
-        );
-        assert_eq!(input[6]["call_id"], json!("call_new"));
-    }
-
-    #[test]
-    fn reasoning_text_mode_reports_restored_and_synthesized_counts() {
-        let restored_body = json!({
             "model":"deepseek-flash",
             "input":[
                 {"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"甲"}]},
@@ -593,24 +304,27 @@ mod tests {
                 {"type":"function_call_output","call_id":"call_1","output":"ok"}
             ]
         });
-        let (_, stats) = normalize_with_stats(&restored_body, ReasoningNormalize::ReasoningText);
-        assert_eq!(stats.restored, 2);
-        assert_eq!(stats.synthesized, 0);
+        let (value, stats) = normalize_with_stats(&body, ReasoningNormalize::ReasoningText);
 
-        let synthesized_body = json!({
+        assert_eq!(stats.restored, 2);
+        // 报文项数不变: 归一化只改写 reasoning 项, 不增删项.
+        assert_eq!(value["input"].as_array().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn reasoning_text_mode_leaves_history_without_reasoning_untouched() {
+        // 工具调用回合缺思维链时不再补占位项: 官方会把它当成自己的思维链校验失败.
+        let body = json!({
             "model":"deepseek-flash",
             "input":[
                 {"role":"user","content":"跑一下"},
                 {"type":"function_call","call_id":"call_1","name":"bash","arguments":"{}"},
-                {"type":"function_call_output","call_id":"call_1","output":"ok"},
-                {"type":"function_call","call_id":"call_2","name":"bash","arguments":"{}"},
-                {"type":"function_call_output","call_id":"call_2","output":"ok"}
+                {"type":"function_call_output","call_id":"call_1","output":"ok"}
             ]
         });
-        let (value, stats) =
-            normalize_with_stats(&synthesized_body, ReasoningNormalize::ReasoningText);
-        assert_eq!(stats.restored, 0);
-        assert_eq!(stats.synthesized, 2);
-        assert_eq!(value["input"].as_array().unwrap().len(), 7);
+
+        let value = normalize(&body, ReasoningNormalize::ReasoningText);
+
+        assert_eq!(value, body);
     }
 }

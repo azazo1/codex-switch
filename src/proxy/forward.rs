@@ -645,8 +645,8 @@ async fn forward_with_upstream(
         target_body = prepared.body.clone();
     }
     if upstream_wire_api == WireApi::Responses {
-        // 只有中转类上游才把思维链还原成 reasoning_text: 官方上游要这种形态,
-        // 而 Codex OAuth / 节点上游走的是 summary 形态. 数据库里残留的勾选值在运行时不生效.
+        // 该开关只决定思维链放在 content 还是 summary: 只有中转类上游按选项还原,
+        // 而 Codex OAuth / 节点上游始终走 summary 形态. 数据库里残留的勾选值在运行时不生效.
         let reasoning_normalize = if upstream.restore_reasoning_text
             && upstream.kind == UpstreamKind::RelayApiKey
         {
@@ -657,28 +657,13 @@ async fn forward_with_upstream(
         let (normalized, stats) =
             compat::normalize_responses_request(&target_body, reasoning_normalize)?;
         target_body = normalized;
-        if stats.restored > 0 || stats.synthesized > 0 {
+        if stats.restored > 0 {
             tracing::info!(
                 upstream_id = %upstream.id,
                 upstream_name = %upstream.name,
                 restored = stats.restored,
-                synthesized = stats.synthesized,
                 "restored reasoning text for upstream"
             );
-        }
-        // 同理, 只有中转类上游需要把工具输出紧贴到它自己的调用后面: Codex OAuth 与节点上游
-        // 按 call_id 配对, 不受相邻性影响.
-        if upstream.reorder_tool_outputs && upstream.kind == UpstreamKind::RelayApiKey {
-            let (reordered, moved) = compat::attach_tool_outputs_to_calls(&target_body)?;
-            target_body = reordered;
-            if moved > 0 {
-                tracing::info!(
-                    upstream_id = %upstream.id,
-                    upstream_name = %upstream.name,
-                    moved,
-                    "attached tool outputs to their calls for upstream"
-                );
-            }
         }
     }
     if upstream.kind == UpstreamKind::CodexOauth && !request.endpoint_kind.is_count_tokens() {

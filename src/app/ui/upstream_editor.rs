@@ -578,19 +578,10 @@ impl UpstreamEditor {
                     )
                     .on_hover_text(
                         "把 reasoning 项里的思维链还原到 content[].reasoning_text, 并保留已有的 content.\n\
-                         适合 DeepSeek 官方这类要求把思维链传回来的 Responses 上游, 否则会返回 400.\n\
-                         代价是这段文本会开始计入输入 token (官方不把 summary 计入).",
-                    );
-                    ui.checkbox(
-                        &mut self.upstream.reorder_tool_outputs,
-                        "工具输出紧跟调用",
-                    )
-                    .on_hover_text(
-                        "把每个 function_call_output 挪到它自己的 function_call 之后, 中间不留别的项.\n\
-                         适合 DeepSeek 官方这类只按相邻项配对的 Responses 上游: 客户端把并行工具调用排成\n\
-                         call, call, output, output 时, 第一个调用后面跟的是另一个调用, 上游会判定它没有输出\n\
-                         并返回 400 (No tool output found for tool call ...), 之后每轮重放同一段历史都失败.\n\
-                         OpenAI 语义本来就按 call_id 配对, 打开后只是把顺序改成两边都接受的形态.",
+                         打开后思维链会留在上下文里, 代价是这段文本开始计入输入 token (约 +40%).\n\
+                         关闭时思维链被搬进 summary, 而 DeepSeek 官方不认 summary, 等于把它丢掉.\n\
+                         这个开关修不了 400 reasoning_text must be passed back: 该报错取决于工具调用\n\
+                         是不是上游自己签发的, 与思维链放在 content 还是 summary 无关.",
                     );
                 },
             );
