@@ -1,10 +1,13 @@
 use serde_json::{Map, Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct NamespaceToolMap {
     flattened_to_identity: HashMap<String, (String, String)>,
     original_to_namespaces: HashMap<String, Vec<String>>,
+    /// 请求里声明过的工具名. 客户端若把 `mcp__server__tool` 当普通 function tool
+    /// 声明, 双下划线就属于名字本身, 不能拆成 namespace 加原名.
+    declared_names: HashSet<String>,
 }
 
 impl NamespaceToolMap {
@@ -67,6 +70,11 @@ impl NamespaceToolMap {
 
     fn collect_tools(&mut self, tools: &[Value]) {
         for tool in tools {
+            // 顶层工具名一律记为字面量, 与它的 type 无关. namespace 容器的子工具名
+            // 不记: 它们在上游回包里本来就以扁平名出现, 属于需要还原的一类.
+            if let Some(name) = response_tool_name(tool) {
+                self.declared_names.insert(name);
+            }
             if let Some(object) = tool.as_object()
                 && object.get("type").and_then(Value::as_str) == Some("namespace")
             {
@@ -142,6 +150,11 @@ impl NamespaceToolMap {
         let Some(name) = object.get("name").and_then(Value::as_str) else {
             return false;
         };
+        // 请求声明过的名字是本客户端的字面量身份, 原样留着. 只有上游自己算出来的
+        // 扁平名才需要还原成 namespace 加原名.
+        if self.declared_names.contains(name) {
+            return false;
+        }
         let identity = self
             .flattened_to_identity
             .get(name)
@@ -295,6 +308,64 @@ mod tests {
 
         assert!(text.contains("\"name\":\"js\""));
         assert!(text.contains("\"namespace\":\"mcp__node_repl\""));
+    }
+
+    #[test]
+    fn keeps_declared_flat_tool_names_intact() {
+        // 客户端把 `mcp__server__tool` 当普通 function tool 声明时, 双下划线属于
+        // 名字本身. 只有上游合成出来的扁平名才该还原成 namespace 加原名.
+        let request = json!({
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "mcp__raindrop__fetch_current_user",
+                    "parameters": {"type": "object"}
+                },
+                {
+                    "type": "function",
+                    "name": "my__tool",
+                    "parameters": {"type": "object"}
+                },
+                {
+                    "type": "namespace",
+                    "name": "mcp__demo",
+                    "tools": [{
+                        "type": "function",
+                        "name": "ping",
+                        "parameters": {"type": "object"}
+                    }]
+                }
+            ]
+        });
+        let map = NamespaceToolMap::from_request(&request);
+
+        for name in ["mcp__raindrop__fetch_current_user", "my__tool"] {
+            let mut value = json!({
+                "type": "function_call",
+                "name": name,
+                "arguments": "{}"
+            });
+            assert!(!map.restore_response_value(&mut value));
+            assert_eq!(value["name"], name);
+            assert!(value.get("namespace").is_none());
+        }
+
+        let mut namespaced = json!({
+            "type": "function_call",
+            "name": "mcp__demo__ping",
+            "arguments": "{}"
+        });
+        assert!(map.restore_response_value(&mut namespaced));
+        assert_eq!(namespaced["name"], "ping");
+        assert_eq!(namespaced["namespace"], "mcp__demo");
+
+        // 同一条规则在 SSE 回包路径上同样生效.
+        let block = "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"function_call\",\"name\":\"mcp__raindrop__fetch_current_user\",\"arguments\":\"\"}}\n\n";
+        let rewritten = map.rewrite_sse_block(block.as_bytes());
+        let text = String::from_utf8(rewritten).unwrap();
+
+        assert!(text.contains("\"name\":\"mcp__raindrop__fetch_current_user\""));
+        assert!(!text.contains("\"namespace\""));
     }
 
     #[test]
